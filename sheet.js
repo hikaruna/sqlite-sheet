@@ -378,10 +378,42 @@ export class Sheets {
   }
 
   // ---------- 行 ----------
-  addRow() {
+  // 必須（NOT NULL）なのにデフォルト値がなく、行追加時に値が要る列
+  requiredCols() {
+    const { meta } = this.data;
+    return [...meta.cols.values()].filter((c) =>
+      c.dflt == null && c.hidden !== 2 && c.hidden !== 3 && c.name !== meta.ipk && (c.nn || (meta.wr && c.pk > 0)));
+  }
+
+  async addRow() {
     const { sheet: s, meta } = this.data;
-    const sql = `INSERT INTO ${qid(s.name)} DEFAULT VALUES`;
-    const res = this.panel.gui(sql, () => this.db.exec(sql));
+    const req = this.requiredCols();
+    let res;
+    if (req.length === 0) {
+      const sql = `INSERT INTO ${qid(s.name)} DEFAULT VALUES`;
+      res = this.panel.gui(sql, () => this.db.exec(sql));
+    } else {
+      // 必須でデフォルトのない列の値を、先にポップアップで入力してもらう
+      const inputs = req.map((c) => (String(c.type).toUpperCase() === 'BLOB'
+        ? h('input', { type: 'file' })
+        : h('input', { type: 'text', placeholder: '空欄のままなら空文字列' })));
+      const r = await formDialog('行を追加', req.map((c, i) => [`${c.name}（${c.type || '型なし'}）`, inputs[i]]), '追加', async () => {
+        const bind = [];
+        for (const inp of inputs) {
+          if (inp.type === 'file') {
+            if (!inp.files[0]) return 'ファイルを選んでください';
+            bind.push(new Uint8Array(await inp.files[0].arrayBuffer()));
+          } else bind.push(inp.value);
+        }
+        const sql = `INSERT INTO ${qid(s.name)} (${req.map((c) => qid(c.name)).join(', ')}) VALUES (${req.map(() => '?').join(', ')})`;
+        const g = this.panel.gui(inlineSql(sql, bind), () => this.db.exec({ sql, bind }));
+        if (!g) return { cancelled: true };
+        if (!g.ok) return g.error.message;
+        return { res: g };
+      });
+      if (!r || r.cancelled) return;
+      res = r.res;
+    }
     if (!res?.ok) return;
     if (meta.wr) { this.loadCurrent(); return; }
     const rid = this.db.selectValue('SELECT last_insert_rowid()');
@@ -433,37 +465,61 @@ export class Sheets {
     return this.sheets.filter((s) => s.kind === 'table').map((s) => s.name);
   }
 
-  // 列の入力欄（4.2）。forNewTable ならシート名欄を加える
-  columnForm(title, forNewTable, strict) {
+  // 列の入力欄（4.2）
+  //   withSheetName: シート名欄を加える（テーブルシート作成時）
+  //   strict: 対象テーブルが STRICT か
+  //   hasRows: 対象テーブルに行があるか（ADD COLUMN の制約がかかるのはこのときだけ）
+  columnForm(title, { withSheetName = false, strict = true, hasRows = false } = {}) {
     const sheetName = h('input', { type: 'text' });
     const name = h('input', { type: 'text' });
     const type = h('select', null, TYPES.map((t) => h('option', { value: t }, t)));
     const nn = h('input', { type: 'checkbox' });
     const dflt = h('input', { type: 'text', disabled: true, placeholder: '指定しない（NULL）' });
     const hasD = h('input', { type: 'checkbox' });
-    hasD.onchange = () => {
-      dflt.disabled = !hasD.checked;
-      dflt.placeholder = hasD.checked ? '空欄のままなら空文字列' : '指定しない（NULL）';
-      if (hasD.checked) dflt.focus();
-    };
     const dfltRow = h('span', { style: 'display:flex;gap:8px;align-items:center' },
       h('label', { style: 'white-space:nowrap' }, hasD, ' 指定する'), dflt);
     const fkT = h('select', null, h('option', { value: '' }, '（なし）'), this.tableNames().map((t) => h('option', { value: t }, t)));
     const fkC = h('select', { disabled: true });
+
+    // 「指定する」のユーザー自身の選択。強制オン／オフが外れたらこれに戻す
+    let userHasD = false;
+    const sync = () => {
+      const fk = !!fkT.value;
+      if (hasRows) {
+        // 行があるシートへの追加: NOT NULL には非NULLのデフォルトが要り、外部キー列のデフォルトは NULL のみ
+        nn.disabled = fk;
+        fkT.disabled = nn.checked;
+        if (nn.checked) { hasD.checked = true; hasD.disabled = true; }
+        else if (fk) { hasD.checked = false; hasD.disabled = true; }
+        else { hasD.checked = userHasD; hasD.disabled = false; }
+      }
+      fkC.disabled = !fk || fkT.disabled;
+      dflt.disabled = !hasD.checked;
+      dflt.placeholder = hasD.checked ? '空欄のままなら空文字列' : '指定しない（NULL）';
+    };
+    hasD.onchange = () => {
+      userHasD = hasD.checked;
+      sync();
+      if (hasD.checked) dflt.focus();
+    };
+    nn.onchange = sync;
     fkT.onchange = () => {
       fkC.replaceChildren(...(fkT.value ? this.tableCols(fkT.value).map((c) => h('option', { value: c.name }, c.name)) : []));
-      fkC.disabled = !fkT.value;
+      sync();
     };
+    sync();
+
     const rows = [];
-    if (forNewTable) rows.push(['シート名', sheetName], '-');
+    if (withSheetName) rows.push(['シート名', sheetName], '-');
     rows.push(['列名', name], ['型', type], ['必須（NOT NULL）', nn], ['デフォルト値', dfltRow], ['外部キー: 参照先テーブル', fkT], ['外部キー: 参照先列', fkC]);
     return formDialog(title, rows, '追加', () => {
-      if (forNewTable && !sheetName.value.trim()) return 'シート名を入力してください';
+      if (withSheetName && !sheetName.value.trim()) return 'シート名を入力してください';
       if (!name.value.trim()) return '列名を入力してください';
       const hasDefault = hasD.checked;
-      if (!forNewTable && nn.checked && !hasDefault) return '既存のシートに必須列を追加するには、デフォルト値の指定が必要です';
-      if (!forNewTable && nn.checked && fkT.value) return '既存のシートへの列追加では、必須と外部キーは同時に指定できません';
-      if (!forNewTable && fkT.value && hasDefault) return '外部キー列のデフォルト値は指定できません（NULLのみ）';
+      // UI で防いでいるが念のため
+      if (hasRows && nn.checked && !hasDefault) return '行があるシートに必須列を追加するには、デフォルト値の指定が必要です';
+      if (hasRows && nn.checked && fkT.value) return '行があるシートへの列追加では、必須と外部キーは同時に指定できません';
+      if (hasRows && fkT.value && hasDefault) return '行があるシートでは、外部キー列のデフォルト値は指定できません（NULLのみ）';
       if (strict && hasDefault && (type.value === 'INTEGER' || type.value === 'REAL') && !isNumeric(dflt.value)) {
         return `${type.value} の列には数値を入力してください`;
       }
@@ -477,7 +533,8 @@ export class Sheets {
   }
 
   async addColumn() {
-    const r = await this.columnForm('列を追加', false, this.data.meta.strict);
+    const hasRows = !!this.db.selectValue(`SELECT EXISTS(SELECT 1 FROM ${qid(this.data.sheet.name)})`);
+    const r = await this.columnForm('列を追加', { strict: this.data.meta.strict, hasRows });
     if (!r) return;
     const sql = `ALTER TABLE ${qid(this.data.sheet.name)} ADD COLUMN ${r.def}`;
     const res = this.panel.gui(sql, () => this.db.exec(sql));
@@ -516,7 +573,7 @@ export class Sheets {
   async addSheet() {
     const kind = await chooseDialog('シートを追加', [['▦ テーブル', 'table'], ['🔍 クエリ', 'query']]);
     if (kind === 'table') {
-      const r = await this.columnForm('テーブルシートを追加', true, true);
+      const r = await this.columnForm('テーブルシートを追加', { withSheetName: true, strict: true, hasRows: false });
       if (!r) return;
       const sql = `CREATE TABLE ${qid(r.sheetName)} (${r.def}) STRICT`;
       const res = this.panel.gui(sql, () => this.db.exec(sql));
