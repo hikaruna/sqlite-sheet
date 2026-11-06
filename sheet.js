@@ -553,8 +553,17 @@ export class Sheets {
   async columnMenu(col) {
     const s = this.data.sheet;
     const only = this.data.columns.length <= 1;
-    const act = await menuDialog(`列「${col}」`, [['名前変更', 'rename'], [only ? '削除（列が1つだけのため不可）' : '削除', 'delete', only]]);
-    if (act === 'rename') {
+    const isNN = !!this.data.meta.cols.get(col)?.nn;
+    const act = await menuDialog(`列「${col}」`, [
+      ['名前変更', 'rename'],
+      [isNN ? '必須を外す' : '必須にする', 'notnull'],
+      [only ? '削除（列が1つだけのため不可）' : '削除', 'delete', only],
+    ]);
+    if (act === 'notnull') {
+      const sql = `ALTER TABLE ${qid(s.name)} ALTER COLUMN ${qid(col)} ${isNN ? 'DROP' : 'SET'} NOT NULL`;
+      const res = this.panel.gui(sql, () => this.db.exec(sql));
+      if (res?.ok) this.loadCurrent();
+    } else if (act === 'rename') {
       const nn = await promptDialog('列の名前変更', '新しい名前', col, (v) => (v.trim() ? null : '名前を入力してください'));
       if (!nn || nn.trim() === col) return;
       const sql = `ALTER TABLE ${qid(s.name)} RENAME COLUMN ${qid(col)} TO ${qid(nn.trim())}`;
