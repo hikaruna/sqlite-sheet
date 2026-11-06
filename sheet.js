@@ -7,6 +7,15 @@ const TYPES = ['INTEGER', 'REAL', 'TEXT', 'BLOB'];
 const OPS = ['=', '!=', '<', '<=', '>', '>=', 'LIKE', 'NOT LIKE', 'IS NULL', 'IS NOT NULL'];
 const RID = '__sheet_rowid__';
 
+// 列見出しのアイコン（SVG）。色は currentColor で CSS から決める
+const SVG_FUNNEL = '<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M2 3h12l-4.5 5.5v4.5l-3 1.5v-6z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></svg>';
+const SVG_KEBAB = '<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" fill="currentColor"><circle cx="8" cy="3.5" r="1.5"/><circle cx="8" cy="8" r="1.5"/><circle cx="8" cy="12.5" r="1.5"/></svg>';
+function svgButton(cls, title, svg, onclick) {
+  const b = h('button', { class: cls, title, 'aria-label': title, onclick });
+  b.innerHTML = svg;
+  return b;
+}
+
 export class Sheets {
   constructor({ sqlite3, db, dbName, panel }) {
     this.sqlite3 = sqlite3;
@@ -191,8 +200,8 @@ export class Sheets {
           h('span', { class: 'colname', title: 'クリックで並べ替え', onclick: () => this.cycleSort(name) },
             name, info?.nn ? ' *' : '', ' ', h('span', { class: 'coltype' }, info ? info.type : '')),
           sorted ? h('span', { class: 'sortmark' }, st.sort.dir === 'asc' ? '▲' : '▼') : null,
-          h('button', { class: 'icon' + (filtered ? ' on' : ''), title: '絞り込み', onclick: () => this.filterPopup(name) }, '⏷'),
-          editable ? h('button', { class: 'icon', title: '列の操作', onclick: () => this.columnMenu(name, ci) }, '⋮') : null));
+          svgButton('icon funnel' + (filtered ? ' on' : ''), filtered ? '絞り込み中（クリックで条件を変更）' : '絞り込み', SVG_FUNNEL, () => this.filterPopup(name)),
+          editable ? svgButton('icon', '列の操作', SVG_KEBAB, () => this.columnMenu(name, ci)) : null));
       }),
       editable ? h('th', { class: 'addcol', title: '列を追加', onclick: () => this.addColumn() }, '＋') : null);
 

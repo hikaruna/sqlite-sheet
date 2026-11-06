@@ -62,6 +62,11 @@ textarea { font-family: Consolas, "Courier New", monospace; font-size: 13px; fle
 .icon { border: none; background: none; padding: 0 2px; color: #bbb; font-size: 12px; }
 .icon.on { color: var(--accent); }
 .icon:hover { color: #555; }
+.colhead .icon { display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px; padding: 0; border-radius: 4px; color: #999; }
+.colhead .icon:hover { background: #e4e4e4; color: #333; }
+.colhead .icon.on { color: var(--accent); }
+.funnel svg { fill: none; }
+.funnel.on svg { fill: currentColor; } /* 絞り込み中は塗りつぶし */
 .sortmark { color: var(--accent); font-size: 11px; }
 .addcol, .addrow { color: #777; text-align: center; cursor: pointer; }
 .addcol:hover, .addrow:hover { background: #e8f0fe; }
