@@ -112,6 +112,14 @@ export class Sheets {
     return s;
   }
 
+  // テーブルの定義（CREATE TABLE と、そのテーブルの CREATE INDEX / CREATE TRIGGER）
+  tableDefinition(name) {
+    const sqls = this.db.selectValues(
+      "SELECT sql FROM sqlite_schema WHERE tbl_name = ? AND sql IS NOT NULL ORDER BY type = 'table' DESC, type = 'index' DESC, name",
+      [name]);
+    return sqls.map((x) => x + ';').join('\n\n');
+  }
+
   viewSelect(name) {
     const sql = this.db.selectValue("SELECT sql FROM sqlite_schema WHERE type = 'view' AND name = ?", [name]) || '';
     const m = /^\s*CREATE\s+(?:TEMP|TEMPORARY\s+)?VIEW\s+(?:IF\s+NOT\s+EXISTS\s+)?[\s\S]*?\bAS\b\s*/i.exec(sql);
@@ -145,8 +153,8 @@ export class Sheets {
       const ipk = !s.wr && pkCols.length === 1 && String(cols.find((c) => c.name === pkCols[0]).type).toUpperCase() === 'INTEGER' ? pkCols[0] : null;
       meta = { cols: new Map(cols.map((c) => [c.name, c])), pkCols, ipk, wr: s.wr, strict: s.strict };
       const wo = this.whereOrder(st, (c) => meta.cols.get(c)?.type);
-      display = `SELECT * FROM ${qid(s.name)}${wo}`;
-      execSql = s.wr ? display : `SELECT rowid AS ${RID}, * FROM ${qid(s.name)}${wo}`;
+      display = this.tableDefinition(s.name);
+      execSql = s.wr ? `SELECT * FROM ${qid(s.name)}${wo}` : `SELECT rowid AS ${RID}, * FROM ${qid(s.name)}${wo}`;
     } else {
       const base = s.kind === 'view' ? this.viewSelect(s.name) : s.sql;
       display = base;
@@ -157,6 +165,9 @@ export class Sheets {
     if (document.activeElement !== this.queryEl || s.kind !== 'query') this.queryEl.value = display;
     if (s.kind === 'query' && this.queryEl.dataset.key !== s.key) this.queryEl.value = display;
     this.queryEl.dataset.key = s.key;
+    // テーブル定義は複数行になるので、行数に合わせて高さを広げる（最大12行）
+    const lines = Math.min(this.queryEl.value.split('\n').length, 12);
+    this.queryEl.style.height = s.kind === 'table' ? `calc(${lines * 1.35}em + 10px)` : '';
 
     let columns = [];
     let rows = [];
