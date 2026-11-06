@@ -1,5 +1,5 @@
 // シートの表示と編集
-import { h, qid, lit, typedLit, inlineSql, formDialog, promptDialog, menuDialog, chooseDialog } from './ui.js';
+import { h, qid, lit, typedLit, isNumeric, inlineSql, formDialog, promptDialog, menuDialog, chooseDialog } from './ui.js';
 import { getQueries, setQueries } from './db.js';
 
 const ICON = { table: '▦', view: '◈', query: '🔍' };
@@ -434,12 +434,20 @@ export class Sheets {
   }
 
   // 列の入力欄（4.2）。forNewTable ならシート名欄を加える
-  columnForm(title, forNewTable) {
+  columnForm(title, forNewTable, strict) {
     const sheetName = h('input', { type: 'text' });
     const name = h('input', { type: 'text' });
     const type = h('select', null, TYPES.map((t) => h('option', { value: t }, t)));
     const nn = h('input', { type: 'checkbox' });
-    const dflt = h('input', { type: 'text', placeholder: '未指定なら NULL' });
+    const dflt = h('input', { type: 'text', disabled: true, placeholder: '指定しない（NULL）' });
+    const hasD = h('input', { type: 'checkbox' });
+    hasD.onchange = () => {
+      dflt.disabled = !hasD.checked;
+      dflt.placeholder = hasD.checked ? '空欄のままなら空文字列' : '指定しない（NULL）';
+      if (hasD.checked) dflt.focus();
+    };
+    const dfltRow = h('span', { style: 'display:flex;gap:8px;align-items:center' },
+      h('label', { style: 'white-space:nowrap' }, hasD, ' 指定する'), dflt);
     const fkT = h('select', null, h('option', { value: '' }, '（なし）'), this.tableNames().map((t) => h('option', { value: t }, t)));
     const fkC = h('select', { disabled: true });
     fkT.onchange = () => {
@@ -448,24 +456,28 @@ export class Sheets {
     };
     const rows = [];
     if (forNewTable) rows.push(['シート名', sheetName], '-');
-    rows.push(['列名', name], ['型', type], ['必須（NOT NULL）', nn], ['デフォルト値', dflt], ['外部キー: 参照先テーブル', fkT], ['外部キー: 参照先列', fkC]);
+    rows.push(['列名', name], ['型', type], ['必須（NOT NULL）', nn], ['デフォルト値', dfltRow], ['外部キー: 参照先テーブル', fkT], ['外部キー: 参照先列', fkC]);
     return formDialog(title, rows, '追加', () => {
       if (forNewTable && !sheetName.value.trim()) return 'シート名を入力してください';
       if (!name.value.trim()) return '列名を入力してください';
-      if (!forNewTable && nn.checked && dflt.value === '') return '既存のシートに必須列を追加するには、デフォルト値が必要です';
+      const hasDefault = hasD.checked;
+      if (!forNewTable && nn.checked && !hasDefault) return '既存のシートに必須列を追加するには、デフォルト値の指定が必要です';
       if (!forNewTable && nn.checked && fkT.value) return '既存のシートへの列追加では、必須と外部キーは同時に指定できません';
-      if (!forNewTable && fkT.value && dflt.value !== '') return '外部キー列のデフォルト値は NULL（未指定）にしてください';
+      if (!forNewTable && fkT.value && hasDefault) return '外部キー列のデフォルト値は指定できません（NULLのみ）';
+      if (strict && hasDefault && (type.value === 'INTEGER' || type.value === 'REAL') && !isNumeric(dflt.value)) {
+        return `${type.value} の列には数値を入力してください`;
+      }
       if (fkT.value && !fkC.value) return '参照先列を選んでください';
       let def = `${qid(name.value.trim())} ${type.value}`;
       if (nn.checked) def += ' NOT NULL';
-      if (dflt.value !== '') def += ' DEFAULT ' + typedLit(dflt.value, type.value);
+      if (hasDefault) def += ' DEFAULT ' + typedLit(dflt.value, type.value);
       if (fkT.value) def += ` REFERENCES ${qid(fkT.value)}(${qid(fkC.value)})`;
       return { sheetName: sheetName.value.trim(), def };
     });
   }
 
   async addColumn() {
-    const r = await this.columnForm('列を追加', false);
+    const r = await this.columnForm('列を追加', false, this.data.meta.strict);
     if (!r) return;
     const sql = `ALTER TABLE ${qid(this.data.sheet.name)} ADD COLUMN ${r.def}`;
     const res = this.panel.gui(sql, () => this.db.exec(sql));
@@ -504,7 +516,7 @@ export class Sheets {
   async addSheet() {
     const kind = await chooseDialog('シートを追加', [['▦ テーブル', 'table'], ['🔍 クエリ', 'query']]);
     if (kind === 'table') {
-      const r = await this.columnForm('テーブルシートを追加', true);
+      const r = await this.columnForm('テーブルシートを追加', true, true);
       if (!r) return;
       const sql = `CREATE TABLE ${qid(r.sheetName)} (${r.def}) STRICT`;
       const res = this.panel.gui(sql, () => this.db.exec(sql));

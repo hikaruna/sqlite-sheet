@@ -34,6 +34,7 @@ export function lit(v) {
 }
 
 const NUM_RE = /^[+-]?(\d+(\.\d*)?|\.\d+)([eE][+-]?\d+)?$/;
+export const isNumeric = (s) => NUM_RE.test(String(s).trim());
 // 入力文字列を、列の型に合わせたリテラルにする（デフォルト値・絞り込み条件用）
 export function typedLit(str, type) {
   const t = String(type || '').toUpperCase();
