@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SQLiteシート</title>
+  <link rel="stylesheet" href="style.css">
+  <script type="module" src="main.js"></script>
+</head>
+<body>
+  <div id="loading" class="center">読み込み中…</div>
+
+  <!-- DB一覧画面 -->
+  <main id="list-view" hidden>
+    <h1>SQLiteシート</h1>
+    <div class="list-actions">
+      <button id="btn-new">新規作成</button>
+      <button id="btn-import">読み込み</button>
+      <input type="file" id="import-file" accept=".sqlite,.sqlite3,.db,application/x-sqlite3" hidden>
+    </div>
+    <table id="db-list" class="db-list">
+      <thead><tr><th>名前</th><th>最終更新</th><th></th></tr></thead>
+      <tbody></tbody>
+    </table>
+    <p id="list-empty" class="muted" hidden>DBがありません。「新規作成」か「読み込み」で追加してください。</p>
+  </main>
+
+  <!-- 使用中 -->
+  <main id="busy-view" class="center" hidden>
+    <p>別のタブで使用中です</p>
+    <p><a href="#/">一覧へ戻る</a></p>
+  </main>
+
+  <!-- DB画面 -->
+  <div id="db-view" hidden>
+    <header class="db-header">
+      <button id="btn-back" title="一覧へ戻る">← 一覧</button>
+      <span id="db-name" class="db-name" title="クリックで名前変更"></span>
+    </header>
+
+    <section class="sql-panel">
+      <div class="sql-row">
+        <textarea id="sql-input" spellcheck="false" placeholder="DB全体のSQL（Ctrl+Enterで実行）"></textarea>
+        <button id="sql-run">実行</button>
+      </div>
+      <div id="sql-result" class="sql-result"></div>
+    </section>
+
+    <section class="sheet-area">
+      <div class="query-row">
+        <textarea id="sheet-query" spellcheck="false" readonly></textarea>
+        <button id="sheet-query-run" hidden>実行</button>
+      </div>
+      <div id="sheet-error" class="error-line"></div>
+      <div id="grid-wrap" class="grid-wrap" tabindex="0"></div>
+    </section>
+
+    <nav id="tabs" class="tabs"></nav>
+  </div>
+</body>
+</html>
