@@ -83,6 +83,7 @@
 
 - 行・列・シートのいずれも削除と名前変更ができる。
 - 列が1つだけのシートでは、列の削除ボタンを無効にする。
+- 列の必須（`NOT NULL`）は列メニューから付け外しできる（`ALTER TABLE … ALTER COLUMN … SET NOT NULL` / `DROP NOT NULL`。SQLite 3.54.1 で確認済み）。`NULL` の行があると必須にはできない（SQLite のエラーを表示する）。
 
 ## 5. UI
 
