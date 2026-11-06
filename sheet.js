@@ -224,8 +224,11 @@ export class Sheets {
     const td = h('td', {
       onclick: (e) => {
         if (this.editing && this.editing.td === e.currentTarget) return; // 編集中のセル内のクリックは入力欄に任せる
-        this.setSel(ri, ci);
-        if (this.isBlobCell(ri, ci) && this.data.editable) this.pickBlob(ri, ci);
+        if (this.isBlobCell(ri, ci) && this.data.editable) { this.setSel(ri, ci); this.pickBlob(ri, ci); return; }
+        // 選択中のセルをもう一度クリックしたら編集を始める
+        const already = this.sel && this.sel.r === ri && this.sel.c === ci;
+        if (already && !this.editing && this.data.editable) this.startEdit(ri, ci);
+        else this.setSel(ri, ci);
       },
       ondblclick: () => this.startEdit(ri, ci),
     });
