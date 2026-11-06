@@ -55,7 +55,7 @@ textarea { font-family: Consolas, "Courier New", monospace; font-size: 13px; fle
 .grid td.blob { color: #666; cursor: pointer; }
 .grid td.editing { padding: 0; }
 .grid td.editing input { width: 100%; min-width: 120px; height: 100%; border: none; outline: 2px solid var(--accent); font: inherit; padding: 0 6px; }
-.grid td.editing.bad input { outline-color: var(--err); }
+.grid td.editing.bad, .grid td.editing.bad input { outline-color: var(--err); }
 .colhead { display: flex; align-items: center; gap: 4px; }
 .colname { cursor: pointer; flex: 1; }
 .coltype { color: var(--muted); font-size: 11px; }

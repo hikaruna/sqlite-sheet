@@ -222,7 +222,11 @@ export class Sheets {
 
   cell(v, ri, ci) {
     const td = h('td', {
-      onclick: () => { this.setSel(ri, ci); if (this.isBlobCell(ri, ci) && this.data.editable) this.pickBlob(ri, ci); },
+      onclick: (e) => {
+        if (this.editing && this.editing.td === e.currentTarget) return; // 編集中のセル内のクリックは入力欄に任せる
+        this.setSel(ri, ci);
+        if (this.isBlobCell(ri, ci) && this.data.editable) this.pickBlob(ri, ci);
+      },
       ondblclick: () => this.startEdit(ri, ci),
     });
     this.fillCell(td, v);
@@ -285,7 +289,8 @@ export class Sheets {
     this.setSel(ri, ci);
     const v = this.data.rows[ri].vals[ci];
     const notnull = !!this.data.meta.cols.get(this.data.columns[ci])?.nn;
-    const input = h('input', { type: 'text', value: v === null ? '' : String(v) });
+    const orig = v === null ? '' : String(v);
+    const input = h('input', { type: 'text', value: orig });
     td.className = 'editing sel';
     td.replaceChildren(input);
     this.editing = { ri, ci, td, input };
@@ -301,7 +306,12 @@ export class Sheets {
         if (!notnull) this.commit(null);
       }
     };
-    input.onblur = () => { if (this.editing && this.editing.input === input && !this.committing) this.cancelEdit(false); };
+    // フォーカスが外れたら確定する（値が変わっていなければ取り消し扱い）
+    input.onblur = () => {
+      if (!this.editing || this.editing.input !== input || this.committing) return;
+      if (input.value === orig) this.cancelEdit(false);
+      else this.commit(input.value, { fromBlur: true });
+    };
   }
 
   cancelEdit(refocus) {
@@ -357,21 +367,23 @@ export class Sheets {
     return res;
   }
 
-  commit(value) {
+  // fromBlur: フォーカスが外れたことによる確定。選択を動かさず、フォーカスも奪わない
+  commit(value, { fromBlur = false } = {}) {
     const ed = this.editing;
     if (!ed) return;
     this.committing = true;
     const res = this.updateCell(ed.ri, ed.ci, value);
     this.committing = false;
-    if (!res) { ed.input.focus(); return; } // キャンセル
+    if (!res) { if (!fromBlur) ed.input.focus(); return; } // SQL欄の上書き警告でキャンセル: 編集状態のまま
     if (res.ok) {
       this.editing = null;
+      if (fromBlur) return; // セルは refetchRow で表示済み
       const nr = Math.min(ed.ri + 1, this.data.rows.length - 1);
       this.setSel(nr, ed.ci);
     } else {
       ed.td.classList.add('bad');
       ed.input.title = res.error.message;
-      ed.input.focus();
+      if (!fromBlur) ed.input.focus();
     }
   }
 
