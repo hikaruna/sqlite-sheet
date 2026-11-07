@@ -77,13 +77,22 @@ export function openDialog(title, build) {
 }
 
 // フォーム: rows は [ラベル, 要素] の配列。onSubmit が文字列を返したらエラー表示、それ以外なら閉じてその値を返す
-export function formDialog(title, rows, submitLabel, onSubmit) {
+// rows の要素: [ラベル, 要素] / '-'（区切り線） / { note: 文字列 }（全幅の注意書き）
+// opts.left: (done, showError) => 要素。ボタン列の左端に置く（削除ボタンなど）
+export function formDialog(title, rows, submitLabel, onSubmit, opts = {}) {
   return openDialog(title, (done) => {
     const err = h('div', { class: 'form-err' });
+    const showError = (msg) => { err.textContent = msg; };
     const form = h('form', { method: 'dialog' },
-      h('div', { class: 'form' }, rows.map((r) => (r === '-' ? h('div', { class: 'sep' }) : [h('label', null, r[0]), r[1]]))),
+      h('div', { class: 'form' }, rows.map((r) => {
+        if (r === '-') return h('div', { class: 'sep' });
+        if (r && r.note) return h('div', { class: 'full form-note' }, r.note);
+        return [h('label', null, r[0]), r[1]];
+      })),
       err,
       h('div', { class: 'form-buttons' },
+        opts.left ? opts.left(done, showError) : null,
+        opts.left ? h('span', { style: 'flex:1' }) : null,
         h('button', { type: 'button', onclick: () => done(null) }, 'キャンセル'),
         h('button', { type: 'submit' }, submitLabel)));
     form.addEventListener('submit', async (e) => {

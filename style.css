@@ -131,3 +131,7 @@ dialog.popup h3 { margin: 0 0 12px; font-size: 15px; }
 .form-buttons { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; }
 .menu { display: flex; flex-direction: column; gap: 6px; }
 .menu button { text-align: left; padding: 6px 10px; }
+.form-note { font-size: 12px; color: var(--muted); }
+.form-buttons .danger { color: var(--err); border: 1px solid #f0b4ae; background: #fff; border-radius: 3px; }
+.form-buttons .danger:hover:not(:disabled) { background: #fdecea; }
+.form select:disabled, .form input:disabled { background: var(--ro); color: #555; }

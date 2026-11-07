@@ -1,5 +1,5 @@
 // シートの表示と編集
-import { h, qid, lit, typedLit, isNumeric, inlineSql, formDialog, promptDialog, menuDialog, chooseDialog } from './ui.js';
+import { h, qid, lit, typedLit, isNumeric, inlineSql, formDialog, promptDialog, chooseDialog } from './ui.js';
 import { getQueries, setQueries } from './db.js';
 
 const ICON = { table: '▦', view: '◈', query: '🔍' };
@@ -576,41 +576,66 @@ export class Sheets {
     if (res?.ok) this.loadCurrent();
   }
 
+  // 列の編集ポップアップ（4.3）。列追加と同じ並びで今の情報を表示し、
+  // 列名と必須は編集できる。型・デフォルト値・外部キーは SQLite では後から変えられないので表示のみ
   async columnMenu(col) {
     const s = this.data.sheet;
+    const info = this.data.meta.cols.get(col) || {};
     const only = this.data.columns.length <= 1;
-    const isNN = !!this.data.meta.cols.get(col)?.nn;
-    const act = await menuDialog(`列「${col}」`, [
-      ['名前変更', 'rename'],
-      [isNN ? '必須を外す' : '必須にする', 'notnull'],
-      [only ? '削除（列が1つだけのため不可）' : '削除', 'delete', only],
-    ]);
-    if (act === 'notnull') {
-      const sql = `ALTER TABLE ${qid(s.name)} ALTER COLUMN ${qid(col)} ${isNN ? 'DROP' : 'SET'} NOT NULL`;
-      const res = this.panel.gui(sql, () => this.db.exec(sql));
-      if (res?.ok) this.loadCurrent();
-    } else if (act === 'rename') {
-      const nn = await promptDialog('列の名前変更', '新しい名前', col, (v) => (v.trim() ? null : '名前を入力してください'));
-      if (!nn || nn.trim() === col) return;
-      const sql = `ALTER TABLE ${qid(s.name)} RENAME COLUMN ${qid(col)} TO ${qid(nn.trim())}`;
-      const res = this.panel.gui(sql, () => this.db.exec(sql));
-      if (res?.ok) {
-        const st = this.state();
-        if (st.sort?.col === col) st.sort.col = nn.trim();
-        if (st.filters.has(col)) { st.filters.set(nn.trim(), st.filters.get(col)); st.filters.delete(col); }
-        this.loadCurrent();
-      }
-    } else if (act === 'delete') {
-      if (!confirm(`列「${col}」を削除しますか？`)) return;
-      const sql = `ALTER TABLE ${qid(s.name)} DROP COLUMN ${qid(col)}`;
-      const res = this.panel.gui(sql, () => this.db.exec(sql));
-      if (res?.ok) {
-        const st = this.state();
-        if (st.sort?.col === col) st.sort = null;
-        st.filters.delete(col);
-        this.loadCurrent();
-      }
-    }
+    const fk = this.db.selectObject('SELECT "table" AS t, "to" AS c FROM pragma_foreign_key_list(?) WHERE "from" = ?', [s.name, col]);
+
+    const name = h('input', { type: 'text', value: col });
+    const typeText = String(info.type || '');
+    const type = h('select', { disabled: true },
+      (TYPES.includes(typeText.toUpperCase()) ? TYPES : [typeText, ...TYPES]).map((t) =>
+        h('option', { value: t, selected: t.toUpperCase() === typeText.toUpperCase() }, t || '（型なし）')));
+    const nn = h('input', { type: 'checkbox', checked: !!info.nn });
+    const hasD = h('input', { type: 'checkbox', disabled: true, checked: info.dflt != null });
+    const dflt = h('input', { type: 'text', disabled: true, value: info.dflt ?? '', placeholder: '指定しない（NULL）' });
+    const dfltRow = h('span', { style: 'display:flex;gap:8px;align-items:center' },
+      h('label', { style: 'white-space:nowrap' }, hasD, ' 指定する'), dflt);
+    const fkT = h('select', { disabled: true }, h('option', null, fk ? fk.t : '（なし）'));
+    const fkC = h('select', { disabled: true }, fk ? h('option', null, fk.c ?? '（主キー）') : null);
+    const rows = [['列名', name], ['型', type], ['必須（NOT NULL）', nn], ['デフォルト値', dfltRow], ['外部キー: 参照先テーブル', fkT], ['外部キー: 参照先列', fkC]];
+    if (info.pk > 0) rows.push(['主キー', h('span', null, 'はい')]);
+    rows.push({ note: '灰色の項目は、SQLite では後から変更できません（変えるときは SQL欄でテーブルを作り直します）。' });
+
+    const renameState = (to) => {
+      const st = this.state();
+      if (st.sort?.col === col) st.sort.col = to;
+      if (st.filters.has(col)) { st.filters.set(to, st.filters.get(col)); st.filters.delete(col); }
+    };
+
+    const r = await formDialog(`列「${col}」`, rows, '保存', () => {
+      const newName = name.value.trim();
+      if (!newName) return '列名を入力してください';
+      const sqls = [];
+      // 必須の変更を先に（元の列名で）、名前の変更をあとに
+      if (nn.checked !== !!info.nn) sqls.push(`ALTER TABLE ${qid(s.name)} ALTER COLUMN ${qid(col)} ${nn.checked ? 'SET' : 'DROP'} NOT NULL`);
+      if (newName !== col) sqls.push(`ALTER TABLE ${qid(s.name)} RENAME COLUMN ${qid(col)} TO ${qid(newName)}`);
+      if (!sqls.length) return { changed: false };
+      // まとめて1つのトランザクションで実行する（片方が失敗したら両方とも戻る）
+      const res = this.panel.gui(sqls.join(';\n'), () => this.db.transaction(() => sqls.forEach((q) => this.db.exec(q))));
+      if (!res.ok) return res.error.message;
+      if (newName !== col) renameState(newName);
+      return { changed: true };
+    }, {
+      left: (done, showError) => h('button', {
+        type: 'button', class: 'danger', disabled: only,
+        title: only ? '列が1つだけのシートでは削除できません' : 'この列を削除',
+        onclick: () => {
+          if (!confirm(`列「${col}」を削除しますか？`)) return;
+          const sql = `ALTER TABLE ${qid(s.name)} DROP COLUMN ${qid(col)}`;
+          const res = this.panel.gui(sql, () => this.db.exec(sql));
+          if (!res.ok) { showError(res.error.message); return; }
+          const st = this.state();
+          if (st.sort?.col === col) st.sort = null;
+          st.filters.delete(col);
+          done({ changed: true });
+        },
+      }, '削除'),
+    });
+    if (r?.changed) this.loadCurrent();
   }
 
   // ---------- シート ----------
