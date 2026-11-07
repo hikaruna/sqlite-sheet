@@ -240,7 +240,13 @@ export class SqlPanel {
     };
   }
 
-  scrollToEnd() { this.log.scrollTop = this.log.scrollHeight; }
+  // 最新の件の先頭（種類・時刻の行）が見えるようにスクロールする。
+  // 件が領域より低ければ、結果として一番下までスクロールした状態になる
+  scrollToEnd() {
+    const last = this.log.lastElementChild;
+    const max = this.log.scrollHeight - this.log.clientHeight;
+    this.log.scrollTop = last ? Math.min(last.offsetTop, max) : max;
+  }
 
   // scroll: true なら一番下（最新）までスクロール。呼び出し中はその件を見える位置に
   render(scroll = true) {
