@@ -597,11 +597,12 @@ export class Sheets {
   }
 
   // 列の入力欄（4.2）
-  //   withSheetName: シート名欄を加える（テーブルシート作成時）
-  //   strict: 対象テーブルが STRICT か
+  //   withSheetName: シート名欄と STRICT の切り替えを加える（テーブルシート作成時）
+  //   strict: 対象テーブルが STRICT か（withSheetName のときは切り替えの初期値）
   //   hasRows: 対象テーブルに行があるか（ADD COLUMN の制約がかかるのはこのときだけ）
   columnForm(title, { withSheetName = false, strict = true, hasRows = false } = {}) {
     const sheetName = h('input', { type: 'text' });
+    const strictCb = h('input', { type: 'checkbox', checked: strict });
     const name = h('input', { type: 'text' });
     const type = h('select', null, TYPES.map((t) => h('option', { value: t }, t)));
     const pk = h('input', { type: 'checkbox' });
@@ -642,7 +643,7 @@ export class Sheets {
     sync();
 
     const rows = [];
-    if (withSheetName) rows.push(['シート名', sheetName], '-');
+    if (withSheetName) rows.push(['シート名', sheetName], ['STRICT', strictCb], '-');
     rows.push(['列名', name], ['型', type]);
     // 主キーは ADD COLUMN では付けられないので、シート作成時（最初の列）だけ選べる
     if (withSheetName) rows.push(['主キー（PRIMARY KEY）', pk]);
@@ -655,7 +656,8 @@ export class Sheets {
       if (hasRows && nn.checked && !hasDefault) return '行があるシートに必須列を追加するには、デフォルト値の指定が必要です';
       if (hasRows && nn.checked && fkT.value) return '行があるシートへの列追加では、必須と外部キーは同時に指定できません';
       if (hasRows && fkT.value && hasDefault) return '行があるシートでは、外部キー列のデフォルト値は指定できません（NULLのみ）';
-      if (strict && hasDefault && (type.value === 'INTEGER' || type.value === 'REAL') && !isNumeric(dflt.value)) {
+      const isStrict = withSheetName ? strictCb.checked : strict;
+      if (isStrict && hasDefault && (type.value === 'INTEGER' || type.value === 'REAL') && !isNumeric(dflt.value)) {
         return `${type.value} の列には数値を入力してください`;
       }
       if (fkT.value && !fkC.value) return '参照先列を選んでください';
@@ -664,7 +666,7 @@ export class Sheets {
       if (nn.checked) def += ' NOT NULL';
       if (hasDefault) def += ' DEFAULT ' + typedLit(dflt.value, type.value);
       if (fkT.value) def += ` REFERENCES ${qid(fkT.value)}(${qid(fkC.value)})`;
-      return { sheetName: sheetName.value.trim(), def };
+      return { sheetName: sheetName.value.trim(), strict: isStrict, def };
     });
   }
 
@@ -745,7 +747,7 @@ export class Sheets {
     if (kind === 'table') {
       const r = await this.columnForm('テーブルシートを追加', { withSheetName: true, strict: true, hasRows: false });
       if (!r) return;
-      const sql = `CREATE TABLE ${qid(r.sheetName)} (${r.def}) STRICT`;
+      const sql = `CREATE TABLE ${qid(r.sheetName)} (${r.def})${r.strict ? ' STRICT' : ''}`;
       const res = this.panel.gui(sql, () => this.db.exec(sql));
       if (res?.ok) { this.currentKey = 'table:' + r.sheetName; await this.loadAll(); }
     } else if (kind === 'query') {
