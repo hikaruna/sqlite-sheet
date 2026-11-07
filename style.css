@@ -108,8 +108,9 @@ textarea { font-family: Consolas, "Courier New", monospace; font-size: 13px; fle
 .sortmark { color: var(--accent); font-size: 11px; }
 .addcol, .addrow { color: #777; text-align: center; cursor: pointer; }
 .addcol:hover, .addrow:hover { background: #e8f0fe; }
-.rowdel { visibility: hidden; margin-right: 4px; }
-tr:hover .rowdel { visibility: visible; }
+/* 行番号: クリックで行の編集ポップアップ */
+.grid .rowhead.clickable { cursor: pointer; }
+.grid .rowhead.clickable:hover { background: #e8f0fe; color: var(--accent); }
 
 /* タブ */
 .tabs { display: flex; gap: 2px; padding: 0 10px; border-top: 1px solid var(--line); background: #f6f6f6; overflow-x: auto; flex-shrink: 0; }
@@ -135,3 +136,14 @@ dialog.popup h3 { margin: 0 0 12px; font-size: 15px; }
 .form-buttons .danger { color: var(--err); border: 1px solid #f0b4ae; background: #fff; border-radius: 3px; }
 .form-buttons .danger:hover:not(:disabled) { background: #fdecea; }
 .form select:disabled, .form input:disabled { background: var(--ro); color: #555; }
+
+/* 行の編集・追加ポップアップ */
+dialog.popup:has(.row-field) { width: min(560px, calc(100vw - 32px)); }
+.row-field { display: flex; align-items: center; gap: 8px; }
+.row-field > input[type=text] { flex: 1; min-width: 0; }
+.row-blob { flex: 1; display: flex; align-items: center; gap: 8px; }
+.row-seg { display: flex; flex-shrink: 0; }
+.row-seg button { border: 1px solid var(--line); background: #fff; padding: 1px 8px; font-size: 12px; margin-left: -1px; white-space: nowrap; }
+.row-seg button:first-child { border-radius: 3px 0 0 3px; margin-left: 0; }
+.row-seg button:last-child { border-radius: 0 3px 3px 0; }
+.row-seg button.on { background: #e8f0fe; border-color: var(--accent); color: var(--accent); position: relative; }

@@ -217,9 +217,9 @@ export class Sheets {
       editable ? h('th', { class: 'addcol', title: '列を追加', onclick: () => this.addColumn() }, '＋') : null);
 
     const body = rows.map((row, ri) => h('tr', null,
-      h('td', { class: 'rowhead' },
-        editable ? h('button', { class: 'icon rowdel', title: '行を削除', onclick: () => this.deleteRow(ri) }, '×') : null,
-        String(ri + 1)),
+      editable
+        ? h('td', { class: 'rowhead clickable', title: 'クリックで行を編集・削除', onclick: () => this.rowForm('edit', ri) }, String(ri + 1))
+        : h('td', { class: 'rowhead' }, String(ri + 1)),
       row.vals.map((v, ci) => this.cell(v, ri, ci))));
     if (editable) {
       body.push(h('tr', null, h('td', { class: 'rowhead addrow', title: '行を追加', onclick: () => this.addRow() }, '＋'),
@@ -413,43 +413,135 @@ export class Sheets {
   }
 
   // ---------- 行 ----------
-  // 必須（NOT NULL）なのにデフォルト値がなく、行追加時に値が要る列
-  requiredCols() {
-    const { meta } = this.data;
-    return [...meta.cols.values()].filter((c) =>
-      c.dflt == null && c.hidden !== 2 && c.hidden !== 3 && c.name !== meta.ipk && (c.nn || (meta.wr && c.pk > 0)));
+  // 行の編集・追加ポップアップ（列の編集ポップアップと同じ形）。
+  //   mode: 'edit'（ri 行目を編集。削除もここから）/ 'add'（新しい行を追加）
+  // 各列に入力欄と、値／NULL（追加時は 値／NULL／既定）の切り替えを置く
+  async rowForm(mode, ri) {
+    const { sheet: s, meta, columns } = this.data;
+    const isAdd = mode === 'add';
+    const row = isAdd ? null : this.data.rows[ri];
+    const MODES = isAdd ? [['value', '値'], ['null', 'NULL'], ['default', '既定']] : [['value', '値'], ['null', 'NULL']];
+
+    const fields = columns.map((col, ci) => {
+      const info = meta.cols.get(col) || {};
+      const generated = info.hidden === 2 || info.hidden === 3;
+      const orig = isAdd ? undefined : row.vals[ci];
+      const isBlob = String(info.type || '').toUpperCase() === 'BLOB' || orig instanceof Uint8Array;
+      const required = !!info.nn || (meta.wr && info.pk > 0);
+      const f = { col, info, generated, orig, isBlob, blob: orig instanceof Uint8Array ? orig : null };
+      // 初期状態
+      if (isAdd) {
+        if (info.dflt != null || col === meta.ipk) f.mode = 'default';
+        else if (required) f.mode = 'value';
+        else f.mode = 'null';
+      } else f.mode = orig === null ? 'null' : 'value';
+
+      const setMode = (m) => {
+        f.mode = m;
+        f.seg.querySelectorAll('button').forEach((b) => b.classList.toggle('on', b.dataset.v === m));
+        if (isBlob) {
+          f.size.textContent = m === 'null' ? 'NULL' : m === 'default' ? '既定値' : f.blob ? `${f.blob.length} バイト` : '（未選択）';
+          f.pick.disabled = generated;
+        } else {
+          f.input.disabled = generated || m !== 'value';
+          f.input.placeholder = m === 'null' ? 'NULL' : m === 'default' ? (info.dflt != null ? `既定値: ${info.dflt}` : '既定値') : '空欄なら空文字列';
+        }
+      };
+
+      if (isBlob) {
+        f.size = h('span', { class: 'muted' });
+        const file = h('input', { type: 'file', hidden: true });
+        file.onchange = async () => {
+          if (!file.files[0]) return;
+          f.blob = new Uint8Array(await file.files[0].arrayBuffer());
+          f.picked = true;
+          setMode('value');
+        };
+        f.pick = h('button', { type: 'button', onclick: () => file.click() }, 'ファイルを選ぶ');
+        f.input = h('span', { class: 'row-blob' }, f.size, f.pick, file);
+      } else {
+        f.input = h('input', { type: 'text', value: orig == null ? '' : String(orig) });
+      }
+      f.seg = h('span', { class: 'seg row-seg' }, MODES.map(([v, label]) => h('button', {
+        type: 'button',
+        'data-v': v,
+        // 「既定」はデフォルト値のある列と INTEGER PRIMARY KEY（自動で番号）だけ選べる
+        disabled: generated || (v === 'null' && required) || (v === 'default' && info.dflt == null && col !== meta.ipk),
+        title: v === 'default'
+          ? (info.dflt != null ? `DEFAULT ${info.dflt}` : col === meta.ipk ? '自動で番号を振る' : 'この列にはデフォルト値がありません')
+          : (v === 'null' && required ? '必須の列は NULL にできません' : ''),
+        onclick: () => setMode(v),
+      }, label)));
+      setMode(f.mode);
+      return f;
+    });
+
+    const rows = fields.map((f) => [
+      `${f.col}${f.info.nn ? ' *' : ''}（${f.info.type || '型なし'}）`,
+      h('span', { class: 'row-field' }, f.input, f.seg),
+    ]);
+    if (fields.some((f) => f.generated)) rows.push({ note: '自動で計算される列（生成列）は編集できません。' });
+
+    const valueOf = (f) => (f.isBlob ? f.blob : f.input.value);
+    const title = isAdd ? '行を追加' : `行 ${ri + 1}`;
+
+    const r = await formDialog(title, rows, isAdd ? '追加' : '保存', () => {
+      if (isAdd) {
+        const use = fields.filter((f) => !f.generated && f.mode !== 'default');
+        for (const f of use) if (f.mode === 'value' && f.isBlob && !f.blob) return `「${f.col}」のファイルを選んでください`;
+        const bind = use.map((f) => (f.mode === 'null' ? null : valueOf(f)));
+        const sql = use.length
+          ? `INSERT INTO ${qid(s.name)} (${use.map((f) => qid(f.col)).join(', ')}) VALUES (${use.map(() => '?').join(', ')})`
+          : `INSERT INTO ${qid(s.name)} DEFAULT VALUES`;
+        const g = this.panel.gui(inlineSql(sql, bind), () => this.db.exec({ sql, bind }));
+        if (!g.ok) return g.error.message;
+        return { added: true };
+      }
+      // 編集: 変わった列だけを1つの UPDATE で
+      const changed = fields.filter((f) => {
+        if (f.generated) return false;
+        if (f.mode === 'null') return f.orig !== null;
+        if (f.orig === null) return true;
+        if (f.isBlob) return !!f.picked;
+        return f.input.value !== String(f.orig);
+      });
+      if (!changed.length) return { changed: false };
+      const kw = this.keyWhere(row);
+      const vals = changed.map((f) => (f.mode === 'null' ? null : valueOf(f)));
+      const sql = `UPDATE ${qid(s.name)} SET ${changed.map((f) => `${qid(f.col)} = ?`).join(', ')} WHERE ${kw.sql}`;
+      const bind = [...vals, ...kw.bind];
+      const g = this.panel.gui(inlineSql(sql, bind), () => this.db.exec({ sql, bind }));
+      if (!g.ok) return g.error.message;
+      // 新しいキーで行を取り直す（主キーを変えた場合に備える）
+      let k = row.key;
+      changed.forEach((f, i) => { k = this.newKeyAfter({ key: k }, f.col, vals[i]); });
+      const ipkIdx = changed.findIndex((f) => f.col === meta.ipk);
+      if (!meta.wr && ipkIdx >= 0 && vals[ipkIdx] !== null) {
+        const v = vals[ipkIdx];
+        k = [this.db.selectValue(`SELECT ${qid(meta.ipk)} FROM ${qid(s.name)} WHERE rowid = ?`, [Number(v)]) ?? v];
+      }
+      this.refetchRow(ri, k);
+      return { changed: true };
+    }, isAdd ? {} : {
+      left: (done, showError) => h('button', {
+        type: 'button',
+        class: 'danger',
+        title: 'この行を削除',
+        onclick: () => {
+          if (!confirm(`行 ${ri + 1} を削除しますか？`)) return;
+          const err = this.deleteRow(ri);
+          if (err) showError(err);
+          else done({ deleted: true });
+        },
+      }, '削除'),
+    });
+
+    if (isAdd && r?.added) this.appendInserted();
   }
 
-  async addRow() {
+  // 追加した行を表の末尾に足して選択する
+  appendInserted() {
     const { sheet: s, meta } = this.data;
-    const req = this.requiredCols();
-    let res;
-    if (req.length === 0) {
-      const sql = `INSERT INTO ${qid(s.name)} DEFAULT VALUES`;
-      res = this.panel.gui(sql, () => this.db.exec(sql));
-    } else {
-      // 必須でデフォルトのない列の値を、先にポップアップで入力してもらう
-      const inputs = req.map((c) => (String(c.type).toUpperCase() === 'BLOB'
-        ? h('input', { type: 'file' })
-        : h('input', { type: 'text', placeholder: '空欄のままなら空文字列' })));
-      const r = await formDialog('行を追加', req.map((c, i) => [`${c.name}（${c.type || '型なし'}）`, inputs[i]]), '追加', async () => {
-        const bind = [];
-        for (const inp of inputs) {
-          if (inp.type === 'file') {
-            if (!inp.files[0]) return 'ファイルを選んでください';
-            bind.push(new Uint8Array(await inp.files[0].arrayBuffer()));
-          } else bind.push(inp.value);
-        }
-        const sql = `INSERT INTO ${qid(s.name)} (${req.map((c) => qid(c.name)).join(', ')}) VALUES (${req.map(() => '?').join(', ')})`;
-        const g = this.panel.gui(inlineSql(sql, bind), () => this.db.exec({ sql, bind }));
-        if (!g) return { cancelled: true };
-        if (!g.ok) return g.error.message;
-        return { res: g };
-      });
-      if (!r || r.cancelled) return;
-      res = r.res;
-    }
-    if (!res?.ok) return;
     if (meta.wr) { this.loadCurrent(); return; }
     const rid = this.db.selectValue('SELECT last_insert_rowid()');
     const r = this.db.selectArray(`SELECT * FROM ${qid(s.name)} WHERE rowid = ?`, [rid]);
@@ -458,15 +550,19 @@ export class Sheets {
     this.setSel(this.data.rows.length - 1, 0);
   }
 
+  addRow() { return this.rowForm('add'); }
+
+  // 行を削除する（確認は呼び出し側で）。失敗したらエラー文を返す
   deleteRow(ri) {
     const { sheet: s } = this.data;
     const kw = this.keyWhere(this.data.rows[ri]);
     const sql = `DELETE FROM ${qid(s.name)} WHERE ${kw.sql}`;
     const res = this.panel.gui(inlineSql(sql, kw.bind), () => this.db.exec({ sql, bind: kw.bind }));
-    if (!res?.ok) return;
+    if (!res.ok) return res.error.message;
     this.data.rows.splice(ri, 1);
     this.sel = null;
     this.renderGrid();
+    return null;
   }
 
   // ---------- 並べ替え・絞り込み ----------
