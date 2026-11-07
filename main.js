@@ -42,6 +42,7 @@ function showDb(o) {
   const panel = new SqlPanel({
     sqlite3,
     getDb: () => o.db,
+    dbName: o.name,
     onSchemaChange: () => sheets.loadAll(),
     onReload: () => sheets.loadCurrent(),
     onSelect: (sql) => sheets.addQuerySheet(sql),

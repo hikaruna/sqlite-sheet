@@ -34,8 +34,43 @@ button:disabled { cursor: default; opacity: .4; }
 .sql-row, .query-row { display: flex; gap: 6px; align-items: stretch; }
 textarea { font-family: Consolas, "Courier New", monospace; font-size: 13px; flex: 1; resize: vertical; min-height: 2.6em; padding: 4px 6px; border: 1px solid var(--line); }
 #sql-input { height: 4.5em; }
-.sql-result { min-height: 1.4em; font-size: 13px; padding-top: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.sql-result.err, .error-line { color: var(--err); }
+.error-line { color: var(--err); }
+.sql-error { color: var(--err); font-size: 12px; white-space: pre-wrap; word-break: break-all; }
+.sql-error:not(:empty) { padding-top: 3px; }
+
+/* SQL履歴（チャット風。上ほど古く、新しい件が下に追加される） */
+.sql-log { list-style: none; margin: 0; padding: 0; height: 46px; min-height: 28px; overflow-y: auto; border: 1px solid var(--line); border-bottom: none; border-radius: 4px 4px 0 0; background: #fafafa; }
+.sql-log-item { padding: 4px 8px; border-bottom: 1px solid #eee; cursor: pointer; }
+.sql-log-item:last-child { border-bottom: none; }
+.sql-log-item:hover { background: #f0f5ff; }
+.sql-log-item.cur { background: #e8f0fe; box-shadow: inset 3px 0 0 var(--accent); }
+.sql-log-head { display: flex; align-items: center; gap: 8px; font-size: 12px; line-height: 16px; }
+.sql-log-time { color: var(--muted); white-space: nowrap; }
+.sql-log-del { visibility: hidden; font-size: 14px; }
+.sql-log-item:hover .sql-log-del { visibility: visible; }
+.sql-log-sql { margin: 1px 0 0; font-family: Consolas, "Courier New", monospace; font-size: 12px; line-height: 16px; white-space: pre-wrap; word-break: break-all; color: #333; }
+.sql-log-empty { padding: 6px 8px; color: var(--muted); font-size: 12px; cursor: default; }
+.hist-src { border-radius: 3px; padding: 0 5px; font-size: 11px; border: 1px solid; white-space: nowrap; }
+.hist-src.manual { color: #1a73e8; border-color: #a8c7fa; background: #fff; }
+.hist-src.gui { color: #777; border-color: #ccc; background: #fff; }
+.hist-res { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-align: right; }
+.hist-res.ok { color: #188038; }
+.hist-res.ng { color: var(--err); }
+
+/* 履歴と入力欄の境目（ドラッグで高さを変える） */
+.sql-log-bar { display: flex; align-items: center; gap: 8px; height: 22px; padding: 0 6px; margin-bottom: 6px; border: 1px solid var(--line); border-radius: 0 0 4px 4px; background: #f0f0f0; cursor: ns-resize; user-select: none; touch-action: none; }
+.sql-log-bar:hover { background: #e6e6e6; }
+.sql-log-label { font-size: 11px; color: #777; white-space: nowrap; flex-shrink: 0; }
+.sql-log-grip { flex: 1; min-width: 24px; max-width: 120px; height: 6px; margin: 0 auto; background: repeating-linear-gradient(to bottom, #bbb 0 1px, transparent 1px 3px); }
+.sql-log-tools { display: flex; align-items: center; gap: 6px; cursor: default; flex-shrink: 0; }
+.sql-log-tools .seg { display: flex; }
+.sql-log-tools button { border: 1px solid var(--line); background: #fff; padding: 0 7px; font-size: 11px; line-height: 16px; white-space: nowrap; }
+.sql-log-tools .seg button { margin-left: -1px; }
+.sql-log-tools .seg button:first-child { border-radius: 3px 0 0 3px; margin-left: 0; }
+.sql-log-tools .seg button:last-child { border-radius: 0 3px 3px 0; }
+.sql-log-tools .seg button.on { background: #e8f0fe; border-color: var(--accent); color: var(--accent); position: relative; }
+.sql-log-tools .clear { border-radius: 3px; }
+.sql-log-tools .clear:hover { color: var(--err); border-color: var(--err); }
 .sheet-area { flex: 1; display: flex; flex-direction: column; min-height: 0; padding: 6px 10px 0; }
 #sheet-query { height: 2.6em; }
 #sheet-query.ro { background: var(--ro); color: #555; }

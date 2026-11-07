@@ -15,16 +15,19 @@ export async function initSqlite() {
 // meta:    key = DB名, value = { name, updated }
 // pages:   key = [DB名, kvvfsキー], value = kvvfs の値（エンコード済み文字列）
 // queries: key = DB名, value = [{ id, name, sql }]
+// history: key = DB名, value = [{ id, sql, source: 'manual'|'gui', at, ok, message }]（古い順）
 let idbPromise = null;
 function idb() {
   if (!idbPromise) {
     idbPromise = new Promise((resolve, reject) => {
-      const req = indexedDB.open(IDB_NAME, 1);
+      const req = indexedDB.open(IDB_NAME, 2);
       req.onupgradeneeded = () => {
         const d = req.result;
-        d.createObjectStore('meta', { keyPath: 'name' });
-        d.createObjectStore('pages');
-        d.createObjectStore('queries');
+        const make = (name, opts) => { if (!d.objectStoreNames.contains(name)) d.createObjectStore(name, opts); };
+        make('meta', { keyPath: 'name' });
+        make('pages');
+        make('queries');
+        make('history'); // v2 で追加
       };
       req.onsuccess = () => resolve(req.result);
       req.onerror = () => reject(req.error);
@@ -68,6 +71,17 @@ export async function setQueries(name, arr) {
   const d = await idb();
   const tx = d.transaction('queries', 'readwrite');
   tx.objectStore('queries').put(arr, name);
+  await txDone(tx);
+}
+
+export async function getHistory(name) {
+  const d = await idb();
+  return (await reqP(d.transaction('history').objectStore('history').get(name))) || [];
+}
+export async function setHistory(name, arr) {
+  const d = await idb();
+  const tx = d.transaction('history', 'readwrite');
+  tx.objectStore('history').put(arr, name);
   await txDone(tx);
 }
 
@@ -226,10 +240,11 @@ async function doOpen(name, release) {
 // ---------- 一覧からの操作（呼び出し側で withLock 済みのこと） ----------
 export async function deleteDb(name) {
   const d = await idb();
-  const tx = d.transaction(['meta', 'pages', 'queries'], 'readwrite');
+  const tx = d.transaction(['meta', 'pages', 'queries', 'history'], 'readwrite');
   tx.objectStore('pages').delete(pageRange(name));
   tx.objectStore('meta').delete(name);
   tx.objectStore('queries').delete(name);
+  tx.objectStore('history').delete(name);
   await txDone(tx);
 }
 
@@ -238,9 +253,12 @@ export async function renameDb(oldName, newName) {
   return withLock(newName, async () => {
     const pages = await readPages(oldName);
     const queries = await getQueries(oldName);
+    const history = await getHistory(oldName);
     const old = await getMeta(oldName);
     const d = await idb();
-    const tx = d.transaction(['meta', 'pages', 'queries'], 'readwrite');
+    const tx = d.transaction(['meta', 'pages', 'queries', 'history'], 'readwrite');
+    tx.objectStore('history').delete(oldName);
+    tx.objectStore('history').put(history, newName);
     const ps = tx.objectStore('pages');
     ps.delete(pageRange(oldName));
     for (const [k, v] of pages) ps.put(v, [newName, k]);

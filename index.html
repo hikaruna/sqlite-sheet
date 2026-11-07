@@ -39,11 +39,18 @@
     </header>
 
     <section class="sql-panel">
+      <!-- 履歴（チャット風。上ほど古く、新しい件が下に追加される） -->
+      <ul id="sql-log" class="sql-log"></ul>
+      <div id="sql-log-bar" class="sql-log-bar" title="ドラッグで履歴の高さを変える">
+        <span class="sql-log-label">履歴</span>
+        <span class="sql-log-grip"></span>
+        <span id="sql-log-tools" class="sql-log-tools"></span>
+      </div>
       <div class="sql-row">
-        <textarea id="sql-input" spellcheck="false" placeholder="DB全体のSQL（Ctrl+Enterで実行）"></textarea>
+        <textarea id="sql-input" spellcheck="false" placeholder="DB全体のSQL（Ctrl+Enterで実行、Ctrl+↑↓で履歴を呼び出す）"></textarea>
         <button id="sql-run">実行</button>
       </div>
-      <div id="sql-result" class="sql-result"></div>
+      <div id="sql-error" class="sql-error"></div>
     </section>
 
     <section class="sheet-area">
