@@ -221,16 +221,19 @@ export class SqlPanel {
       const startY = e.clientY;
       const startH = this.log.getBoundingClientRect().height;
       const max = Math.max(LOG_MIN, window.innerHeight * 0.7);
+      // 下端を基準に伸縮する（縮めると古い側＝上から見切れる）。下端からの距離を保つ
+      const log = this.log;
+      const fromBottom = log.scrollHeight - log.scrollTop - log.clientHeight;
       const move = (ev) => {
         const hgt = Math.min(Math.max(startH + ev.clientY - startY, LOG_MIN), max);
-        this.log.style.height = hgt + 'px';
+        log.style.height = hgt + 'px';
+        log.scrollTop = log.scrollHeight - log.clientHeight - fromBottom;
       };
       const up = () => {
         document.body.style.userSelect = '';
         bar.removeEventListener('pointermove', move);
         bar.removeEventListener('pointerup', up);
-        try { localStorage.setItem(LOG_HEIGHT_KEY, String(Math.round(this.log.getBoundingClientRect().height))); } catch { /* 無視 */ }
-        this.scrollToEnd();
+        try { localStorage.setItem(LOG_HEIGHT_KEY, String(Math.round(log.getBoundingClientRect().height))); } catch { /* 無視 */ }
       };
       bar.addEventListener('pointermove', move);
       bar.addEventListener('pointerup', up);

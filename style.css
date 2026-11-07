@@ -39,7 +39,9 @@ textarea { font-family: Consolas, "Courier New", monospace; font-size: 13px; fle
 .sql-error:not(:empty) { padding-top: 3px; }
 
 /* SQL履歴（チャット風。上ほど古く、新しい件が下に追加される） */
-.sql-log { list-style: none; margin: 0; padding: 0; height: 46px; min-height: 28px; overflow-y: auto; border: 1px solid var(--line); border-bottom: none; border-radius: 4px 4px 0 0; background: #fafafa; }
+.sql-log { list-style: none; margin: 0; padding: 0; height: 46px; min-height: 28px; overflow-y: auto; border: 1px solid var(--line); border-bottom: none; border-radius: 4px 4px 0 0; background: #fafafa; display: flex; flex-direction: column; }
+/* 件が少ないときは下に寄せ、余白を上にする（justify-content: flex-end はスクロールで上端が切れるので使わない） */
+.sql-log > :first-child { margin-top: auto; }
 .sql-log-item { padding: 4px 8px; border-bottom: 1px solid #eee; cursor: pointer; }
 .sql-log-item:last-child { border-bottom: none; }
 .sql-log-item:hover { background: #f0f5ff; }
