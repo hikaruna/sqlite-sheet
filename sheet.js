@@ -604,6 +604,7 @@ export class Sheets {
     const sheetName = h('input', { type: 'text' });
     const name = h('input', { type: 'text' });
     const type = h('select', null, TYPES.map((t) => h('option', { value: t }, t)));
+    const pk = h('input', { type: 'checkbox' });
     const nn = h('input', { type: 'checkbox' });
     const dflt = h('input', { type: 'text', disabled: true, placeholder: '指定しない（NULL）' });
     const hasD = h('input', { type: 'checkbox' });
@@ -642,7 +643,10 @@ export class Sheets {
 
     const rows = [];
     if (withSheetName) rows.push(['シート名', sheetName], '-');
-    rows.push(['列名', name], ['型', type], ['必須（NOT NULL）', nn], ['デフォルト値', dfltRow], ['外部キー: 参照先テーブル', fkT], ['外部キー: 参照先列', fkC]);
+    rows.push(['列名', name], ['型', type]);
+    // 主キーは ADD COLUMN では付けられないので、シート作成時（最初の列）だけ選べる
+    if (withSheetName) rows.push(['主キー（PRIMARY KEY）', pk]);
+    rows.push(['必須（NOT NULL）', nn], ['デフォルト値', dfltRow], ['外部キー: 参照先テーブル', fkT], ['外部キー: 参照先列', fkC]);
     return formDialog(title, rows, '追加', () => {
       if (withSheetName && !sheetName.value.trim()) return 'シート名を入力してください';
       if (!name.value.trim()) return '列名を入力してください';
@@ -656,6 +660,7 @@ export class Sheets {
       }
       if (fkT.value && !fkC.value) return '参照先列を選んでください';
       let def = `${qid(name.value.trim())} ${type.value}`;
+      if (pk.checked) def += ' PRIMARY KEY';
       if (nn.checked) def += ' NOT NULL';
       if (hasDefault) def += ' DEFAULT ' + typedLit(dflt.value, type.value);
       if (fkT.value) def += ` REFERENCES ${qid(fkT.value)}(${qid(fkC.value)})`;
@@ -673,7 +678,7 @@ export class Sheets {
   }
 
   // 列の編集ポップアップ（4.3）。列追加と同じ並びで今の情報を表示し、
-  // 列名と必須は編集できる。型・デフォルト値・外部キーは SQLite では後から変えられないので表示のみ
+  // 列名と必須は編集できる。型・主キー・デフォルト値・外部キーは SQLite では後から変えられないので表示のみ
   async columnMenu(col) {
     const s = this.data.sheet;
     const info = this.data.meta.cols.get(col) || {};
@@ -685,6 +690,7 @@ export class Sheets {
     const type = h('select', { disabled: true },
       (TYPES.includes(typeText.toUpperCase()) ? TYPES : [typeText, ...TYPES]).map((t) =>
         h('option', { value: t, selected: t.toUpperCase() === typeText.toUpperCase() }, t || '（型なし）')));
+    const pk = h('input', { type: 'checkbox', disabled: true, checked: info.pk > 0 });
     const nn = h('input', { type: 'checkbox', checked: !!info.nn });
     const hasD = h('input', { type: 'checkbox', disabled: true, checked: info.dflt != null });
     const dflt = h('input', { type: 'text', disabled: true, value: info.dflt ?? '', placeholder: '指定しない（NULL）' });
@@ -692,8 +698,7 @@ export class Sheets {
       h('label', { style: 'white-space:nowrap' }, hasD, ' 指定する'), dflt);
     const fkT = h('select', { disabled: true }, h('option', null, fk ? fk.t : '（なし）'));
     const fkC = h('select', { disabled: true }, fk ? h('option', null, fk.c ?? '（主キー）') : null);
-    const rows = [['列名', name], ['型', type], ['必須（NOT NULL）', nn], ['デフォルト値', dfltRow], ['外部キー: 参照先テーブル', fkT], ['外部キー: 参照先列', fkC]];
-    if (info.pk > 0) rows.push(['主キー', h('span', null, 'はい')]);
+    const rows = [['列名', name], ['型', type], ['主キー（PRIMARY KEY）', pk], ['必須（NOT NULL）', nn], ['デフォルト値', dfltRow], ['外部キー: 参照先テーブル', fkT], ['外部キー: 参照先列', fkC]];
     rows.push({ note: '灰色の項目は、SQLite では後から変更できません（変えるときは SQL欄でテーブルを作り直します）。' });
 
     const renameState = (to) => {
