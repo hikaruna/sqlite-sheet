@@ -496,7 +496,7 @@ async function duplicateTable(name, anchor) {
 // シート表示
 // ======================================================================
 function viewOf(key) {
-  if (!state.views.has(key)) state.views.set(key, { sort: null, filters: [] });
+  if (!state.views.has(key)) state.views.set(key, { sorts: [], filters: [] });
   return state.views.get(key);
 }
 
@@ -583,18 +583,26 @@ function renderSheetHead(kind, name, error) {
   if (kind === 'q' || kind === 'v') parts.push(queryEditor(kind, name, error));
   const view = viewOf(state.key);
   const chips = el('div.chips',
-    view.sort ? el('span.chip.sort', `${view.sort.dir === 'asc' ? '↑' : '↓'} ${view.sort.col}`,
-      el('button.chip-x', { title: '並べ替えを解除', on: { click: () => setSort(null) } }, '×')) : null,
+    view.sorts.length ? el('span.sort-chips', { title: '並べ替え（左ほど優先）' },
+      view.sorts.flatMap((s, i) => [
+        i ? el('span.sort-sep', '›') : null,
+        el('span.chip.sort', {
+          class: i === 0 && state.justSorted === s.col ? 'flash' : '',
+          title: 'クリックで昇順／降順を切り替え',
+          on: { click: (e) => { if (!e.target.closest('.chip-x')) toggleSortDir(i); } },
+        }, `${s.dir === 'asc' ? '↑' : '↓'} ${s.col}`,
+        el('button.chip-x', { title: 'この並べ替えを解除', on: { click: () => removeSort(s.col) } }, '×')),
+      ])) : null,
     view.filters.map((f, i) => el('span.chip.filter', {
       title: 'クリックで編集',
       on: { click: (e) => { if (!e.target.closest('.chip-x')) filterPopover(e.currentTarget, f.col, i); } },
     }, `${f.col} ${FILTER_OPS.find((o) => o.id === f.op)?.label.replace(/^\S+ /, '') ?? f.op}${FILTER_OPS.find((o) => o.id === f.op)?.noValue ? '' : ' 「' + f.value + '」'}`,
     el('button.chip-x', { title: '絞り込みを解除', on: { click: () => { view.filters.splice(i, 1); reloadSheet(); } } }, '×'))),
-    state.source?.columns.length ? el('button.chip-add-filter', { on: { click: (e) => filterPopover(e.currentTarget, state.source.columns[state.grid?.cur.c ?? 0]?.name) } }, '⏷ 絞り込み') : null,
     el('span.grow'),
     kind === 't' && state.source ? el('code.sheet-sql', { title: 'このシートが実行している SQL' }, state.source.displaySql()) : null,
   );
-  parts.push(chips);
+  // 何もかかっていないクエリ／ビューではバーごと出さない
+  if (view.sorts.length || view.filters.length || kind === 't') parts.push(chips);
   head.replaceChildren(...parts);
 }
 
@@ -628,7 +636,7 @@ function queryEditor(kind, name, error) {
         await db.query(`SELECT * FROM (${sql}) LIMIT 0`);
         await db.exec(`UPDATE ${q(QT)} SET sql = ? WHERE name = ?`, [sql, name]);
       }
-      state.views.set(state.key, { sort: null, filters: [] });
+      state.views.set(state.key, { sorts: [], filters: [] });
       await refreshObjects();
       await showSheet(state.key);
     } catch (e) { err.textContent = friendlyError(e.message); }
@@ -667,8 +675,24 @@ async function saveAsView(queryName, sql) {
 }
 
 // ---------- 並べ替え・絞り込み ----------
-function setSort(sort) {
-  viewOf(state.key).sort = sort;
+/** 並べ替えを一番強い基準として積む（同じ列の古い基準は外す） */
+function pushSort(col, dir) {
+  const v = viewOf(state.key);
+  v.sorts = [{ col, dir }, ...v.sorts.filter((s) => s.col !== col)];
+  state.justSorted = col;
+  reloadSheet().finally(() => { state.justSorted = null; });
+}
+
+function removeSort(col) {
+  const v = viewOf(state.key);
+  v.sorts = v.sorts.filter((s) => s.col !== col);
+  reloadSheet();
+}
+
+function toggleSortDir(i) {
+  const s = viewOf(state.key).sorts[i];
+  if (!s) return;
+  s.dir = s.dir === 'asc' ? 'desc' : 'asc';
   reloadSheet();
 }
 
@@ -772,9 +796,9 @@ function headerMenu(c, anchor) {
   const isTable = state.key[0] === 't';
   const items = [
     { header: col.name },
-    { label: '昇順に並べ替え', icon: '↑', action: () => setSort({ col: col.name, dir: 'asc' }) },
-    { label: '降順に並べ替え', icon: '↓', action: () => setSort({ col: col.name, dir: 'desc' }) },
-    viewOf(state.key).sort?.col === col.name ? { label: '並べ替えを解除', icon: '⇅', action: () => setSort(null) } : null,
+    { label: '昇順に並べ替え', icon: '↑', action: () => pushSort(col.name, 'asc') },
+    { label: '降順に並べ替え', icon: '↓', action: () => pushSort(col.name, 'desc') },
+    viewOf(state.key).sorts.some((s) => s.col === col.name) ? { label: 'この列の並べ替えを解除', icon: '⇅', action: () => removeSort(col.name) } : null,
     { label: '絞り込み…', icon: '⏷', action: () => filterPopover(anchor instanceof Element ? anchor : $('sheet-head'), col.name) },
   ];
   if (isTable) {
@@ -801,7 +825,7 @@ async function renameColumn(name, anchor) {
   try {
     await db.exec(`ALTER TABLE ${q(state.model.name)} RENAME COLUMN ${q(name)} TO ${q(to)}`);
     const v = viewOf(state.key);
-    if (v.sort?.col === name) v.sort.col = to;
+    v.sorts.forEach((s) => { if (s.col === name) s.col = to; });
     v.filters.forEach((f) => { if (f.col === name) f.col = to; });
     await reloadSheet();
   } catch (e) { toast(friendlyError(e.message), 'error'); }
@@ -827,7 +851,7 @@ async function dropColumn(name) {
     }
     undo.clear();
     const v = viewOf(state.key);
-    if (v.sort?.col === name) v.sort = null;
+    v.sorts = v.sorts.filter((s) => s.col !== name);
     v.filters = v.filters.filter((f) => f.col !== name);
     await reloadSheet();
   } catch (e) { toast(friendlyError(e.message), 'error'); }
@@ -880,7 +904,7 @@ async function joinQuery(col) {
 
 async function jumpToRef(fk, value) {
   const key = 't:' + fk.table;
-  state.views.set(key, { sort: null, filters: [{ col: fk.refCol, op: 'eq', value: String(value) }] });
+  state.views.set(key, { sorts: [], filters: [{ col: fk.refCol, op: 'eq', value: String(value) }] });
   await showSheet(key);
   toast(`「${fk.table}」の ${fk.refCol} = ${value} を表示しています（チップの × で解除）`);
 }
@@ -1014,7 +1038,7 @@ function updatePanel(focusCol) {
       await refreshObjects();
       const v = viewOf(key);
       const valid = new Set(state.panel.model.columns.map((c) => c.name));
-      if (v.sort && !valid.has(v.sort.col)) v.sort = null;
+      v.sorts = v.sorts.filter((s) => valid.has(s.col));
       v.filters = v.filters.filter((f) => valid.has(f.col));
       await showSheet(key);
     },

@@ -65,6 +65,17 @@ function whereClause(filters, colExpr) {
   return { sql: parts.length ? ' WHERE ' + parts.join(' AND ') : '', bind };
 }
 
+/** 並べ替え基準（先頭が一番強い）を ORDER BY の項目列に */
+function sortTerms(sorts, colExpr) {
+  return (sorts || []).map((s) => `${colExpr(s.col)} ${s.dir === 'desc' ? 'DESC' : 'ASC'}`);
+}
+
+/** 列の並べ替え状態 { dir, rank, total } か null */
+function sortInfo(sorts, name) {
+  const i = (sorts || []).findIndex((s) => s.col === name);
+  return i < 0 ? null : { dir: sorts[i].dir, rank: i + 1, total: sorts.length };
+}
+
 function filterValue(f, type) {
   const op = FILTER_OPS.find((o) => o.id === f.op);
   if (['contains', 'starts'].includes(f.op)) return { ...f };
@@ -74,7 +85,7 @@ function filterValue(f, type) {
 // ------------------------------------------------------------------------
 
 export class TableSource {
-  /** model: schema.readTable の結果、view: {sort:{col,dir}, filters:[]} */
+  /** model: schema.readTable の結果、view: {sorts:[{col,dir}]（先頭が一番強い）, filters:[]} */
   constructor(dbName, model, view, labelCols) {
     this.model = model;
     this.view = view;
@@ -104,7 +115,7 @@ export class TableSource {
         readonly: !!c.generated,
         align: a === 'INTEGER' || a === 'REAL' || a === 'NUMERIC' ? 'right' : 'left',
         fk: this.fkByCol.get(c.name) || null,
-        sort: view.sort?.col === c.name ? view.sort.dir : null,
+        sort: sortInfo(view.sorts, c.name),
         filtered: view.filters.some((f) => f.col === c.name),
         title: c.check ? `CHECK (${c.check})` : '',
       };
@@ -130,16 +141,15 @@ export class TableSource {
   }
 
   orderBy() {
-    const s = this.view.sort;
     const tie = this.hasRowid ? `${this.t}._rowid_` : this.model.pk.map((c) => `${this.t}.${q(c)}`).join(', ');
-    if (s) return ` ORDER BY ${this.t}.${q(s.col)} ${s.dir === 'desc' ? 'DESC' : 'ASC'}, ${tie}`;
-    return ` ORDER BY ${tie}`;
+    return ' ORDER BY ' + [...sortTerms(this.view.sorts, (c) => `${this.t}.${q(c)}`), tie].join(', ');
   }
 
   /** グリッドに見せている SELECT（表示用） */
   displaySql() {
     const w = this.where();
-    return inline(`SELECT * FROM ${this.t}${w.sql}${this.view.sort ? ` ORDER BY ${q(this.view.sort.col)} ${this.view.sort.dir === 'desc' ? 'DESC' : 'ASC'}` : ''}`, w.bind);
+    const terms = sortTerms(this.view.sorts, q);
+    return inline(`SELECT * FROM ${this.t}${w.sql}${terms.length ? ' ORDER BY ' + terms.join(', ') : ''}`, w.bind);
   }
 
   async count() {
@@ -294,7 +304,7 @@ export class TableSource {
 // ------------------------------------------------------------------------
 
 export class QuerySource {
-  /** sql: ユーザーの SELECT（末尾の ; は除去）。view: {sort, filters} */
+  /** sql: ユーザーの SELECT（末尾の ; は除去）。view: {sorts, filters} */
   constructor(widthKey, sql, view) {
     this.sql = sql.trim().replace(/;+\s*$/, '');
     this.view = view;
@@ -307,7 +317,7 @@ export class QuerySource {
     const r = await db.query(`SELECT * FROM (${this.sql}) LIMIT 0`);
     this.columns = r.columns.map((name) => ({
       name, badges: [],
-      sort: this.view.sort?.col === name ? this.view.sort.dir : null,
+      sort: sortInfo(this.view.sorts, name),
       filtered: this.view.filters.some((f) => f.col === name),
     }));
     // 先頭行から数値列を推定して右寄せ
@@ -320,7 +330,7 @@ export class QuerySource {
   }
 
   where() { return whereClause(this.view.filters.map((f) => filterValue(f, 'ANY')), (c) => q(c)); }
-  orderBy() { const s = this.view.sort; return s ? ` ORDER BY ${q(s.col)} ${s.dir === 'desc' ? 'DESC' : 'ASC'}` : ''; }
+  orderBy() { const t = sortTerms(this.view.sorts, q); return t.length ? ' ORDER BY ' + t.join(', ') : ''; }
 
   async count() {
     const w = this.where();

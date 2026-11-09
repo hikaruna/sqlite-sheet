@@ -159,11 +159,11 @@ select.input { padding-right: 4px; }
 .chip-x { border: 0; background: none; color: inherit; opacity: .6; padding: 0 3px; font-size: 13px; line-height: 1; }
 .chip-x:hover { opacity: 1; }
 .chip-n { font-size: 10px; background: var(--accent); color: #fff; border-radius: 999px; padding: 0 5px; }
-.chip-add-filter {
-  height: 24px; padding: 0 9px; border-radius: 999px; border: 1px dashed var(--line-strong);
-  background: none; color: var(--text-2); font-size: 12px;
-}
-.chip-add-filter:hover { color: var(--accent); border-color: var(--accent); }
+.chip.filter:hover, .chip.sort:hover { border-color: var(--accent); }
+.sort-chips { display: inline-flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+.sort-sep { color: var(--text-3); font-size: 13px; }
+.chip.sort.flash { animation: chip-flash .9s ease-out; }
+@keyframes chip-flash { from { box-shadow: 0 0 0 4px var(--accent-line); } to { box-shadow: 0 0 0 0 transparent; } }
 .sheet-sql {
   font: 11.5px var(--mono); color: var(--text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 50%;
 }

@@ -122,7 +122,8 @@ export class Grid {
       el('span.gh-name', col.name),
       ...(col.badges || []).map((b) => el('span.gh-badge', { class: b.cls || '', title: b.title || '' }, b.text)),
       el('span.gh-spacer'),
-      col.sort ? el('span.gh-sort', col.sort === 'asc' ? '↑' : '↓') : null,
+      col.sort ? el('span.gh-sort', { title: col.sort.total > 1 ? `並べ替えの第${col.sort.rank}基準` : '並べ替え中' },
+        (col.sort.dir === 'asc' ? '↑' : '↓') + (col.sort.total > 1 ? col.sort.rank : '')) : null,
       col.filtered ? el('span.gh-filter', { title: '絞り込み中' }, '⏷') : null,
       el('button.gh-btn', { title: '列メニュー', on: { click: (e) => { e.stopPropagation(); this.hooks.onHeaderMenu?.(c, e.currentTarget); } } }, '⋮'),
       el('div.gh-resize', { on: { mousedown: (e) => this.startResize(e, c) } }));
