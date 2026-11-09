@@ -117,6 +117,8 @@ function buildChrome() {
   undo.onChange(updateUndoButtons);
   db.onLog(() => {});
   addEventListener('keydown', onGlobalKey);
+  // 未保存の新しい行があるまま閉じようとしたら確認
+  addEventListener('beforeunload', (e) => { if (state.grid?.hasDraft) { e.preventDefault(); e.returnValue = ''; } });
   // .sqlite ファイルのドラッグ＆ドロップ
   addEventListener('dragover', (e) => { if (e.dataTransfer?.types.includes('Files')) { e.preventDefault(); document.body.classList.add('dropping'); } });
   addEventListener('dragleave', (e) => { if (!e.relatedTarget) document.body.classList.remove('dropping'); });
@@ -193,6 +195,8 @@ function showWelcome() {
 // DB 操作
 // ======================================================================
 async function openDb(name, key) {
+  // 未保存の新しい行があれば先に保存（失敗したら切り替えない）
+  if (state.grid && !(await state.grid.flushDraft())) return;
   try {
     await db.open(name);
   } catch (e) { toast(friendlyError(e.message), 'error'); return showWelcome(); }
@@ -515,6 +519,12 @@ async function labelColumns(model) {
 
 async function showSheet(key, { keepView = true } = {}) {
   closePopover();
+  // 別のシートへ移るなら未保存の新しい行を保存（失敗したら留まる）。同じシートの再表示なら下書きを引き継ぐ
+  let carryDraft = null;
+  if (state.grid?.hasDraft) {
+    if (key !== state.key) { if (!(await state.grid.flushDraft())) { renderTabs(); return; } }
+    else carryDraft = state.grid.draft;
+  }
   // 消えたシート（コンソールでの DROP/RENAME、古いハッシュ等）は近くのシートに切り替える
   const keys = allKeys();
   if (key && !keys.includes(key)) {
@@ -560,6 +570,7 @@ async function showSheet(key, { keepView = true } = {}) {
   }
   renderSheetHead(kind, name);
   state.grid = new Grid($('grid-host'), state.source, gridHooks(kind));
+  if (carryDraft && carryDraft.values.length === state.source.columns.length) state.grid.draft = carryDraft;
   await state.grid.reload({ keepSelection: false });
   state.grid.focus();
   updatePanel();
@@ -789,8 +800,9 @@ function updateFx(s) {
   if (!g || !state.source) { ref.textContent = ''; fx.value = ''; fx.readOnly = true; return; }
   s ??= { r: g.cur.r, c: g.cur.c, row: g.rowAt(g.cur.r), isNew: g.cur.r === g.newRowIndex, col: g.cols[g.cur.c], range: g.range() };
   const col = s.col;
-  ref.textContent = col ? (s.isNew ? `＊ · ${col.name}` : `${s.r + 1} · ${col.name}`) : '';
-  const v = s.isNew ? undefined : s.row?.values[s.c];
+  const draft = s.isNew && g.hasDraft;
+  ref.textContent = col ? (s.isNew ? (g.draft ? `✎ ${draft ? '未保存' : '新しい行'} · ${col.name}` : '＋ 行を追加') : `${s.r + 1} · ${col.name}`) : '';
+  const v = s.isNew ? (draft ? g.draft.values[s.c] : undefined) : s.row?.values[s.c];
   fx.readOnly = !state.source.editable || col?.readonly || v instanceof Uint8Array;
   fx.classList.toggle('null', v === null);
   fx.value = v == null ? '' : v instanceof Uint8Array ? `BLOB（${v.length} バイト）` : String(v);
@@ -823,7 +835,10 @@ function onFxKey(e) {
   if (!g) return;
   if (e.key === 'Enter' && !e.isComposing) {
     e.preventDefault();
-    if (!e.target.readOnly) g.setCurrent(e.target.value).then(() => { g.moveTo(g.cur.r + 1, g.cur.c); g.focus(); });
+    if (!e.target.readOnly) {
+      const onNew = g.cur.r === g.newRowIndex;
+      g.setCurrent(e.target.value).then(() => { onNew ? g.moveTo(g.cur.r, g.cur.c + 1) : g.moveTo(g.cur.r + 1, g.cur.c); g.focus(); });
+    }
   } else if (e.key === 'Escape') { updateFx(); g.focus(); }
 }
 
@@ -955,7 +970,9 @@ function fkPicker(r, c, anchor) {
   let items = [], active = 0;
   const choose = async (v) => {
     closePopover();
-    await state.grid.write([{ r, c, value: v == null ? null : String(v) }]);
+    const g = state.grid;
+    if (r === g.newRowIndex) { g.draftSet(c, v == null ? null : String(v)); g.render(); g.emitSelect(); }
+    else await g.write([{ r, c, value: v == null ? null : String(v) }]);
     state.grid.focus();
   };
   const renderList = () => {
