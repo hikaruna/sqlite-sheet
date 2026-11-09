@@ -1,0 +1,3 @@
+# リポジトリの中は LF に統一する。作業ツリーでは各自の環境の改行コード（Windows なら CRLF）に自動で変換される
+* text=auto
+*.wasm binary
