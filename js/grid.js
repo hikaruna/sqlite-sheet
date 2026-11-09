@@ -284,8 +284,9 @@ export class Grid {
           cell.classList.add('loading');
         } else {
           this.fillCell(cell, row.values[c], col, row, r, c);
+          if (this.source.protect?.(row.values, c).length) cell.classList.add('prot');
         }
-        if (fill && rowSel && c >= c0 && c <= c1 && !col.readonly && (row || draft)) {
+        if (fill && rowSel && c >= c0 && c <= c1 && !col.readonly && (row || draft) && !cell.classList.contains('prot')) {
           cell.className = 'gc fill-preview' + (col.align === 'right' ? ' num' : '') + (r === this.cur.r && c === this.cur.c ? ' cur' : '');
           cell.replaceChildren(fillText);
           cell.removeAttribute('title');
@@ -487,11 +488,21 @@ export class Grid {
   }
 
   // ---------- 編集 ----------
+  /** セルにかかっている保護（なければ空配列） */
+  protAt(r, c) {
+    const check = this.source.protect;
+    if (!check) return [];
+    if (r === this.newRowIndex) return check(null, c);
+    const row = this.rowAt(r);
+    return row ? check(row.values, c) : [];
+  }
+
   canEdit(r, c) {
     if (!this.source.editable) return false;
     const col = this.cols[c];
     if (!col || col.readonly) return false;
     if (r !== this.newRowIndex && !this.rowAt(r)) return false;
+    if (this.protAt(r, c).length) return false;
     if (r === this.newRowIndex && !this.draft) return false; // 「＋」の上：行を作るまでは入力できない
     return true;
   }
@@ -531,7 +542,9 @@ export class Grid {
     if (!this.canEdit(r, c)) {
       this.sink.value = '';
       // 「＋」の上で打った文字は捨てる（行を作るのはクリックか Enter）
-      if (this.source.editable && !(r === this.newRowIndex && !this.draft)) this.hooks.onReadonlyEdit?.(this.cols[c]);
+      const prots = this.protAt(r, c);
+      if (prots.length) this.hooks.onProtectedEdit?.(prots);
+      else if (this.source.editable && !(r === this.newRowIndex && !this.draft)) this.hooks.onReadonlyEdit?.(this.cols[c]);
       return false;
     }
     const v = this.currentValue();
@@ -570,6 +583,7 @@ export class Grid {
     for (let c = c0; c <= c1; c++) {
       if (this.cols[c]?.readonly) continue;
       for (let r = r0; r <= r1; r++) {
+        if (this.protAt(r, c).length) continue;
         if (r < this.rowCount) cells.push({ r, c });
         else if (r === this.newRowIndex && this.draft) draftCols.push(c);
       }

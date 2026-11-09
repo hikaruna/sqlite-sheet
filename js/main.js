@@ -8,6 +8,7 @@ import { DesignPanel } from './design-panel.js';
 import { SqlConsole } from './console.js';
 import { undo } from './undo.js';
 import { createSample } from './sample.js';
+import { readProtections, protectSql, unprotectSql, protectionChecker, canProtectRows, describe, KIND_ICON as PROT_ICON } from './protect.js';
 
 const QT = APP_PREFIX + 'queries';
 const MOD = isMac ? '⌘' : 'Ctrl+';
@@ -334,6 +335,8 @@ async function refreshObjects() {
   state.queries = [];
   const hasQ = (await db.query(`SELECT 1 FROM sqlite_schema WHERE name = ?`, [QT])).rows.length;
   if (hasQ) state.queries = (await db.query(`SELECT name, sql FROM ${q(QT)} ORDER BY rowid`)).rows.map(([name, sql]) => ({ name, sql }));
+  // シート全体が保護されている表（タブに 🔒 を出す）
+  state.lockedSheets = new Set((await db.query(`SELECT tbl_name FROM sqlite_schema WHERE type = 'trigger' AND name GLOB 'protect_[0-9]*_ins'`)).rows.map(([n]) => n));
   renderTabs();
 }
 
@@ -367,7 +370,7 @@ function renderTabs() {
         dblclick: (e) => renameSheet(key, e.currentTarget),
         contextmenu: (e) => { e.preventDefault(); tabMenu(key, e.currentTarget); },
       },
-    }, el('span.tab-icon', KIND_ICON[kind]), name);
+    }, el('span.tab-icon', KIND_ICON[kind]), name, kind === 't' && state.lockedSheets?.has(name) ? el('span.tab-lock', { title: 'シート全体が保護されています' }, '🔒') : null);
   }));
   tabs.querySelector('.tab.on')?.scrollIntoView({ inline: 'nearest', block: 'nearest' });
 }
@@ -378,6 +381,9 @@ function tabMenu(key, anchor) {
     { header: `${KIND_NAME[kind]}：${name}` },
     { label: '名前を変更…', icon: '✎', action: () => renameSheet(key, anchor) },
     kind === 't' ? { label: '複製…', icon: '⧉', action: () => duplicateTable(name, anchor) } : null,
+    kind === 't' ? (state.lockedSheets?.has(name)
+      ? { label: 'シートの保護を外す…', icon: '🔓', action: () => withSheet(key, () => unprotect(state.prots.find((p) => p.kind === 'sheet'))) }
+      : { label: 'シートを保護…', icon: '🔒', action: () => withSheet(key, () => protect({ kind: 'sheet' }, anchor)) }) : null,
     kind !== 'q' ? { label: 'SQL コンソールで SELECT', icon: '⌨', action: () => sqlConsole.insert(`SELECT * FROM ${q(name)};`) } : null,
     kind === 't' ? { label: 'CSV で書き出し', icon: '⤓', action: () => exportCsv(key) } : { label: 'CSV で書き出し', icon: '⤓', action: () => exportCsv(key) },
     '-',
@@ -555,7 +561,11 @@ async function showSheet(key, { keepView = true } = {}) {
     if (kind === 't') {
       state.model = await readTable(name);
       state.source = new TableSource(state.dbName, state.model, view, await labelColumns(state.model));
+      state.prots = readProtections(state.model);
+      state.source.protect = protectionChecker(state.model, state.prots);
+      if (state.prots.some((p) => p.kind === 'sheet')) state.source.editable = false;
     } else {
+      state.prots = [];
       state.model = null;
       const sql = kind === 'v' ? `SELECT * FROM ${q(name)}` : state.queries.find((x) => x.name === name)?.sql || 'SELECT 1';
       state.source = await new QuerySource(`${state.dbName}/${key}`, sql, view).init();
@@ -611,6 +621,8 @@ function renderSheetHead(kind, name, error) {
     }, `${f.col} ${FILTER_OPS.find((o) => o.id === f.op)?.label.replace(/^\S+ /, '') ?? f.op}${FILTER_OPS.find((o) => o.id === f.op)?.noValue ? '' : ' 「' + f.value + '」'}`,
     el('button.chip-x', { title: '絞り込みを解除', on: { click: () => { view.filters.splice(i, 1); reloadSheet(); } } }, '×'))),
     el('span.grow'),
+    kind === 't' && state.prots?.length ? el('button.chip.prot', { title: 'このシートの保護', on: { click: (e) => protPanel(e.currentTarget) } },
+      `🔒 保護 ${state.prots.length}`) : null,
     kind === 't' && state.source ? el('code.sheet-sql', { title: 'このシートが実行している SQL' }, state.source.displaySql()) : null,
   );
   // 何もかかっていないクエリ／ビューではバーごと出さない
@@ -783,6 +795,7 @@ function gridHooks(kind) {
     onContextMenu: (pos, range) => cellMenu(pos, range),
     onReadonlyEdit: (col) => toast(isTable ? (col ? `「${col.name}」は生成列のため編集できません` : '編集できません') : `${KIND_NAME[kind]}の結果は編集できません。元のテーブルで編集してください`),
     onBlobEdit: (r, c) => blobMenu(r, c),
+    onProtectedEdit: (prots) => toast(`🔒 ${prots[0].note || '保護されています'}（${describe(state.model, prots[0])}）`),
     onCellCtrlClick: isTable ? (r, c, row) => {
       const col = state.source.columns[c];
       if (!col.fk || row.values[c] == null) return false;
@@ -856,6 +869,7 @@ function headerMenu(c, anchor) {
     items.push('-',
       { label: '列の設定…', icon: '⚙', action: () => togglePanel(true, col.name) },
       { label: '名前を変更…', icon: '✎', action: () => renameColumn(col.name, anchor) },
+      { label: '列を保護…', icon: '🔒', action: () => protect({ kind: 'cols', cols: [col.name] }, anchor instanceof Element ? anchor : $('sheet-head')) },
       { label: '列を追加…', icon: '＋', action: () => quickAddColumn(anchor instanceof Element ? anchor : $('sheet-head')) });
     if (col.fk) {
       items.push('-',
@@ -1017,11 +1031,96 @@ async function cellMenu(pos, range) {
       '-',
       { label: rows > 1 ? `${rows} 行を複製` : '行を複製', icon: '⧉', disabled: rows < 1, action: async () => { try { await state.source.duplicateRows(await g.rowsBetween(range.r0, range.r0 + rows - 1)); await g.reload(); } catch (e) { toast(friendlyError(e.message), 'error'); } } },
       { label: rows > 1 ? `${rows} 行を削除` : '行を削除', icon: '🗑', kbd: `${MOD}-`, danger: true, disabled: rows < 1, action: () => deleteSelectedRows() });
+    const here = g.protAt(g.cur.r, g.cur.c);
+    items.push('-', { label: '範囲を保護…', icon: '🔒', action: () => protectSelection(pos) },
+      ...here.map((p) => ({ label: `保護を外す：${p.note || describe(state.model, p)}`, icon: '🔓', action: () => unprotect(p) })));
     const col = state.source.columns[g.cur.c];
     const v = g.rowAt(g.cur.r)?.values[g.cur.c];
     if (col?.fk && v != null) items.push('-', { label: `参照先の行を開く（${col.fk.table}）`, icon: '→', kbd: `${MOD}クリック`, action: () => jumpToRef(col.fk, v) });
   }
   menu(pos, items);
+}
+
+// ---------- 保護（トリガーで書き込みを拒否する） ----------
+/** 別のシートのタブから操作したときは、そのシートを開いてから */
+async function withSheet(key, fn) {
+  if (state.key !== key) await showSheet(key);
+  if (state.key === key) fn();
+}
+
+/** 選択範囲から保護の対象を決める：列全体 → 列、行全体 → 行、それ以外 → 範囲 */
+async function protectSelection(anchor) {
+  const g = state.grid, m = state.model;
+  const { r0, r1, c0, c1 } = g.range();
+  const cols = m.columns.slice(c0, c1 + 1).map((c) => c.name);
+  const wholeCols = g.colSelect || (r0 === 0 && r1 >= g.rowCount - 1 && g.rowCount > 1);
+  if (wholeCols) return protect({ kind: 'cols', cols }, anchor);
+  if (!canProtectRows(m)) { toast('主キーのない表では、行や範囲は保護できません（列やシート全体は保護できます）', 'error'); return; }
+  const last = Math.min(r1, g.rowCount - 1);
+  if (last < r0) return;
+  if (last - r0 >= 1000) { toast('一度に保護できるのは 1000 行までです', 'error'); return; }
+  const pkIdx = m.pk.map((p) => m.columns.findIndex((c) => c.name === p));
+  const keys = (await g.rowsBetween(r0, last)).filter(Boolean)
+    .map((row) => pkIdx.map((i) => { const v = row.values[i]; return typeof v === 'bigint' && Number.isSafeInteger(Number(v)) ? Number(v) : v; }));
+  const wholeRows = c0 === 0 && c1 === m.columns.length - 1;
+  return protect(wholeRows ? { kind: 'rows', keys } : { kind: 'range', cols, keys }, anchor);
+}
+
+async function protect(spec, anchor) {
+  const what = describe(state.model, spec);
+  const note = await ask(anchor, { title: `🔒 ${what}を保護`, placeholder: '説明（任意）例：4月分は確定済み', okLabel: '保護する' });
+  if (note === null) return;
+  try {
+    const names = (await db.query(`SELECT name FROM sqlite_schema WHERE type = 'trigger'`)).rows.map(([n]) => n);
+    await db.batch(protectSql(state.model, { ...spec, note }, names));
+    await refreshObjects();
+    await reloadSheet();
+    toast(`🔒 ${what}を保護しました`, 'success');
+  } catch (e) { toast(friendlyError(e.message), 'error'); }
+}
+
+async function unprotect(p) {
+  if (!p) return;
+  const what = describe(state.model, p);
+  const body = `${PROT_ICON[p.kind]} ${what}${p.note ? `「${p.note}」` : ''}。外すと、この範囲を編集できるようになります。`;
+  if (!await confirmDialog({ title: '保護を外しますか？', body, okLabel: '外す' })) return;
+  try {
+    await db.batch(unprotectSql(p));
+    await refreshObjects();
+    await reloadSheet();
+    toast(`🔓 ${what}の保護を外しました`);
+  } catch (e) { toast(friendlyError(e.message), 'error'); }
+}
+
+/** このシートの保護の一覧。クリックで範囲を選択、🔓 で外す */
+function protPanel(anchor) {
+  const m = state.model;
+  popover(anchor, el('div.prot-panel',
+    el('div.ask-title', '🔒 保護されたシートと範囲'),
+    el('div.prot-list', state.prots.map((p) => el('div.prot-item', {
+      title: 'クリックで範囲を選択',
+      on: { click: (e) => { if (!e.target.closest('button')) { closePopover(); selectProtection(p); } } },
+    },
+    el('span.prot-icon', PROT_ICON[p.kind]),
+    el('div.prot-text', el('div.prot-note', p.note || describe(m, p)), p.note ? el('div.prot-what', describe(m, p)) : null),
+    el('button.btn.sm', { title: '保護を外す', on: { click: () => { closePopover(); unprotect(p); } } }, '🔓 外す')))),
+    el('div.prot-foot', 'セルを選んで右クリック →「範囲を保護…」で追加できます')), { align: 'end' });
+}
+
+/** 保護の範囲をグリッドで選択する（先頭 5000 行の中で探す） */
+async function selectProtection(p) {
+  const g = state.grid, m = state.model;
+  const cIdx = (p.cols || []).map((n) => m.columns.findIndex((c) => c.name === n)).filter((i) => i >= 0);
+  const c0 = cIdx.length ? Math.min(...cIdx) : 0, c1 = cIdx.length ? Math.max(...cIdx) : m.columns.length - 1;
+  let r0 = 0, r1 = Math.max(0, g.rowCount - 1);
+  if (p.keys) {
+    const rows = g.rowCount ? await g.rowsBetween(0, Math.min(g.rowCount, 5000) - 1) : [];
+    const hits = rows.map((row, r) => (row && g.protAt(r, c0).includes(p) ? r : -1)).filter((r) => r >= 0);
+    if (!hits.length) { toast('保護された行が見つかりません（絞り込みで隠れているかもしれません）'); return; }
+    r0 = Math.min(...hits); r1 = Math.max(...hits);
+  }
+  g.anchor = { r: r0, c: c0 }; g.cur = { r: r1, c: c1 };
+  g.ensureVisible(); g.render(); g.emitSelect(); g.focus();
 }
 
 async function deleteSelectedRows() {

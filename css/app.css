@@ -16,6 +16,7 @@
   --danger-soft: #fdecea;
   --warn: #a96500;
   --fk: #3a63c9;
+  --prot-stripe: rgba(91, 100, 112, .16);
   --shadow: 0 8px 28px rgba(20, 28, 38, .14), 0 1px 3px rgba(20, 28, 38, .08);
   --radius: 8px;
   --mono: ui-monospace, "SF Mono", "Cascadia Code", Consolas, "BIZ UDGothic", monospace;
@@ -41,6 +42,7 @@
     --danger-soft: #3a2222;
     --warn: #e2a33b;
     --fk: #8aa8ff;
+    --prot-stripe: rgba(167, 175, 184, .14);
     --shadow: 0 10px 30px rgba(0, 0, 0, .5), 0 1px 3px rgba(0, 0, 0, .4);
     color-scheme: dark;
   }
@@ -277,6 +279,22 @@ select.input { padding-right: 4px; }
   box-shadow: 0 0 0 2px var(--accent), var(--shadow); border-radius: 2px; overflow: auto;
 }
 .grid-sink.editing.num { text-align: right; font-variant-numeric: tabular-nums; }
+/* 保護：スプレッドシートと同じく斜線の模様 */
+.gc.prot {
+  background-image: repeating-linear-gradient(-45deg, transparent 0 6px, var(--prot-stripe) 6px 7px);
+}
+.tab-lock { font-size: 10px; margin-left: 4px; opacity: .75; }
+.chip.prot { cursor: pointer; background: var(--surface); }
+.chip.prot:hover { border-color: var(--accent); }
+.prot-panel { width: 340px; max-width: calc(100vw - 32px); padding: 10px 12px; }
+.prot-list { display: flex; flex-direction: column; gap: 2px; margin: 6px 0; max-height: 50vh; overflow: auto; }
+.prot-item { display: flex; align-items: center; gap: 10px; padding: 6px 8px; border-radius: 6px; cursor: pointer; }
+.prot-item:hover { background: var(--surface-2); }
+.prot-icon { font-size: 16px; color: var(--text-2); width: 18px; text-align: center; }
+.prot-text { flex: 1; min-width: 0; }
+.prot-note { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.prot-what { font-size: 11.5px; color: var(--text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.prot-foot { font-size: 11.5px; color: var(--text-3); border-top: 1px solid var(--line); padding-top: 6px; }
 /* 範囲への一括入力：確定すると入る値を下書きの色で薄く見せる */
 .gc.fill-preview { background: var(--accent-soft); color: var(--text-2); box-shadow: inset 0 0 0 1px var(--accent); }
 .grid-fill-hint {
