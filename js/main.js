@@ -515,11 +515,19 @@ async function labelColumns(model) {
 
 async function showSheet(key, { keepView = true } = {}) {
   closePopover();
+  // 消えたシート（コンソールでの DROP/RENAME、古いハッシュ等）は近くのシートに切り替える
+  const keys = allKeys();
+  if (key && !keys.includes(key)) {
+    const prev = state.order?.indexOf(key) ?? -1;
+    key = keys[Math.min(Math.max(prev, 0), keys.length - 1)] || null;
+  }
+  state.order = keys;
   state.key = key;
   setHash();
   renderTabs();
   if (!key) {
     state.grid = null; state.source = null; state.model = null;
+    updateStatus();
     $('sheet-head').replaceChildren();
     $('grid-host').replaceChildren(el('div.empty-db',
       el('h2', 'まだシートがありません'),
@@ -544,6 +552,7 @@ async function showSheet(key, { keepView = true } = {}) {
     }
   } catch (e) {
     state.source = null; state.grid = null;
+    updateStatus();
     renderSheetHead(kind, name, e);
     $('grid-host').replaceChildren(el('div.grid-error', friendlyError(e.message)));
     updatePanel();
