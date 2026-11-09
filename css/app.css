@@ -162,6 +162,13 @@ select.input { padding-right: 4px; }
 .chip.filter:hover, .chip.sort:hover { border-color: var(--accent); }
 .sort-chips { display: inline-flex; align-items: center; gap: 4px; flex-wrap: wrap; }
 .sort-sep { color: var(--text-3); font-size: 13px; }
+.chip.sort { touch-action: none; user-select: none; }
+.chip-grip { font-size: 10px; letter-spacing: -2px; opacity: .45; margin-right: 2px; cursor: grab; }
+.chip.sort:hover .chip-grip { opacity: .9; }
+.chip.sort.dragging { position: relative; z-index: 2; cursor: grabbing; box-shadow: var(--shadow, 0 4px 12px rgba(0,0,0,.18)); opacity: .9; }
+.sort-chips.sorting .sort-sep { visibility: hidden; }
+.chip.sort.drop-before { box-shadow: -3px 0 0 0 var(--accent); }
+.sort-chips.drop-end .chip.sort:not(.dragging):last-of-type { box-shadow: 3px 0 0 0 var(--accent); }
 .chip.sort.flash { animation: chip-flash .9s ease-out; }
 @keyframes chip-flash { from { box-shadow: 0 0 0 4px var(--accent-line); } to { box-shadow: 0 0 0 0 transparent; } }
 .sheet-sql {

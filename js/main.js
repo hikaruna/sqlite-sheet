@@ -588,9 +588,10 @@ function renderSheetHead(kind, name, error) {
         i ? el('span.sort-sep', '›') : null,
         el('span.chip.sort', {
           class: i === 0 && state.justSorted === s.col ? 'flash' : '',
-          title: 'クリックで昇順／降順を切り替え',
-          on: { click: (e) => { if (!e.target.closest('.chip-x')) toggleSortDir(i); } },
-        }, `${s.dir === 'asc' ? '↑' : '↓'} ${s.col}`,
+          title: view.sorts.length > 1 ? 'クリックで昇順／降順を切り替え・ドラッグで優先順位を変更' : 'クリックで昇順／降順を切り替え',
+          dataset: { i },
+          on: { pointerdown: (e) => sortChipPointer(e, i) },
+        }, view.sorts.length > 1 ? el('span.chip-grip', '⋮⋮') : null, `${s.dir === 'asc' ? '↑' : '↓'} ${s.col}`,
         el('button.chip-x', { title: 'この並べ替えを解除', on: { click: () => removeSort(s.col) } }, '×')),
       ])) : null,
     view.filters.map((f, i) => el('span.chip.filter', {
@@ -687,6 +688,41 @@ function removeSort(col) {
   const v = viewOf(state.key);
   v.sorts = v.sorts.filter((s) => s.col !== col);
   reloadSheet();
+}
+
+/** 並べ替えチップ：動かさずに離せば昇順/降順の切り替え、少し動かせばドラッグで順位変更 */
+function sortChipPointer(e, from) {
+  if (e.button !== 0 || e.target.closest('.chip-x')) return;
+  e.preventDefault();
+  const chip = e.currentTarget;
+  const box = chip.parentElement;
+  const sx = e.clientX, sy = e.clientY;
+  let dragging = false, to = from;
+  const others = () => [...box.querySelectorAll('.chip.sort')].filter((c) => c !== chip);
+  const move = (ev) => {
+    const dx = ev.clientX - sx;
+    if (!dragging) {
+      if (Math.hypot(dx, ev.clientY - sy) < 5 || viewOf(state.key).sorts.length < 2) return;
+      dragging = true;
+      chip.classList.add('dragging');
+      box.classList.add('sorting');
+    }
+    chip.style.transform = `translateX(${dx}px)`;
+    // 他のチップの中心より右にいくつ越えたかで挿入位置を決める
+    const x = chip.getBoundingClientRect().left + chip.offsetWidth / 2;
+    const rest = others();
+    to = rest.filter((c) => { const r = c.getBoundingClientRect(); return x > r.left + r.width / 2; }).length;
+    rest.forEach((c, k) => c.classList.toggle('drop-before', k === to));
+    box.classList.toggle('drop-end', to === rest.length);
+  };
+  const up = () => {
+    removeEventListener('pointermove', move); removeEventListener('pointerup', up); removeEventListener('pointercancel', up);
+    if (!dragging) { toggleSortDir(from); return; }
+    const v = viewOf(state.key);
+    if (to !== from) { const [s] = v.sorts.splice(from, 1); v.sorts.splice(to, 0, s); }
+    reloadSheet();
+  };
+  addEventListener('pointermove', move); addEventListener('pointerup', up); addEventListener('pointercancel', up);
 }
 
 function toggleSortDir(i) {
