@@ -280,6 +280,7 @@ export class Grid {
           cell.classList.add('loading');
         } else {
           this.fillCell(cell, row.values[c], col, row, r, c);
+          if (this.source.protect?.(row.values, c).length) cell.classList.add('prot');
         }
         if (col.fk && this.source.editable && r === this.cur.r && c === this.cur.c && this.hooks.onFkPick) {
           cell.append(el('button.fk-drop', {
@@ -470,11 +471,21 @@ export class Grid {
   }
 
   // ---------- 編集 ----------
+  /** セルにかかっている保護（なければ空配列） */
+  protAt(r, c) {
+    const check = this.source.protect;
+    if (!check) return [];
+    if (r === this.newRowIndex) return check(null, c);
+    const row = this.rowAt(r);
+    return row ? check(row.values, c) : [];
+  }
+
   canEdit(r, c) {
     if (!this.source.editable) return false;
     const col = this.cols[c];
     if (!col || col.readonly) return false;
     if (r !== this.newRowIndex && !this.rowAt(r)) return false;
+    if (this.protAt(r, c).length) return false;
     if (r === this.newRowIndex && !this.draft) return false; // 「＋」の上：行を作るまでは入力できない
     return true;
   }
@@ -514,7 +525,9 @@ export class Grid {
     if (!this.canEdit(r, c)) {
       this.sink.value = '';
       // 「＋」の上で打った文字は捨てる（行を作るのはクリックか Enter）
-      if (this.source.editable && !(r === this.newRowIndex && !this.draft)) this.hooks.onReadonlyEdit?.(this.cols[c]);
+      const prots = this.protAt(r, c);
+      if (prots.length) this.hooks.onProtectedEdit?.(prots);
+      else if (this.source.editable && !(r === this.newRowIndex && !this.draft)) this.hooks.onReadonlyEdit?.(this.cols[c]);
       return false;
     }
     const v = this.currentValue();
