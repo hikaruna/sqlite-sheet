@@ -12,11 +12,12 @@ export class SqlConsole {
     this.hIdx = -1;
     this.log = [];
     this.tab = 'result';
+    this.unseen = 0; // 途中を読んでいる間に増えた記録の数
     db.onLog((entry) => {
       if (entry.source === 'console') return;
       this.log.push(entry);
-      if (this.log.length > 500) this.log.shift();
-      if (this.tab === 'log' && !host.hidden) this.renderOut();
+      const dropped = this.log.length > LOG_LIMIT ? this.log.shift() : null;
+      if (this.tab === 'log' && !host.hidden) this.appendLog(entry, !!dropped);
     });
     this.build();
   }
@@ -28,7 +29,7 @@ export class SqlConsole {
       on: { keydown: (e) => this.onKey(e) },
     });
     this.status = el('span.console-status');
-    this.out = el('div.console-out');
+    this.out = el('div.console-out', { on: { scroll: () => { if (this.atBottom()) this.setUnseen(0); } } });
     this.tabsEl = el('div.console-tabs');
     this.host.append(
       el('div.console-resize', { on: { mousedown: (e) => this.startResize(e) } }),
@@ -122,18 +123,16 @@ export class SqlConsole {
 
   renderOut() {
     if (this.tab === 'log') {
-      const items = this.log.slice().reverse();
-      this.out.replaceChildren(items.length ? el('div.log-list', items.map((it) => el('div.log-item', {
-        class: it.error ? 'err' : '',
-        title: 'クリックで入力欄にコピー',
-        on: { click: () => { this.input.value = inline(it.sql, it.bind); this.input.focus(); } },
-      },
-      el('span.log-src', { gui: 'GUI', console: 'SQL', undo: '元に戻す', redo: 'やり直し' }[it.source] || it.source),
-      el('span.log-time', it.at.toLocaleTimeString()),
-      el('code.log-sql', inline(it.sql, it.bind)),
-      it.error ? el('div.log-err', friendlyError(it.error)) : null))) : el('p.muted.pad', 'まだ何も実行していません。GUI で行った操作の SQL もここに記録されます。'));
+      // 古い順に下へ積む（ターミナルと同じ向き）。開いたときは最新が見える一番下から
+      this.logList = el('div.log-list', this.log.map((it) => this.logItem(it)));
+      this.jumpBtn = el('button.log-jump', { hidden: true, on: { click: () => this.scrollToBottom() } });
+      this.out.replaceChildren(this.log.length ? this.logList : el('p.muted.pad', 'まだ何も実行していません。GUI で行った操作の SQL もここに記録されます。'),
+        el('div.log-jump-wrap', this.jumpBtn));
+      this.setUnseen(0);
+      this.scrollToBottom();
       return;
     }
+    this.logList = this.jumpBtn = null;
     const r = this.lastResult;
     if (!r) { if (!this.out.querySelector('.console-error')) this.out.replaceChildren(el('p.muted.pad', '結果はここに表示されます。')); return; }
     if (!r.columns.length) { this.out.replaceChildren(el('p.muted.pad', '実行しました。')); return; }
@@ -149,7 +148,47 @@ export class SqlConsole {
     }, { onInfo: (m) => toast(m), onError: (e) => toast(e.message, 'error') });
     g.reload();
   }
+
+  logItem(it) {
+    return el('div.log-item', {
+      class: it.error ? 'err' : '',
+      title: 'クリックで入力欄にコピー',
+      on: { click: () => { this.input.value = inline(it.sql, it.bind); this.input.focus(); } },
+    },
+    el('span.log-src', { gui: 'GUI', console: 'SQL', undo: '元に戻す', redo: 'やり直し' }[it.source] || it.source),
+    el('span.log-time', it.at.toLocaleTimeString()),
+    el('code.log-sql', inline(it.sql, it.bind)),
+    it.error ? el('div.log-err', friendlyError(it.error)) : null);
+  }
+
+  /** 実行履歴の末尾に1件足す。下端にいれば追いかけ、途中を読んでいれば位置を保って新着を知らせる */
+  appendLog(entry, dropFirst) {
+    if (!this.logList?.isConnected) { this.renderOut(); return; }
+    const follow = this.atBottom();
+    if (dropFirst && this.logList.firstChild) {
+      const first = this.logList.firstChild;
+      const h = first.offsetHeight;
+      first.remove();
+      if (!follow) this.out.scrollTop -= h; // 上が消えた分だけ戻して、読んでいる行を動かさない
+    }
+    this.logList.append(this.logItem(entry));
+    if (follow) this.scrollToBottom();
+    else this.setUnseen(this.unseen + 1);
+  }
+
+  atBottom() { const o = this.out; return o.scrollHeight - o.scrollTop - o.clientHeight < 8; }
+
+  scrollToBottom() { this.out.scrollTop = this.out.scrollHeight; this.setUnseen(0); }
+
+  setUnseen(n) {
+    this.unseen = n;
+    if (!this.jumpBtn) return;
+    this.jumpBtn.hidden = !n;
+    this.jumpBtn.textContent = `↓ 新しい記録 ${n} 件`;
+  }
 }
+
+const LOG_LIMIT = 500;
 
 function loadHistory() { try { return JSON.parse(localStorage.getItem('sql-history') || '[]'); } catch { return []; } }
 function saveHistory(h) { try { localStorage.setItem('sql-history', JSON.stringify(h)); } catch { /* 無視 */ } }
