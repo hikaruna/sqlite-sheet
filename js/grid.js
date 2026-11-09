@@ -342,7 +342,8 @@ export class Grid {
   }
 
   clampCursor() {
-    const maxR = Math.max(0, this.totalRows - 1), maxC = Math.max(0, this.cols.length - 1);
+    // 「＋」の行には下書きを開いているときだけカーソルを置ける（キー移動では乗らない）
+    const maxR = Math.max(0, (this.draft ? this.totalRows : this.rowCount) - 1), maxC = Math.max(0, this.cols.length - 1);
     for (const p of [this.cur, this.anchor]) { p.r = Math.min(Math.max(0, p.r), maxR); p.c = Math.min(Math.max(0, p.c), maxC); }
   }
 
@@ -352,8 +353,6 @@ export class Grid {
     this.clampCursor();
     // 下書きの行から別の行へ出たら保存（失敗したら flushDraft がカーソルを戻す）。空の下書きは閉じるだけ
     if (fromNew && this.cur.r !== this.newRowIndex) { if (this.hasDraft) this.flushDraft(); else this.draft = null; }
-    // 「＋ 行を追加」の行へ移ったら下書きの行を開く（クリックでも ↓ でも）
-    if (this.cur.r === this.newRowIndex && this.source.editable) this.openDraft();
     if (!extend) this.anchor = { ...this.cur };
     this.colSelect = false;
     this.ensureVisible();
@@ -413,8 +412,10 @@ export class Grid {
     }
     e.preventDefault();
     if (this.editing) this.commitEdit({ move: null });
-    if (hit.r === this.newRowIndex && (hit.head || !this.draft)) {
-      // 「＋ 行を追加」や新しい行の行番号を押した：下書きの行を開いて先頭の列へ
+    if (hit.r === this.newRowIndex && !this.draft) {
+      // 「＋」を押した：行を作る
+      this.focus(); this.addRow();
+    } else if (hit.r === this.newRowIndex && hit.head) {
       this.moveTo(hit.r, 0); this.focus();
     } else if (hit.head) {
       this.selectRows(e.shiftKey ? this.anchor.r : hit.r, hit.r);
@@ -457,7 +458,32 @@ export class Grid {
     const col = this.cols[c];
     if (!col || col.readonly) return false;
     if (r !== this.newRowIndex && !this.rowAt(r)) return false;
+    if (r === this.newRowIndex && !this.draft) return false; // 「＋」の上：行を作るまでは入力できない
     return true;
+  }
+
+  /** 入力なしでも記録として成り立つ表（必須の列がない）か */
+  get canInsertEmpty() { return this.source.editable && !this.cols.some((c) => c.required); }
+
+  /** 「＋」の操作：入力の要らない表は即 INSERT、それ以外は下書きの行を開く */
+  async addRow() {
+    if (!this.source.editable) return;
+    if (this.editing) await this.commitEdit({ move: null });
+    if (!this.canInsertEmpty) {
+      this.openDraft();
+      this.cur = { r: this.newRowIndex, c: 0 }; this.anchor = { ...this.cur };
+      this.ensureVisible(); this.render(); this.emitSelect();
+      return;
+    }
+    try {
+      await this.source.insert([new Array(this.cols.length).fill(undefined)]);
+      await this.reload();
+      // 自動採番・生成列を飛ばして、最初に入力しそうな列へ
+      let c = this.cols.findIndex((col) => !col.readonly && !col.auto);
+      if (c < 0) c = 0;
+      // 並べ替えがなければ追加した行は末尾（rowid 順）。並べ替え中は末尾に来るとは限らない
+      this.moveTo(this.rowCount - 1, c);
+    } catch (err) { this.hooks.onError?.(err); }
   }
 
   currentValue() {
@@ -470,13 +496,12 @@ export class Grid {
     const { r, c } = this.cur;
     if (!this.canEdit(r, c)) {
       this.sink.value = '';
-      if (this.source.editable) this.hooks.onReadonlyEdit?.(this.cols[c]);
+      // 「＋」の上で打った文字は捨てる（行を作るのはクリックか Enter）
+      if (this.source.editable && !(r === this.newRowIndex && !this.draft)) this.hooks.onReadonlyEdit?.(this.cols[c]);
       return false;
     }
     const v = this.currentValue();
     if (v instanceof Uint8Array) { this.hooks.onBlobEdit?.(r, c); this.sink.value = ''; return false; }
-    // 「＋ 行を追加」の上で打ち始めたら下書きの行を開く
-    if (r === this.newRowIndex && !this.draft) { this.openDraft(); this.render(); this.emitSelect(); }
     this.editing = { mode, r, c, original: v };
     if (initial !== undefined) { /* 入力済みの文字をそのまま使う */ } else this.sink.value = v == null ? '' : String(v);
     this.placeSink();
@@ -539,6 +564,11 @@ export class Grid {
     // 新しい行で Enter → 確定後も次の新しい行へ。Tab など横移動 → 追加された行に留まって続けて入力
     this.afterInsert = move === 'down' ? 'newrow' : 'stay';
     const pending = !unchanged && !emptyNewRow ? this.write([{ r, c, value: text }]) : null;
+    // 最後の行の最後の列で Tab：入力の要らない表なら次の行を作る（Excel のテーブルと同じ）
+    if (move === 'right' && r === this.rowCount - 1 && c === this.cols.length - 1 && this.canInsertEmpty) {
+      if (pending) await pending;
+      return this.addRow();
+    }
     if (move === 'down') this.moveTo(this.cur.r + 1, this.cur.c);
     else if (move === 'right') this.moveTo(this.cur.r, this.cur.c + 1);
     else if (move === 'left') this.moveTo(this.cur.r, this.cur.c - 1);
@@ -724,10 +754,14 @@ export class Grid {
       case 'PageDown': e.preventDefault(); return this.moveTo(r + pageRows, c, ext);
       case 'Home': e.preventDefault(); return mod ? this.moveTo(0, 0, ext) : this.moveTo(r, 0, ext);
       case 'End': e.preventDefault(); return mod ? this.moveTo(this.totalRows - 1, this.cols.length - 1, ext) : this.moveTo(r, this.cols.length - 1, ext);
-      case 'Tab': e.preventDefault(); return this.moveTo(r, c + (e.shiftKey ? -1 : 1));
+      case 'Tab':
+        e.preventDefault();
+        if (!e.shiftKey && r === this.rowCount - 1 && c === this.cols.length - 1 && this.canInsertEmpty) return this.addRow();
+        return this.moveTo(r, c + (e.shiftKey ? -1 : 1));
       case 'Enter':
         e.preventDefault();
         if (e.shiftKey) return this.moveTo(r - 1, c);
+        if (r === this.newRowIndex && !this.draft) return this.addRow();
         return this.beginEdit('edit');
       case 'F2': e.preventDefault(); return this.beginEdit('edit');
       case 'Delete': case 'Backspace': e.preventDefault(); return this.clearSelection();

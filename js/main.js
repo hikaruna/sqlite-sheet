@@ -801,7 +801,7 @@ function updateFx(s) {
   s ??= { r: g.cur.r, c: g.cur.c, row: g.rowAt(g.cur.r), isNew: g.cur.r === g.newRowIndex, col: g.cols[g.cur.c], range: g.range() };
   const col = s.col;
   const draft = s.isNew && g.hasDraft;
-  ref.textContent = col ? (s.isNew ? (g.draft ? `✎ ${draft ? '未保存' : '新しい行'} · ${col.name}` : '＋ 行を追加') : `${s.r + 1} · ${col.name}`) : '';
+  ref.textContent = col ? (s.isNew ? (g.draft ? `✎ ${draft ? '未保存' : '新しい行'} · ${col.name}` : '＋ 行を追加（クリックか Enter）') : `${s.r + 1} · ${col.name}`) : '';
   const v = s.isNew ? (draft ? g.draft.values[s.c] : undefined) : s.row?.values[s.c];
   fx.readOnly = !state.source.editable || col?.readonly || v instanceof Uint8Array;
   fx.classList.toggle('null', v === null);
