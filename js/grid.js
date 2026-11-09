@@ -107,7 +107,8 @@ export class Grid {
     this.header = el('div.grid-header');
     this.body = el('div.grid-body');
     this.sink = el('textarea.grid-sink', { spellcheck: false, autocomplete: 'off', rows: 1, 'aria-label': 'セル入力' });
-    this.inner.append(this.body, this.sink);
+    this.fillHint = el('div.grid-fill-hint');
+    this.inner.append(this.body, this.sink, this.fillHint);
     this.scroll.append(this.header, this.inner);
     this.host.append(this.scroll);
     this.empty = null;
@@ -247,6 +248,9 @@ export class Grid {
     const { r0, r1, c0, c1 } = this.range();
     const frag = document.createDocumentFragment();
     const widths = this.cols.map((_, c) => this.colW(c));
+    // 範囲を選んで入力中：確定すると入る値を、範囲の各セルに薄く見せる
+    const fill = this.fillCells();
+    const fillText = fill ? this.sink.value.replaceAll('\n', ' ⏎ ') : '';
     for (let r = first; r <= last; r++) {
       const isNew = r === this.newRowIndex;
       if (isNew && !this.draft) {
@@ -280,6 +284,11 @@ export class Grid {
           cell.classList.add('loading');
         } else {
           this.fillCell(cell, row.values[c], col, row, r, c);
+        }
+        if (fill && rowSel && c >= c0 && c <= c1 && !col.readonly && (row || draft)) {
+          cell.className = 'gc fill-preview' + (col.align === 'right' ? ' num' : '') + (r === this.cur.r && c === this.cur.c ? ' cur' : '');
+          cell.replaceChildren(fillText);
+          cell.removeAttribute('title');
         }
         if (col.fk && this.source.editable && r === this.cur.r && c === this.cur.c && this.hooks.onFkPick) {
           cell.append(el('button.fk-drop', {
@@ -346,6 +355,14 @@ export class Grid {
     Object.assign(this.sink.style, { left: left + 'px', top: y + 'px', width: w + 'px', height: RH + 'px' });
     if (this.editing) this.sink.style.height = Math.max(RH, Math.min(200, this.sink.scrollHeight)) + 'px';
     this.sink.classList.toggle('editing', !!this.editing);
+    // 範囲を選んで入力中は、入力欄の下に「Ctrl+Enter で N セルに入力」
+    const fill = this.fillCells();
+    this.fillHint.hidden = !fill;
+    if (fill) {
+      const n = fill.cells.length + fill.draftCols.length;
+      this.fillHint.textContent = `${isMacCtrl() ? '⌘' : 'Ctrl'}+Enter で ${n} セルに入力`;
+      Object.assign(this.fillHint.style, { left: left + 'px', top: (y + this.sink.offsetHeight + 4) + 'px' });
+    }
   }
 
   /** 入力欄のフォントで測った、いちばん長い行の幅 */
@@ -521,7 +538,7 @@ export class Grid {
     if (v instanceof Uint8Array) { this.hooks.onBlobEdit?.(r, c); this.sink.value = ''; return false; }
     this.editing = { mode, r, c, original: v };
     if (initial !== undefined) { /* 入力済みの文字をそのまま使う */ } else this.sink.value = v == null ? '' : String(v);
-    this.placeSink();
+    if (this.fillCells()) this.render(); else this.placeSink();
     if (mode === 'edit') { const n = this.sink.value.length; this.sink.setSelectionRange(n, n); }
     this.hooks.onEditState?.(true, this.sink.value);
     return true;
@@ -532,15 +549,61 @@ export class Grid {
       const typed = this.sink.value;
       if (!this.beginEdit('enter', typed)) return;
     }
-    this.placeSink();
+    if (this.fillCells()) this.render(); else this.placeSink();
     this.hooks.onEditState?.(true, this.sink.value);
   }
 
   cancelEdit() {
+    const wasFill = !!this.fillCells();
     this.editing = null;
     this.sink.value = '';
-    this.placeSink();
+    if (wasFill) this.render(); else this.placeSink();
     this.hooks.onEditState?.(false);
+  }
+
+  /** 入力中に範囲を選んでいれば、一括入力の対象 {cells:[{r,c}], draftCols:[c]}。2セル未満なら null */
+  fillCells() {
+    if (!this.editing || !this.source.editable) return null;
+    const { r0, r1, c0, c1 } = this.range();
+    if (r0 === r1 && c0 === c1) return null;
+    const cells = [], draftCols = [];
+    for (let c = c0; c <= c1; c++) {
+      if (this.cols[c]?.readonly) continue;
+      for (let r = r0; r <= r1; r++) {
+        if (r < this.rowCount) cells.push({ r, c });
+        else if (r === this.newRowIndex && this.draft) draftCols.push(c);
+      }
+    }
+    return cells.length + draftCols.length > 1 ? { cells, draftCols } : null;
+  }
+
+  /** 範囲の全セルに入力中の値を入れる。既存の行は1トランザクションの UPDATE、下書きの行は下書きへ */
+  async fillRange() {
+    const target = this.fillCells();
+    if (!target) return;
+    const text = this.sink.value;
+    const keep = { cur: { ...this.cur }, anchor: { ...this.anchor } };
+    const total = target.cells.length + target.draftCols.length;
+    this.editing = null;
+    this.sink.value = '';
+    this.hooks.onEditState?.(false);
+    for (const c of target.draftCols) this.draftSet(c, text);
+    // write は1セルのときだけ失敗したセルへ戻すので、ここでは範囲として扱う（changes は常に2件以上か下書きのみ）
+    const ok = target.cells.length ? await this.write(target.cells.map(({ r, c }) => ({ r, c, value: text }))) : true;
+    this.cur = keep.cur; this.anchor = keep.anchor;
+    if (ok) {
+      this.render(); this.emitSelect();
+      this.hooks.onInfo?.(`${total} セルに入力しました`);
+    } else {
+      // 失敗：何も書かれていない。入力した文字を残して、直してもう一度 Ctrl+Enter できるように
+      this.editing = { mode: 'edit', r: this.cur.r, c: this.cur.c, original: this.currentValue() };
+      this.sink.value = text;
+      this.render();
+      this.sink.classList.add('invalid');
+      setTimeout(() => this.sink.classList.remove('invalid'), 1500);
+      this.hooks.onEditState?.(true, text);
+    }
+    this.focus();
   }
 
   /** 外部（数式バー）からの値設定 */
@@ -555,9 +618,10 @@ export class Grid {
     if (!this.editing) return;
     const { r, c, original, mode } = this.editing;
     const text = this.sink.value;
+    const wasFill = !!this.fillCells();
     this.editing = null;
     this.sink.value = '';
-    this.placeSink();
+    if (wasFill) this.render(); else this.placeSink();
     this.hooks.onEditState?.(false);
     // 変化なしなら書かない。NULL のセルを開いて何も打たずに確定した場合も NULL のまま
     const unchanged = original == null ? (text === '' && mode === 'edit') : String(original) === text;
@@ -731,6 +795,8 @@ export class Grid {
     if (this.editing) {
       const enterMode = this.editing.mode === 'enter';
       if (k === 'Escape') { e.preventDefault(); this.cancelEdit(); return; }
+      // 範囲を選んで入力中の Ctrl+Enter（Mac は ⌘+Enter）：選んだ全部のセルに同じ値を入れる
+      if (k === 'Enter' && mod && !e.altKey && this.fillCells()) { e.preventDefault(); this.fillRange(); return; }
       if (k === 'Enter' && (e.altKey || e.ctrlKey && !isMacCtrl())) {
         e.preventDefault();
         const s = this.sink, p = s.selectionStart;

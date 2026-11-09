@@ -277,6 +277,14 @@ select.input { padding-right: 4px; }
   box-shadow: 0 0 0 2px var(--accent), var(--shadow); border-radius: 2px; overflow: auto;
 }
 .grid-sink.editing.num { text-align: right; font-variant-numeric: tabular-nums; }
+/* 範囲への一括入力：確定すると入る値を下書きの色で薄く見せる */
+.gc.fill-preview { background: var(--accent-soft); color: var(--text-2); box-shadow: inset 0 0 0 1px var(--accent); }
+.grid-fill-hint {
+  position: absolute; z-index: 5; pointer-events: none; white-space: nowrap;
+  padding: 2px 8px; border-radius: 4px; font-size: 11.5px;
+  background: var(--accent); color: #fff; box-shadow: var(--shadow);
+}
+.grid-fill-hint[hidden] { display: none; }
 .grid-sink.invalid { box-shadow: 0 0 0 2px var(--danger), var(--shadow); }
 .grid-empty, .grid-error {
   position: absolute; top: 90px; left: 0; right: 0; text-align: center; color: var(--text-3); pointer-events: none;
