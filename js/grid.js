@@ -1,5 +1,6 @@
 // スプレッドシート風グリッド：仮想スクロール、セル選択、編集、コピー＆ペースト
 import { el, modKey, fmtBytes } from './ui.js';
+import { convertInput } from './sources.js';
 
 const RH = 28;          // 行の高さ
 const HH = 34;          // 見出しの高さ
@@ -325,14 +326,24 @@ export class Grid {
     if (!this.cols.length) return;
     const x = this.colX(c), y = r * RH;
     const cw = this.colW(c);
-    let w = cw;
+    let w = cw, left = x, num = false;
     if (this.editing) {
-      // スプレッドシートと同じく、最初はセルの大きさ。文字が入りきらなくなったら右へ広げ、
-      // 表示エリアの右端まで来たら折り返して下へ伸ばす
-      const maxW = Math.max(cw, this.scroll.scrollLeft + this.scroll.clientWidth - x - 4);
-      w = Math.min(maxW, Math.max(cw, this.textWidth(this.sink.value) + 20));
+      // スプレッドシートと同じく、最初はセルの大きさ。文字が入りきらなくなったら広げる。
+      // 文字列は右へ広げ、表示エリアの右端で折り返す。数値として保存される入力は右寄せで左へ伸ばす
+      const type = this.cols[c]?.type;
+      const conv = type != null && this.sink.value !== '' ? convertInput(this.sink.value, type) : null;
+      num = typeof conv === 'number' || typeof conv === 'bigint';
+      const need = Math.max(cw, this.textWidth(this.sink.value) + 20);
+      if (num) {
+        const maxW = Math.max(cw, x + cw - (this.scroll.scrollLeft + RHW));
+        w = Math.min(maxW, need); left = x + cw - w;
+      } else {
+        const maxW = Math.max(cw, this.scroll.scrollLeft + this.scroll.clientWidth - x - 4);
+        w = Math.min(maxW, need);
+      }
     }
-    Object.assign(this.sink.style, { left: x + 'px', top: y + 'px', width: w + 'px', height: RH + 'px' });
+    this.sink.classList.toggle('num', num);
+    Object.assign(this.sink.style, { left: left + 'px', top: y + 'px', width: w + 'px', height: RH + 'px' });
     if (this.editing) this.sink.style.height = Math.max(RH, Math.min(200, this.sink.scrollHeight)) + 'px';
     this.sink.classList.toggle('editing', !!this.editing);
   }

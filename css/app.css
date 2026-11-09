@@ -276,6 +276,7 @@ select.input { padding-right: 4px; }
   color: var(--text); caret-color: var(--text); background: var(--surface); pointer-events: auto;
   box-shadow: 0 0 0 2px var(--accent), var(--shadow); border-radius: 2px; overflow: auto;
 }
+.grid-sink.editing.num { text-align: right; font-variant-numeric: tabular-nums; }
 .grid-sink.invalid { box-shadow: 0 0 0 2px var(--danger), var(--shadow); }
 .grid-empty, .grid-error {
   position: absolute; top: 90px; left: 0; right: 0; text-align: center; color: var(--text-3); pointer-events: none;
