@@ -137,12 +137,14 @@ export function parseCreateTable(sql) {
 
 /** テーブル定義をモデルとして読み取る */
 export async function readTable(name) {
-  const [{ rows: [[sql]] }, xinfo, fkl, idxl] = await Promise.all([
+  const [{ rows: found }, xinfo, fkl, idxl] = await Promise.all([
     db.query(`SELECT sql FROM sqlite_schema WHERE type='table' AND name=?`, [name]),
     db.query(`SELECT cid,name,type,"notnull",dflt_value,pk,hidden FROM pragma_table_xinfo(?)`, [name]),
     db.query(`SELECT id,seq,"table","from","to",on_update,on_delete FROM pragma_foreign_key_list(?) ORDER BY id,seq`, [name]),
     db.query(`SELECT name,"unique",origin,partial FROM pragma_index_list(?)`, [name]),
   ]);
+  if (!found.length) throw new Error(`テーブル「${name}」がありません`);
+  const sql = found[0][0];
   const parsed = parseCreateTable(sql);
   const columns = xinfo.rows.map(([cid, cname, type, notnull, dflt, pk, hidden]) => {
     const extra = parsed.columns[cname] || {};

@@ -110,14 +110,14 @@ export function confirmDialog({ title, body, okLabel = 'OK', danger = false, cod
   return new Promise((resolve) => {
     const dlg = el('dialog.modal');
     const close = (v) => { dlg.close(); dlg.remove(); resolve(v); };
-    dlg.append(
+    dlg.append(...[
       el('h2', title),
       body ? el('p', body) : null,
       code ? el('pre.code', code) : null,
       el('div.modal-actions',
         el('button.btn', { on: { click: () => close(false) } }, 'キャンセル'),
         el('button.btn', { class: danger ? 'danger' : 'primary', autofocus: true, on: { click: () => close(true) } }, okLabel)),
-    );
+    ].filter(Boolean));
     dlg.addEventListener('cancel', (e) => { e.preventDefault(); close(false); });
     document.body.append(dlg);
     dlg.showModal();
