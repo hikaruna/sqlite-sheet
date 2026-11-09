@@ -114,7 +114,6 @@ export class Grid {
     this.scroll.addEventListener('scroll', () => this.render(), { passive: true });
     new ResizeObserver(() => this.render()).observe(this.scroll);
     this.body.addEventListener('mousedown', (e) => this.onMouseDown(e));
-    this.body.addEventListener('dblclick', (e) => this.onDblClick(e));
     this.body.addEventListener('contextmenu', (e) => this.onContextMenu(e));
     this.sink.addEventListener('keydown', (e) => this.onKey(e));
     this.sink.addEventListener('input', () => this.onSinkInput());
@@ -325,12 +324,24 @@ export class Grid {
     const { r, c } = this.cur;
     if (!this.cols.length) return;
     const x = this.colX(c), y = r * RH;
-    Object.assign(this.sink.style, {
-      left: x + 'px', top: y + 'px',
-      width: (this.editing ? Math.max(this.colW(c), 220) : this.colW(c)) + 'px',
-      height: (this.editing ? Math.max(RH, Math.min(200, this.sink.scrollHeight)) : RH) + 'px',
-    });
+    const cw = this.colW(c);
+    let w = cw;
+    if (this.editing) {
+      // スプレッドシートと同じく、最初はセルの大きさ。文字が入りきらなくなったら右へ広げ、
+      // 表示エリアの右端まで来たら折り返して下へ伸ばす
+      const maxW = Math.max(cw, this.scroll.scrollLeft + this.scroll.clientWidth - x - 4);
+      w = Math.min(maxW, Math.max(cw, this.textWidth(this.sink.value) + 20));
+    }
+    Object.assign(this.sink.style, { left: x + 'px', top: y + 'px', width: w + 'px', height: RH + 'px' });
+    if (this.editing) this.sink.style.height = Math.max(RH, Math.min(200, this.sink.scrollHeight)) + 'px';
     this.sink.classList.toggle('editing', !!this.editing);
+  }
+
+  /** 入力欄のフォントで測った、いちばん長い行の幅 */
+  textWidth(text) {
+    const ctx = (this._measure ??= document.createElement('canvas').getContext('2d'));
+    ctx.font = getComputedStyle(this.sink).font;
+    return Math.max(0, ...String(text).split('\n').map((l) => ctx.measureText(l).width));
   }
 
   // ---------- 選択 ----------
@@ -427,6 +438,8 @@ export class Grid {
       }
       this.moveTo(hit.r, hit.c, e.shiftKey);
       this.focus();
+      // ダブルクリックで編集。1回目のクリックで行が描き直されて dblclick が届かないので、連続クリック数で判定する
+      if (e.detail === 2 && !e.shiftKey) { this.beginEdit('edit'); return; }
       // ドラッグで範囲選択
       const move = (ev) => {
         const target = document.elementFromPoint(ev.clientX, ev.clientY);
@@ -436,13 +449,6 @@ export class Grid {
       const up = () => { removeEventListener('mousemove', move); removeEventListener('mouseup', up); };
       addEventListener('mousemove', move); addEventListener('mouseup', up);
     }
-  }
-
-  onDblClick(e) {
-    const hit = this.cellFromEvent(e);
-    if (!hit || hit.head) return;
-    this.moveTo(hit.r, hit.c);
-    this.beginEdit('edit');
   }
 
   onContextMenu(e) {
