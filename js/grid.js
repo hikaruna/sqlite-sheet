@@ -30,6 +30,7 @@ export class Grid {
     this.cur = { r: 0, c: 0 };
     this.anchor = { r: 0, c: 0 };
     this.editing = null;   // { mode: 'enter'|'edit', r, c, original }
+    this.draft = null;     // 新しい行の下書き { values: [列ごとの文字列|null|undefined(未入力)], errors: {c: msg} }
     this.widths = this.loadWidths();
     this.build();
   }
@@ -37,6 +38,65 @@ export class Grid {
   get cols() { return this.source.columns; }
   get totalRows() { return this.rowCount + (this.source.editable ? 1 : 0); }
   get newRowIndex() { return this.source.editable ? this.rowCount : -1; }
+  get hasDraft() { return !!this.draft && this.draft.values.some((v) => v !== undefined); }
+
+  openDraft() {
+    this.draft ??= { values: new Array(this.cols.length).fill(undefined), errors: {} };
+  }
+
+  draftSet(c, value) {
+    this.openDraft();
+    this.draft.values[c] = value;
+    delete this.draft.errors[c];
+  }
+
+  discardDraft() {
+    if (!this.draft) return;
+    this.draft = null;
+    this.render(); this.emitSelect();
+  }
+
+  /** 下書きの行を1回の INSERT で保存する。成功（または下書きなし）なら true */
+  flushDraft() {
+    if (!this.hasDraft) { this.draft = null; return Promise.resolve(true); }
+    if (this.flushing) return this.flushing;
+    const values = this.draft.values.slice();
+    const draftRow = this.newRowIndex;
+    this.flushing = (async () => {
+      try {
+        await this.source.insert([values]);
+        this.draft = null;
+        const onNew = this.cur.r === draftRow;
+        const editingNew = this.editing && this.editing.r === draftRow;
+        await this.reload();
+        // 新しい行に居続ける操作（最後の列で Tab など）なら、次の下書きの行を開いて続けて入力できるように
+        if (onNew) { this.cur = { r: this.newRowIndex, c: this.cur.c }; this.anchor = { ...this.cur }; this.openDraft(); }
+        if (editingNew) this.editing.r = this.newRowIndex;
+        this.ensureVisible(); this.render(); this.emitSelect();
+        return true;
+      } catch (err) {
+        this.hooks.onError?.(err);
+        this.draft ??= { values, errors: {} };
+        this.draft.errors = this.draftErrors(err.message);
+        const firstErr = Object.keys(this.draft.errors).map(Number)[0];
+        this.cur = { r: this.newRowIndex, c: firstErr ?? Math.min(this.cur.c, this.cols.length - 1) };
+        this.anchor = { ...this.cur };
+        this.ensureVisible(); this.render(); this.emitSelect(); this.focus();
+        return false;
+      } finally { this.flushing = null; }
+    })();
+    return this.flushing;
+  }
+
+  /** INSERT 失敗の原因になった列（分かる範囲で）→ {c: msg} */
+  draftErrors(msg) {
+    const out = {};
+    const m = String(msg).match(/NOT NULL constraint failed: (?:[^.]+\.)?(.+)/);
+    const named = m && this.cols.findIndex((c) => c.name === m[1].trim());
+    if (named != null && named >= 0) { out[named] = '必須です'; return out; }
+    this.cols.forEach((col, c) => { if (col.required && (this.draft?.values[c] ?? null) === null) out[c] = '必須です'; });
+    return out;
+  }
 
   // ---------- 構築 ----------
   build() {
@@ -189,14 +249,22 @@ export class Grid {
     const widths = this.cols.map((_, c) => this.colW(c));
     for (let r = first; r <= last; r++) {
       const isNew = r === this.newRowIndex;
+      if (isNew && !this.draft) {
+        // 下書きを開いていないときは、行番号欄の「＋」だけ（列追加の「＋」と対になる見た目）
+        const here = this.cur.r === r;
+        frag.append(el('div.gr.row-adder', { class: here ? 'cur' : '', style: { top: (r * RH) + 'px', width: RHW + 'px' }, dataset: { r } },
+          el('div.gr-head', { style: { width: RHW + 'px' }, title: '行を追加（最後の行で ↓ でも開きます）' }, '＋')));
+        continue;
+      }
       const row = isNew ? null : this.rowAt(r);
       const rowSel = r >= r0 && r <= r1;
-      const rowEl = el('div.gr', { class: isNew ? 'new' : '', style: { top: (r * RH) + 'px', width: this.totalW() + 'px' }, dataset: { r } });
+      const draft = isNew ? this.draft : null;
+      const rowEl = el('div.gr', { class: isNew ? 'new draft' : '', style: { top: (r * RH) + 'px', width: this.totalW() + 'px' }, dataset: { r } });
       rowEl.append(el('div.gr-head', {
         class: rowSel ? 'hl' : '',
         style: { width: RHW + 'px' },
-        title: isNew ? '新しい行' : '',
-      }, isNew ? '＊' : String(r + 1)));
+        title: isNew ? '新しい行（行を離れると保存・Esc で取り消し）' : '',
+      }, isNew ? '✎' : String(r + 1)));
       for (let c = 0; c < this.cols.length; c++) {
         const cell = el('div.gc', { style: { width: widths[c] + 'px' }, dataset: { c } });
         const col = this.cols[c];
@@ -204,8 +272,10 @@ export class Grid {
         if (col.readonly || !this.source.editable) cell.classList.add('ro');
         if (rowSel && c >= c0 && c <= c1) cell.classList.add('sel');
         if (r === this.cur.r && c === this.cur.c) cell.classList.add('cur');
-        if (isNew) {
-          if (c === 0) cell.append(el('span.placeholder', 'ここに入力して行を追加'));
+        if (draft) {
+          const v = draft.values[c];
+          if (v !== undefined) this.fillCell(cell, v, { ...col, fk: null }, { values: [] }, r, c);
+          if (draft.errors[c]) { cell.classList.add('err'); cell.title = draft.errors[c]; }
         } else if (!row) {
           cell.classList.add('loading');
         } else {
@@ -277,8 +347,13 @@ export class Grid {
   }
 
   moveTo(r, c, extend = false) {
+    const fromNew = this.cur.r === this.newRowIndex;
     this.cur = { r, c };
     this.clampCursor();
+    // 下書きの行から別の行へ出たら保存（失敗したら flushDraft がカーソルを戻す）。空の下書きは閉じるだけ
+    if (fromNew && this.cur.r !== this.newRowIndex) { if (this.hasDraft) this.flushDraft(); else this.draft = null; }
+    // 「＋ 行を追加」の行へ移ったら下書きの行を開く（クリックでも ↓ でも）
+    if (this.cur.r === this.newRowIndex && this.source.editable) this.openDraft();
     if (!extend) this.anchor = { ...this.cur };
     this.colSelect = false;
     this.ensureVisible();
@@ -311,8 +386,9 @@ export class Grid {
 
   emitSelect() {
     const { r, c } = this.cur;
-    const row = r === this.newRowIndex ? null : this.rowAt(r);
-    this.hooks.onSelect?.({ r, c, row, isNew: r === this.newRowIndex, range: this.range(), col: this.cols[c] });
+    const isNew = r === this.newRowIndex;
+    const row = isNew ? (this.hasDraft ? { values: this.draft.values } : null) : this.rowAt(r);
+    this.hooks.onSelect?.({ r, c, row, isNew, draft: isNew && this.hasDraft, range: this.range(), col: this.cols[c] });
   }
 
   cellFromEvent(e) {
@@ -337,8 +413,10 @@ export class Grid {
     }
     e.preventDefault();
     if (this.editing) this.commitEdit({ move: null });
-    if (hit.head) {
-      if (hit.r === this.newRowIndex) { this.moveTo(hit.r, 0); this.focus(); return; }
+    if (hit.r === this.newRowIndex && (hit.head || !this.draft)) {
+      // 「＋ 行を追加」や新しい行の行番号を押した：下書きの行を開いて先頭の列へ
+      this.moveTo(hit.r, 0); this.focus();
+    } else if (hit.head) {
       this.selectRows(e.shiftKey ? this.anchor.r : hit.r, hit.r);
       this.focus();
     } else {
@@ -384,7 +462,7 @@ export class Grid {
 
   currentValue() {
     const { r, c } = this.cur;
-    if (r === this.newRowIndex) return undefined;
+    if (r === this.newRowIndex) return this.draft?.values[c];
     return this.rowAt(r)?.values[c];
   }
 
@@ -397,6 +475,8 @@ export class Grid {
     }
     const v = this.currentValue();
     if (v instanceof Uint8Array) { this.hooks.onBlobEdit?.(r, c); this.sink.value = ''; return false; }
+    // 「＋ 行を追加」の上で打ち始めたら下書きの行を開く
+    if (r === this.newRowIndex && !this.draft) { this.openDraft(); this.render(); this.emitSelect(); }
     this.editing = { mode, r, c, original: v };
     if (initial !== undefined) { /* 入力済みの文字をそのまま使う */ } else this.sink.value = v == null ? '' : String(v);
     this.placeSink();
@@ -425,6 +505,7 @@ export class Grid {
   async setCurrent(text) {
     const { r, c } = this.cur;
     if (!this.canEdit(r, c)) return false;
+    if (r === this.newRowIndex) { this.draftSet(c, text); this.render(); this.emitSelect(); return true; }
     return this.write([{ r, c, value: text }]);
   }
 
@@ -438,7 +519,22 @@ export class Grid {
     this.hooks.onEditState?.(false);
     // 変化なしなら書かない。NULL のセルを開いて何も打たずに確定した場合も NULL のまま
     const unchanged = original == null ? (text === '' && mode === 'edit') : String(original) === text;
-    const emptyNewRow = r === this.newRowIndex && text === '';
+    if (r === this.newRowIndex) {
+      // 新しい行は下書きにためるだけ。Enter/Tab は右へ進み、最後の列で保存して次の新しい行へ
+      if (!unchanged && !(text === '' && original === undefined)) this.draftSet(c, text);
+      if (move === 'down' || move === 'right') {
+        if (c >= this.cols.length - 1) {
+          this.moveTo(r, 0);
+          await this.flushDraft();
+          return;
+        }
+        this.moveTo(r, c + 1);
+      } else if (move === 'left') this.moveTo(r, c - 1);
+      else if (move === 'up') this.moveTo(r - 1, c);
+      else { this.render(); this.emitSelect(); }
+      return;
+    }
+    const emptyNewRow = false;
     // 先に移動してから書き込む（書き込み待ちの間の入力を取りこぼさない）。失敗したら write がセルに戻す
     // 新しい行で Enter → 確定後も次の新しい行へ。Tab など横移動 → 追加された行に留まって続けて入力
     this.afterInsert = move === 'down' ? 'newrow' : 'stay';
@@ -515,6 +611,10 @@ export class Grid {
 
   async clearSelection() {
     const { r0, r1, c0, c1 } = this.range();
+    if (r1 >= this.newRowIndex && this.draft) {
+      for (let c = c0; c <= c1; c++) this.draft.values[c] = undefined;
+      this.render(); this.emitSelect();
+    }
     const changes = [];
     for (let r = r0; r <= Math.min(r1, this.rowCount - 1); r++) {
       for (let c = c0; c <= c1; c++) if (!this.cols[c].readonly) changes.push({ r, c, value: null });
@@ -560,7 +660,15 @@ export class Grid {
         changes.push({ r: r0 + i, c: c0 + j, value: v });
       }
     }
+    // 下書きがあれば、新しい行への貼り付けにまとめて入れる
+    const draft = this.hasDraft && changes.some((ch) => ch.r === this.newRowIndex) ? this.draft : null;
+    if (draft) {
+      draft.values.forEach((v, c) => {
+        if (v !== undefined && !changes.some((ch) => ch.r === this.newRowIndex && ch.c === c)) changes.push({ r: this.newRowIndex, c, value: v });
+      });
+    }
     const ok = await this.write(changes);
+    if (ok && draft) { this.draft = null; this.render(); }
     if (ok) {
       this.anchor = { r: r0, c: c0 };
       this.cur = { r: Math.min(r0 + rows - 1, this.totalRows - 1), c: c0 + cols - 1 };
@@ -623,7 +731,17 @@ export class Grid {
         return this.beginEdit('edit');
       case 'F2': e.preventDefault(); return this.beginEdit('edit');
       case 'Delete': case 'Backspace': e.preventDefault(); return this.clearSelection();
-      case 'Escape': this.anchor = { ...this.cur }; this.render(); return;
+      case 'Escape':
+        if (r === this.newRowIndex && this.draft) {
+          const had = this.hasDraft;
+          this.draft = null;
+          // 下書きを閉じて、最後の行へ戻る（行がなければ「＋ 行を追加」の上に留まる）
+          this.cur = { r: Math.max(0, this.rowCount - 1), c }; this.anchor = { ...this.cur };
+          this.ensureVisible(); this.render(); this.emitSelect();
+          if (had) this.hooks.onInfo?.('新しい行の入力を取り消しました');
+          return;
+        }
+        this.anchor = { ...this.cur }; this.render(); return;
     }
     if (mod && !e.altKey) {
       const lk = k.toLowerCase();

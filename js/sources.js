@@ -113,6 +113,8 @@ export class TableSource {
         type: c.type,
         badges,
         readonly: !!c.generated,
+        // INSERT 時に値が要る列（NOT NULL・既定値なし・自動採番でない）
+        required: !!c.notnull && c.defaultSql == null && !c.generated && model.rowidAlias !== c.name,
         align: a === 'INTEGER' || a === 'REAL' || a === 'NUMERIC' ? 'right' : 'left',
         fk: this.fkByCol.get(c.name) || null,
         sort: sortInfo(view.sorts, c.name),
