@@ -375,6 +375,15 @@ select.input { padding-right: 4px; }
 .log-sql { font: 12px var(--mono); white-space: pre-wrap; word-break: break-word; }
 .log-err { grid-column: 3; color: var(--danger); font-size: 12px; }
 .log-item.err .log-src { background: var(--danger-soft); color: var(--danger); }
+/* 途中を読んでいる間に増えた記録の知らせ。スクロールしても下端に留まる */
+.log-jump-wrap { position: sticky; bottom: 0; height: 0; }
+.log-jump {
+  position: absolute; right: 14px; bottom: 10px; padding: 4px 10px; border-radius: 999px;
+  border: 1px solid var(--line); background: var(--surface); color: var(--text-2);
+  font-size: 12px; cursor: pointer; box-shadow: 0 2px 8px rgb(0 0 0 / .12);
+}
+.log-jump:hover { background: var(--surface-2); color: var(--text); }
+.log-jump[hidden] { display: none; }
 
 /* ---------- 下部バー（シートタブ） ---------- */
 .bottombar {
@@ -480,7 +489,9 @@ body.dropping::after {
   .panel { position: fixed; inset: 48px 0 38px auto; width: min(400px, 100vw); z-index: 20; box-shadow: var(--shadow); }
   .fx-ref { display: none; }
   .tool-btn { padding: 0 6px; }
-  .console-body { grid-template-columns: 1fr; grid-template-rows: 120px 1fr; }
+  /* 縦並び。コンソールが低くても結果・実行履歴の欄が潰れないよう、入力欄は高さの 4 割まで */
+  .console { min-height: 240px; }
+  .console-body { grid-template-columns: 1fr; grid-template-rows: minmax(56px, 40%) minmax(0, 1fr); }
   .console-input { border-right: 0; border-bottom: 1px solid var(--line); }
   .sheet-sql { display: none; }
 }
