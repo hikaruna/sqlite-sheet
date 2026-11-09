@@ -113,6 +113,7 @@ export class TableSource {
         type: c.type,
         badges,
         readonly: !!c.generated,
+        auto: model.rowidAlias === c.name, // 自動採番（rowid の別名）
         // INSERT 時に値が要る列（NOT NULL・既定値なし・自動採番でない）
         required: !!c.notnull && c.defaultSql == null && !c.generated && model.rowidAlias !== c.name,
         align: a === 'INTEGER' || a === 'REAL' || a === 'NUMERIC' ? 'right' : 'left',
