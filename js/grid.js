@@ -29,7 +29,7 @@ export class Grid {
     this.loading = new Map();
     this.rowCount = 0;
     this.cur = { r: 0, c: 0 };
-    this.anchor = { r: 0, c: 0 };
+    this.ext = { r: 0, c: 0 };
     this.editing = null;   // { mode: 'enter'|'edit', r, c, original }
     this.draft = null;     // 新しい行の下書き { values: [列ごとの文字列|null|undefined(未入力)], errors: {c: msg} }
     this.widths = this.loadWidths();
@@ -71,7 +71,7 @@ export class Grid {
         const editingNew = this.editing && this.editing.r === draftRow;
         await this.reload();
         // 新しい行に居続ける操作（最後の列で Tab など）なら、次の下書きの行を開いて続けて入力できるように
-        if (onNew) { this.cur = { r: this.newRowIndex, c: this.cur.c }; this.anchor = { ...this.cur }; this.openDraft(); }
+        if (onNew) { this.cur = { r: this.newRowIndex, c: this.cur.c }; this.ext = { ...this.cur }; this.openDraft(); }
         if (editingNew) this.editing.r = this.newRowIndex;
         this.ensureVisible(); this.render(); this.emitSelect();
         return true;
@@ -81,7 +81,7 @@ export class Grid {
         this.draft.errors = this.draftErrors(err.message);
         const firstErr = Object.keys(this.draft.errors).map(Number)[0];
         this.cur = { r: this.newRowIndex, c: firstErr ?? Math.min(this.cur.c, this.cols.length - 1) };
-        this.anchor = { ...this.cur };
+        this.ext = { ...this.cur };
         this.ensureVisible(); this.render(); this.emitSelect(); this.focus();
         return false;
       } finally { this.flushing = null; }
@@ -133,7 +133,7 @@ export class Grid {
     this.pages.clear();
     this.loading.clear();
     this.rowCount = count;
-    if (!keepSelection) { this.cur = { r: 0, c: 0 }; this.anchor = { ...this.cur }; }
+    if (!keepSelection) { this.cur = { r: 0, c: 0 }; this.ext = { ...this.cur }; }
     this.clampCursor();
     this.inner.style.height = (this.totalRows * RH) + 'px';
     this.renderHeader();
@@ -170,9 +170,9 @@ export class Grid {
           mousedown: (e) => {
             if (e.button !== 0 || e.target.closest('.gh-btn, .gh-resize')) return;
             e.preventDefault();
-            if (e.shiftKey) { this.cur = { r: this.cur.r, c }; } else { this.anchor = { r: 0, c }; this.cur = { r: Math.max(0, this.rowCount - 1), c }; }
-            this.anchor = { r: 0, c: e.shiftKey ? this.anchor.c : c };
-            this.cur = { r: Math.max(0, this.rowCount - 1), c };
+            // カーソルは列の先頭（Shift なら始めの列のまま）、範囲は最後の行まで
+            this.cur = { r: 0, c: e.shiftKey ? this.cur.c : c };
+            this.ext = { r: Math.max(0, this.rowCount - 1), c };
             this.colSelect = true;
             this.render(); this.emitSelect(); this.focus();
           },
@@ -359,44 +359,50 @@ export class Grid {
   // ---------- 選択 ----------
   range() {
     return {
-      r0: Math.min(this.anchor.r, this.cur.r), r1: Math.max(this.anchor.r, this.cur.r),
-      c0: Math.min(this.anchor.c, this.cur.c), c1: Math.max(this.anchor.c, this.cur.c),
+      r0: Math.min(this.ext.r, this.cur.r), r1: Math.max(this.ext.r, this.cur.r),
+      c0: Math.min(this.ext.c, this.cur.c), c1: Math.max(this.ext.c, this.cur.c),
     };
   }
 
   clampCursor() {
     // 「＋」の行には下書きを開いているときだけカーソルを置ける（キー移動では乗らない）
     const maxR = Math.max(0, (this.draft ? this.totalRows : this.rowCount) - 1), maxC = Math.max(0, this.cols.length - 1);
-    for (const p of [this.cur, this.anchor]) { p.r = Math.min(Math.max(0, p.r), maxR); p.c = Math.min(Math.max(0, p.c), maxC); }
+    for (const p of [this.cur, this.ext]) { p.r = Math.min(Math.max(0, p.r), maxR); p.c = Math.min(Math.max(0, p.c), maxC); }
   }
 
+  /** extend なら範囲の端（ext）だけを動かし、カーソル（cur）は選択を始めたセルに留める（スプレッドシートと同じ） */
   moveTo(r, c, extend = false) {
-    const fromNew = this.cur.r === this.newRowIndex;
-    this.cur = { r, c };
-    this.clampCursor();
-    // 下書きの行から別の行へ出たら保存（失敗したら flushDraft がカーソルを戻す）。空の下書きは閉じるだけ
-    if (fromNew && this.cur.r !== this.newRowIndex) { if (this.hasDraft) this.flushDraft(); else this.draft = null; }
-    if (!extend) this.anchor = { ...this.cur };
+    if (extend) {
+      this.ext = { r, c };
+      this.clampCursor();
+    } else {
+      const fromNew = this.cur.r === this.newRowIndex;
+      this.cur = { r, c };
+      this.clampCursor();
+      // 下書きの行から別の行へ出たら保存（失敗したら flushDraft がカーソルを戻す）。空の下書きは閉じるだけ
+      if (fromNew && this.cur.r !== this.newRowIndex) { if (this.hasDraft) this.flushDraft(); else this.draft = null; }
+      this.ext = { ...this.cur };
+    }
     this.colSelect = false;
-    this.ensureVisible();
+    this.ensureVisible(extend ? this.ext : this.cur);
     this.render();
     this.emitSelect();
   }
 
   selectAll() {
-    this.anchor = { r: 0, c: 0 };
-    this.cur = { r: Math.max(0, this.rowCount - 1), c: this.cols.length - 1 };
+    this.cur = { r: 0, c: 0 };
+    this.ext = { r: Math.max(0, this.rowCount - 1), c: this.cols.length - 1 };
     this.render(); this.emitSelect(); this.focus();
   }
 
   selectRows(r0, r1) {
-    this.anchor = { r: r0, c: 0 };
-    this.cur = { r: r1, c: this.cols.length - 1 };
+    this.cur = { r: r0, c: 0 };
+    this.ext = { r: r1, c: this.cols.length - 1 };
     this.render(); this.emitSelect();
   }
 
-  ensureVisible() {
-    const { r, c } = this.cur;
+  ensureVisible(target = this.cur) {
+    const { r, c } = target;
     const s = this.scroll;
     const top = r * RH, bottom = top + RH + HH;
     if (top < s.scrollTop) s.scrollTop = top;
@@ -441,7 +447,7 @@ export class Grid {
     } else if (hit.r === this.newRowIndex && hit.head) {
       this.moveTo(hit.r, 0); this.focus();
     } else if (hit.head) {
-      this.selectRows(e.shiftKey ? this.anchor.r : hit.r, hit.r);
+      this.selectRows(e.shiftKey ? this.cur.r : hit.r, hit.r);
       this.focus();
     } else {
       if (modKey(e) && this.hooks.onCellCtrlClick) {
@@ -456,7 +462,7 @@ export class Grid {
       const move = (ev) => {
         const target = document.elementFromPoint(ev.clientX, ev.clientY);
         const h = target && this.body.contains(target) ? this.cellFromEvent({ target }) : null;
-        if (h && !h.head && (h.r !== this.cur.r || h.c !== this.cur.c)) this.moveTo(h.r, h.c, true);
+        if (h && !h.head && (h.r !== this.ext.r || h.c !== this.ext.c)) this.moveTo(h.r, h.c, true);
       };
       const up = () => { removeEventListener('mousemove', move); removeEventListener('mouseup', up); };
       addEventListener('mousemove', move); addEventListener('mouseup', up);
@@ -499,7 +505,7 @@ export class Grid {
     if (this.editing) await this.commitEdit({ move: null });
     if (!this.canInsertEmpty) {
       this.openDraft();
-      this.cur = { r: this.newRowIndex, c: 0 }; this.anchor = { ...this.cur };
+      this.cur = { r: this.newRowIndex, c: 0 }; this.ext = { ...this.cur };
       this.ensureVisible(); this.render(); this.emitSelect();
       return;
     }
@@ -635,13 +641,13 @@ export class Grid {
         this.afterInsert = null;
         await this.source.insert([...inserts.keys()].sort((a, b) => a - b).map((k) => inserts.get(k)));
         const keep = { ...this.cur };
-        const keepAnchor = { ...this.anchor };
+        const keepExt = { ...this.ext };
         await this.reload();
         if (keep.r >= oldCount && changes.length === 1) {
           // 1セル入力で行を追加した場合
           keep.r = intent === 'newrow' ? this.newRowIndex : oldCount;
-          this.cur = keep; this.anchor = { ...keep };
-        } else { this.cur = keep; this.anchor = keepAnchor; }
+          this.cur = keep; this.ext = { ...keep };
+        } else { this.cur = keep; this.ext = keepExt; }
         // 追加を待つ間に次の新しい行へ打ち始めていたら、その編集も新しい行へ付け替える
         if (this.editing && this.editing.r >= oldCount) this.editing.r = this.newRowIndex;
         this.ensureVisible();
@@ -653,7 +659,7 @@ export class Grid {
       // 失敗した値を残して再編集できるように
       if (changes.length === 1) {
         const ch = changes[0];
-        this.cur = { r: ch.r, c: ch.c }; this.anchor = { ...this.cur };
+        this.cur = { r: ch.r, c: ch.c }; this.ext = { ...this.cur };
         this.render(); this.emitSelect();
         if (ch.value !== null) {
           this.sink.value = ch.value;
@@ -730,8 +736,8 @@ export class Grid {
     const ok = await this.write(changes);
     if (ok && draft) { this.draft = null; this.render(); }
     if (ok) {
-      this.anchor = { r: r0, c: c0 };
-      this.cur = { r: Math.min(r0 + rows - 1, this.totalRows - 1), c: c0 + cols - 1 };
+      this.cur = { r: r0, c: c0 };
+      this.ext = { r: Math.min(r0 + rows - 1, this.totalRows - 1), c: c0 + cols - 1 };
       this.render(); this.emitSelect();
       if (changes.length > 1) this.hooks.onInfo?.(`${changes.length} セルを貼り付けました`);
     }
@@ -759,8 +765,9 @@ export class Grid {
       if (k === 'F2') { e.preventDefault(); this.editing.mode = this.editing.mode === 'enter' ? 'edit' : 'enter'; return; }
       return;
     }
-    const { r, c } = this.cur;
     const ext = e.shiftKey;
+    // Shift で範囲を伸ばすときは、範囲の端から動かす（カーソルは始めたセルのまま）
+    const { r, c } = ext ? this.ext : this.cur;
     const jump = (dr, dc) => {
       if (mod) {
         if (dr) return this.moveTo(dr < 0 ? 0 : Math.max(0, this.rowCount - 1), c, ext);
@@ -787,10 +794,10 @@ export class Grid {
       case 'Tab':
         e.preventDefault();
         if (!e.shiftKey && r === this.rowCount - 1 && c === this.cols.length - 1 && this.canInsertEmpty) return this.addRow();
-        return this.moveTo(r, c + (e.shiftKey ? -1 : 1));
+        return this.moveTo(this.cur.r, this.cur.c + (e.shiftKey ? -1 : 1));
       case 'Enter':
         e.preventDefault();
-        if (e.shiftKey) return this.moveTo(r - 1, c);
+        if (e.shiftKey) return this.moveTo(this.cur.r - 1, this.cur.c);
         if (r === this.newRowIndex && !this.draft) return this.addRow();
         return this.beginEdit('edit');
       case 'F2': e.preventDefault(); return this.beginEdit('edit');
@@ -800,12 +807,12 @@ export class Grid {
           const had = this.hasDraft;
           this.draft = null;
           // 下書きを閉じて、最後の行へ戻る（行がなければ「＋ 行を追加」の上に留まる）
-          this.cur = { r: Math.max(0, this.rowCount - 1), c }; this.anchor = { ...this.cur };
+          this.cur = { r: Math.max(0, this.rowCount - 1), c }; this.ext = { ...this.cur };
           this.ensureVisible(); this.render(); this.emitSelect();
           if (had) this.hooks.onInfo?.('新しい行の入力を取り消しました');
           return;
         }
-        this.anchor = { ...this.cur }; this.render(); return;
+        this.ext = { ...this.cur }; this.render(); return;
     }
     if (mod && !e.altKey) {
       const lk = k.toLowerCase();

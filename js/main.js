@@ -1119,7 +1119,7 @@ async function selectProtection(p) {
     if (!hits.length) { toast('保護された行が見つかりません（絞り込みで隠れているかもしれません）'); return; }
     r0 = Math.min(...hits); r1 = Math.max(...hits);
   }
-  g.anchor = { r: r0, c: c0 }; g.cur = { r: r1, c: c1 };
+  g.cur = { r: r0, c: c0 }; g.ext = { r: r1, c: c1 };
   g.ensureVisible(); g.render(); g.emitSelect(); g.focus();
 }
 
