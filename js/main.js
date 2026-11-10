@@ -1,7 +1,7 @@
 // アプリ本体：DB・シートの管理、画面の組み立て
 import { db, q } from './db-client.js';
 import { el, toast, menu, popover, closePopover, ask, confirmDialog, pickFile, download, modKey, isMac } from './ui.js';
-import { listObjects, readTable, createTableSql, APP_PREFIX, TYPES, affinity } from './schema.js';
+import { listObjects, readTable, createTableSql, migrationSql, constantDefault, APP_PREFIX, TYPES, affinity } from './schema.js';
 import { Grid } from './grid.js';
 import { TableSource, QuerySource, FILTER_OPS, friendlyError, convertInput, formText, formToDefault } from './sources.js';
 import { DesignPanel } from './design-panel.js';
@@ -942,7 +942,25 @@ function quickAddColumn(anchor) {
     if (d != null) def += ` DEFAULT ${d}`;
     if (fkSel.value) def += ` REFERENCES ${q(fkSel.value)}`;
     try {
-      await db.exec(`ALTER TABLE ${q(m.name)} ADD COLUMN ${def}`);
+      if (constantDefault(d)) await db.exec(`ALTER TABLE ${q(m.name)} ADD COLUMN ${def}`);
+      else {
+        // 式や CURRENT_* の既定値は ALTER TABLE ADD COLUMN で使えないので、データを保ったまま表を作り直す
+        const next = JSON.parse(JSON.stringify(m));
+        next.columns = next.columns.map((c) => ({ ...c, from: c.name }));
+        next.columns.push({ name: n, type: type.value, notnull: nn.checked, defaultSql: d, check: null, collate: null, generated: null, from: null });
+        if (fkSel.value) next.fks.push({ cols: [n], table: fkSel.value, refCols: [], onDelete: 'NO ACTION', onUpdate: 'NO ACTION' });
+        const stmts = migrationSql(m, next);
+        // 単純な列の追加だと思っているはずなので、作り直すことと実行する SQL を見せてから
+        const ok = await confirmDialog({
+          title: '列を追加するために、テーブルを作り直しますか？',
+          body: '既定値が式や CURRENT_TIMESTAMP などの列は ALTER TABLE で追加できないため、新しい定義でテーブルを作り直し、データをコピーします。外部キー違反があれば元に戻します。',
+          code: stmts.join(';\n') + ';',
+          okLabel: '作り直して追加',
+        });
+        if (!ok) return;
+        await db.rebuild(stmts.map((sql) => ({ sql })));
+        undo.clear();
+      }
       closePopover();
       await reloadSheet();
       state.grid?.moveTo(state.grid.cur.r, state.model.columns.length - 1);

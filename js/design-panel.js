@@ -1,7 +1,7 @@
 // 右側の設計パネル：テーブルの列・キー・制約・インデックスを編集する
 import { db, q } from './db-client.js';
 import { el, confirmDialog, toast, menu } from './ui.js';
-import { TYPES, FK_ACTIONS, createTableSql, migrationSql, columnDef, readTable } from './schema.js';
+import { TYPES, FK_ACTIONS, createTableSql, migrationSql, columnDef, readTable, constantDefault } from './schema.js';
 import { friendlyError, defaultToForm, formToDefault } from './sources.js';
 
 const clone = (o) => JSON.parse(JSON.stringify(o));
@@ -328,6 +328,7 @@ export class DesignPanel {
     const appendedOk = appended.every((c) => !d.pk.includes(c.name) && !d.uniques.some((u) => u.includes(c.name))
       && !(c.notnull && (c.defaultSql == null || /^null$/i.test(c.defaultSql)) && !c.generated)
       && !(c.generated?.stored)
+      && constantDefault(c.defaultSql) // 式や CURRENT_* の既定値は ALTER TABLE ADD COLUMN では足せない
       && !(appendedFks.some((f) => f.cols[0] === c.name) && c.defaultSql != null && !/^null$/i.test(c.defaultSql)));
     const multiFkOnAppended = d.fks.some((f) => f.cols.length > 1 && f.cols.some((n) => appended.some((a) => a.name === n)));
     const simple = orderSame && appendedOk && !multiFkOnAppended && norm(dBack, kept) === norm(o, o.columns);

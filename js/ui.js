@@ -60,11 +60,13 @@ export function popover(anchor, content, { onClose, className = '', align = 'sta
   return node;
 }
 
+// ポップオーバーの上で開いた確認ダイアログを操作しても、ポップオーバー（と入力中の内容）は閉じない
+const modalOpen = () => !!document.querySelector('dialog.modal[open]');
 addEventListener('mousedown', (e) => {
-  if (current && !current.node.contains(e.target)) closePopover();
+  if (current && !current.node.contains(e.target) && !e.target.closest?.('dialog.modal')) closePopover();
 }, true);
 addEventListener('keydown', (e) => {
-  if (e.key === 'Escape' && current) { e.stopPropagation(); e.preventDefault(); closePopover(); }
+  if (e.key === 'Escape' && current && !modalOpen()) { e.stopPropagation(); e.preventDefault(); closePopover(); }
 }, true);
 
 /** メニュー。items: [{label, icon, kbd, danger, disabled, action}] または '-' */

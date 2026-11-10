@@ -286,6 +286,15 @@ function renameIdents(sql, renames, oldTable, newTable) {
   return out + sql.slice(pos);
 }
 
+/**
+ * 既定値が定数か（数値・文字列・NULL・TRUE/FALSE・BLOB）。
+ * ALTER TABLE ADD COLUMN では、式や CURRENT_* の既定値は使えない（表を作り直す必要がある）
+ */
+export function constantDefault(d) {
+  if (d == null || d === '') return true;
+  return /^[-+]?[\d.]+$|^'.*'$|^NULL$|^TRUE$|^FALSE$|^X'[0-9a-f]*'$/is.test(d.trim());
+}
+
 /** テーブル名変更・ビューの作成などで使う、型名の簡易分類 */
 export function affinity(type) {
   const t = (type || '').toUpperCase();
