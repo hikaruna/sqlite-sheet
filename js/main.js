@@ -3,7 +3,7 @@ import { db, q } from './db-client.js';
 import { el, toast, menu, popover, closePopover, ask, confirmDialog, pickFile, download, modKey, isMac } from './ui.js';
 import { listObjects, readTable, createTableSql, APP_PREFIX, TYPES, affinity } from './schema.js';
 import { Grid } from './grid.js';
-import { TableSource, QuerySource, FILTER_OPS, friendlyError, convertInput } from './sources.js';
+import { TableSource, QuerySource, FILTER_OPS, friendlyError, convertInput, formText, formToDefault } from './sources.js';
 import { DesignPanel } from './design-panel.js';
 import { SqlConsole } from './console.js';
 import { undo } from './undo.js';
@@ -784,7 +784,7 @@ function gridHooks(kind) {
     onSelect: (s) => updateFx(s),
     onEditState: (editing, text) => {
       const fx = $('fx-input');
-      if (editing) { fx.value = text; fx.classList.remove('null'); } else updateFx();
+      if (editing) { fx.value = text; fx.placeholder = state.grid.sink.placeholder; } else updateFx();
     },
     onError: (e) => toast(friendlyError(e.message), 'error'),
     onInfo: (m) => toast(m),
@@ -815,11 +815,12 @@ function updateFx(s) {
   const col = s.col;
   const draft = s.isNew && g.hasDraft;
   ref.textContent = col ? (s.isNew ? (g.draft ? `✎ ${draft ? '未保存' : '新しい行'} · ${col.name}` : '＋ 行を追加（クリックか Enter）') : `${s.r + 1} · ${col.name}`) : '';
-  const v = s.isNew ? (draft ? g.draft.values[s.c] : undefined) : s.row?.values[s.c];
+  const v = s.isNew ? (g.draft ? g.draft.values[s.c] : undefined) : s.row?.values[s.c];
   fx.readOnly = !state.source.editable || col?.readonly || v instanceof Uint8Array;
-  fx.classList.toggle('null', v === null);
-  fx.value = v == null ? '' : v instanceof Uint8Array ? `BLOB（${v.length} バイト）` : String(v);
-  fx.placeholder = v === null ? 'NULL' : s.isNew ? '新しい行に入力' : '';
+  fx.classList.toggle('null', false);
+  // グリッドでフォームを開いたときと同じ文字列（下書きの未入力は空で、INSERT で入るものを placeholder に）
+  fx.value = v instanceof Uint8Array ? `BLOB（${v.length} バイト）` : !col ? '' : s.isNew ? (g.draft ? g.formAt(s.r, s.c) : '') : s.row ? formText(v) : '';
+  fx.placeholder = s.isNew && g.draft && v === undefined ? g.placeholderFor(s.c) : '';
   updateStatus(s.range);
 }
 
@@ -927,7 +928,7 @@ function quickAddColumn(anchor) {
   const name = el('input.input', { placeholder: '列名', autofocus: true, value: uniqueName('列', m.columns.map((c) => c.name)) });
   const type = el('select.input', TYPES.map((t) => el('option', { value: t, selected: t === 'TEXT' }, t)));
   const nn = el('input', { type: 'checkbox' });
-  const dflt = el('input.input.mono', { placeholder: "既定値（任意）例: 0 / 'なし'" });
+  const dflt = el('input.input.mono', { placeholder: '既定値（任意）例: 0 / 文字列 / =CURRENT_TIMESTAMP' });
   const fkSel = el('select.input', el('option', { value: '' }, '外部キーなし'), tableNames().map((t) => el('option', { value: t }, `→ ${t}`)));
   const err = el('div.field-error');
   const submit = async () => {
@@ -936,8 +937,9 @@ function quickAddColumn(anchor) {
     if (m.columns.some((c) => c.name === n)) { err.textContent = `「${n}」は既にあります`; return; }
     let def = `${q(n)} ${type.value}`;
     if (nn.checked) def += ' NOT NULL';
-    const d = dflt.value.trim();
-    if (d) def += ` DEFAULT ${/^[-+]?[\d.]+$|^'.*'$|^NULL$/i.test(d) ? d : /^\(.*\)$/.test(d) ? d : `'${d.replaceAll("'", "''")}'`}`;
+    // セルのフォームと同じ書き方：普通の文字は値、= で始まれば式、空は既定値なし
+    const d = formToDefault(dflt.value, type.value);
+    if (d != null) def += ` DEFAULT ${d}`;
     if (fkSel.value) def += ` REFERENCES ${q(fkSel.value)}`;
     try {
       await db.exec(`ALTER TABLE ${q(m.name)} ADD COLUMN ${def}`);
@@ -985,7 +987,7 @@ function fkPicker(r, c, anchor) {
   const choose = async (v) => {
     closePopover();
     const g = state.grid;
-    if (r === g.newRowIndex) { g.draftSet(c, v == null ? null : String(v)); g.render(); g.emitSelect(); }
+    if (r === g.newRowIndex) { g.draftSet(c, formText(v)); g.render(); g.emitSelect(); }
     else await g.write([{ r, c, value: v == null ? null : String(v) }]);
     state.grid.focus();
   };

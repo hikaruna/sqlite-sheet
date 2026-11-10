@@ -2,7 +2,7 @@
 import { db, q } from './db-client.js';
 import { el, confirmDialog, toast, menu } from './ui.js';
 import { TYPES, FK_ACTIONS, createTableSql, migrationSql, columnDef, readTable } from './schema.js';
-import { friendlyError } from './sources.js';
+import { friendlyError, defaultToForm, formToDefault } from './sources.js';
 
 const clone = (o) => JSON.parse(JSON.stringify(o));
 const COLLATES = ['', 'BINARY', 'NOCASE', 'RTRIM'];
@@ -94,7 +94,7 @@ export class DesignPanel {
       const open = this.expanded.has(c.from ?? c._id);
       const isPk = d.pk.includes(c.name);
       const typeSel = el('select.input.type-sel', {
-        on: { change: (e) => { c.type = e.target.value; this.changed(); } },
+        on: { change: (e) => { c.type = e.target.value; if (c.dfltForm !== undefined) c.defaultSql = formToDefault(c.dfltForm, c.type); this.changed(); } },
       }, [...new Set([...(d.strict ? strictTypes : ['', ...strictTypes, 'NUMERIC']), ...(c.type ? [c.type] : [])])]
         .map((t) => el('option', { value: t, selected: (c.type || '') === t }, t || '（型なし）')));
       const row = el('div.dp-col', { class: open ? 'open' : '', dataset: { col: c.from ?? '' } },
@@ -128,10 +128,11 @@ export class DesignPanel {
             },
           }, '⋯')),
         open ? el('div.dp-col-detail',
+          // セルのフォームと同じ書き方。触っていなければ元の DEFAULT 句をそのまま保つ
           field('既定値（DEFAULT）', el('input.input.mono', {
-            value: c.defaultSql ?? '', placeholder: "例: 0 / 'なし' / CURRENT_TIMESTAMP", spellcheck: false, disabled: !!c.generated,
-            on: { input: (e) => { c.defaultSql = e.target.value || null; this.changed(); } },
-          }), '文字列は \'…\' で囲みます。式も書けます'),
+            value: c.dfltForm ?? defaultToForm(c.defaultSql), placeholder: '例: 0 / 文字列 / =CURRENT_TIMESTAMP', spellcheck: false, disabled: !!c.generated,
+            on: { input: (e) => { c.dfltForm = e.target.value; c.defaultSql = formToDefault(c.dfltForm, c.type); this.changed(); } },
+          }), '普通に書けば値、= で始めると式（=CURRENT_TIMESTAMP、=\'\' など）。空なら既定値なし'),
           field('CHECK 制約', el('input.input.mono', {
             value: c.check ?? '', placeholder: `例: ${q(c.name)} > 0`, spellcheck: false,
             on: { input: (e) => { c.check = e.target.value || null; this.changed(); } },

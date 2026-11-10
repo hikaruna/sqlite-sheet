@@ -61,13 +61,29 @@ function run(sql, bind) {
   return { columns, rows, changes: d.changes(), lastId: Number(sqlite3.capi.sqlite3_last_insert_rowid(d.pointer)) };
 }
 
+// セルに入れる式（SELECT (式) …）を、実行せずに用意だけして確かめる。
+// 1文だけ・読み取り専用・列が1つなら、式は自分の ( ) の中に収まっていて、UPDATE や INSERT に埋め込んでも外へ漏れない
+function checkExpr(sql) {
+  const st = need().prepare(sql);
+  try {
+    // prepare は最初の文だけを用意して残りを捨てるので、余りがあればエラーにする
+    if (sqlite3.capi.sqlite3_sql(st.pointer).trim() !== sql.trim()) throw new Error('式は1つだけ書けます');
+    if (!sqlite3.capi.sqlite3_stmt_readonly(st.pointer)) throw new Error('式で DB を変更することはできません');
+    if (sqlite3.capi.sqlite3_column_count(st.pointer) !== 1) throw new Error('式は1つだけ書けます');
+  } finally { st.finalize(); }
+}
+
 // 文の配列を1トランザクション（SAVEPOINT）で実行。失敗したら全部戻す
 function batch(stmts) {
   const d = need();
   const results = [];
   d.exec('SAVEPOINT sheet_batch');
   try {
-    for (const s of stmts) results.push(run(s.sql, s.bind));
+    for (const s of stmts) {
+      // 式を埋め込んだ文は、先に式だけを確かめてから実行する
+      for (const e of s.checks ?? []) checkExpr(e);
+      results.push(run(s.sql, s.bind));
+    }
     d.exec('RELEASE sheet_batch');
   } catch (e) {
     d.exec('ROLLBACK TO sheet_batch; RELEASE sheet_batch');

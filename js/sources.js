@@ -1,5 +1,5 @@
 // グリッドのデータ元：テーブル（編集可）と、ビュー/クエリ（読み取り専用）
-import { db, q, inline } from './db-client.js';
+import { db, q, inline, lit } from './db-client.js';
 import { affinity } from './schema.js';
 import { undo } from './undo.js';
 
@@ -34,6 +34,64 @@ export function convertInput(value, type) {
   return value;
 }
 
+// ---------- フォーム（入力中の文字列）と DBの値 ----------
+// 普通の文字は値、= で始まれば SQL の式、'= で始まれば先頭の ' を外した文字列
+
+/** フォームの文字列を { expr }（式）か { value }（値）に分ける */
+export function parseInput(text, type) {
+  if (typeof text !== 'string') return { value: convertInput(text, type) };
+  if (text.startsWith('=')) return { expr: text.slice(1) };
+  if (/^'+=/.test(text)) return { value: text.slice(1) };
+  return { value: convertInput(text, type) };
+}
+
+/** DBの値を、フォームを開いたときの文字列に */
+export function formText(v) {
+  if (v === null || v === undefined) return '=NULL';
+  const s = String(v);
+  return /^'*=/.test(s) ? "'" + s : s;
+}
+
+/** フォームの値の印（DBの値と区別するため、書き込みではこの形で渡す） */
+export const form = (text) => ({ form: text });
+const isForm = (v) => v !== null && typeof v === 'object' && !(v instanceof Uint8Array) && 'form' in v;
+
+/** 外側の括弧が式全体を囲んでいるか（"(a) + (b)" は囲んでいない） */
+function wrapsAll(d) {
+  if (!d.startsWith('(') || !d.endsWith(')')) return false;
+  let depth = 0, quote = null;
+  for (let i = 0; i < d.length; i++) {
+    const ch = d[i];
+    if (quote) { if (ch === quote) quote = null; continue; }
+    if (ch === "'" || ch === '"') { quote = ch; continue; }
+    if (ch === '(') depth++;
+    else if (ch === ')' && --depth === 0 && i < d.length - 1) return false;
+  }
+  return true;
+}
+
+/** 列の既定値（DEFAULT 句）を、既定値のフォームの文字列に。既定値なしは空 */
+export function defaultToForm(sql) {
+  if (sql == null || sql === '') return '';
+  const d = sql.trim();
+  if (/^[-+]?(\d+\.?\d*|\.\d+)(e[-+]?\d+)?$/i.test(d)) return d;
+  const m = d.match(/^'((?:[^']|'')*)'$/s);
+  if (m) {
+    const v = m[1].replaceAll("''", "'");
+    return v === '' ? "=''" : formText(v);
+  }
+  return '=' + (wrapsAll(d) ? d.slice(1, -1).trim() : d);
+}
+
+/** 既定値のフォームの文字列を、DEFAULT 句に書ける形に。空は既定値なし（null） */
+export function formToDefault(text, type) {
+  if (text === '') return null;
+  const p = parseInput(text, type);
+  if (!('expr' in p)) return lit(p.value);
+  const e = p.expr.trim();
+  return /^(NULL|TRUE|FALSE|CURRENT_(TIME|DATE|TIMESTAMP)|[-+]?(\d+\.?\d*|\.\d+)(e[-+]?\d+)?|'(?:[^']|'')*'|X'[0-9a-f]*')$/is.test(e) || wrapsAll(e) ? e : `(${e})`;
+}
+
 /** SQLite のエラーを日本語に */
 export function friendlyError(msg) {
   const m = String(msg);
@@ -47,6 +105,20 @@ export function friendlyError(msg) {
   if ((r = m.match(/no such column: (.+)/))) return `列 ${r[1]} がありません`;
   if ((r = m.match(/near "(.+?)": syntax error/))) return `SQL の構文エラー（"${r[1]}" 付近）`;
   return m;
+}
+
+/** 式を計算したときのエラーを、ユーザーが書いた式に合わせた言葉に */
+function exprError(msg, newRow) {
+  const m = String(msg);
+  let r;
+  if (/incomplete input/.test(m)) return '式が途中で終わっています（括弧や引用符が閉じているか確かめてください）';
+  if ((r = m.match(/near "(.+?)": syntax error/))) {
+    // ) や FROM はアプリが式のあとに足したもの。そこで止まるのは、式の書き方そのものの誤り
+    return r[1] === ')' || /^from$/i.test(r[1]) ? '式の書き方が正しくありません' : `"${r[1]}" 付近の書き方が正しくありません`;
+  }
+  if ((r = m.match(/no such column: (.+)/))) return newRow ? `新しい行の式では列（${r[1]}）を使えません` : `列 ${r[1]} がありません`;
+  if ((r = m.match(/no such function: (.+)/))) return `関数 ${r[1]} はありません`;
+  return friendlyError(m);
 }
 
 function whereClause(filters, colExpr) {
@@ -113,6 +185,8 @@ export class TableSource {
         type: c.type,
         badges,
         readonly: !!c.generated,
+        dflt: c.defaultSql ?? null,
+        notnull: !!c.notnull,
         auto: model.rowidAlias === c.name, // 自動採番（rowid の別名）
         // INSERT 時に値が要る列（NOT NULL・既定値なし・自動採番でない）
         required: !!c.notnull && c.defaultSql == null && !c.generated && model.rowidAlias !== c.name,
@@ -207,71 +281,101 @@ export class TableSource {
     return { sql: `DELETE FROM ${this.t} WHERE ${kw.sql}`, bind: kw.bind };
   }
 
-  newKeyAfter(row, setCols) {
-    const key = { ...row.key };
-    if (this.hasRowid) {
-      if (this.model.rowidAlias && this.model.rowidAlias in setCols) key._rowid_ = setCols[this.model.rowidAlias];
-    } else {
-      for (const p of this.model.pk) if (p in setCols) key[p] = setCols[p];
+  /**
+   * 書き込む値を SQL の部品に。フォームの =式 は文にそのまま埋め込み、DB が UPDATE / INSERT の中で計算する。
+   * それ以外の値は ? で渡す。newRow なら式から列は参照できない
+   */
+  toSqlPart(v, col, newRow) {
+    if (isForm(v)) {
+      const p = parseInput(v.form, col.type);
+      // 末尾の -- コメントで閉じ括弧が消えないように、改行してから閉じる
+      if ('expr' in p) return { sql: `(${p.expr}\n)`, check: `SELECT (${p.expr}\n)${newRow ? '' : ` FROM ${this.t}`}`, col };
+      return { sql: '?', bind: [p.value] };
     }
-    return key;
+    return { sql: '?', bind: [convertInput(v, col.type)] };
   }
+
+  /** 式を含む文が失敗したとき、式の誤りならユーザーが書いた式の言葉で、列を添えて伝える */
+  exprFailure(e, parts, newRow) {
+    const exprs = parts.filter((p) => p.check);
+    if (!exprs.length || !/incomplete input|syntax error|no such column|no such function|unrecognized token|wrong number of arguments|式は1つだけ|式で DB/.test(e.message)) return e;
+    const one = exprs.length === 1 ? exprs[0].col : null;
+    const err = new Error(`${one ? `「${one.name}」の` : ''}式を計算できません：${exprError(e.message, newRow)}`);
+    err.col = one ? this.model.columns.indexOf(one) : -1;
+    return err;
+  }
+
+  /** RETURNING で返すキーの列 */
+  returningKey() { return this.keyCols().map((k) => (k === '_rowid_' ? '_rowid_' : q(k))); }
 
   async update(changes) {
     const byRow = new Map();
     for (const ch of changes) {
-      if (!byRow.has(ch.row)) byRow.set(ch.row, { rowObj: ch.rowObj, set: {} });
+      if (!byRow.has(ch.row)) byRow.set(ch.row, { rowObj: ch.rowObj, cols: [], parts: [] });
       const col = this.model.columns[ch.col];
-      byRow.get(ch.row).set[col.name] = convertInput(ch.value, col.type);
+      const r = byRow.get(ch.row);
+      r.cols.push(col); r.parts.push(this.toSqlPart(ch.value, col, false));
     }
-    const redo = [], undoStmts = [], targets = [];
-    for (const [row, { rowObj, set }] of byRow) {
-      const names = Object.keys(set);
+    const plans = [...byRow.entries()].map(([row, r]) => ({ row, ...r }));
+    const allParts = plans.flatMap((p) => p.parts);
+    // 式はこの UPDATE の中で計算され、RETURNING で計算結果と新しいキーを受け取る
+    const stmts = plans.map(({ rowObj, cols, parts }) => {
       const kw = this.keyWhere(rowObj.key);
-      redo.push({ sql: `UPDATE ${this.t} SET ${names.map((n) => `${q(n)} = ?`).join(', ')} WHERE ${kw.sql}`, bind: [...names.map((n) => set[n]), ...kw.bind] });
-      const newKey = this.newKeyAfter(rowObj, set);
-      const nkw = this.keyWhere(newKey);
-      const old = names.map((n) => rowObj.values[this.model.columns.findIndex((c) => c.name === n)]);
-      undoStmts.unshift({ sql: `UPDATE ${this.t} SET ${names.map((n) => `${q(n)} = ?`).join(', ')} WHERE ${nkw.sql}`, bind: [...old, ...nkw.bind] });
-      targets.push({ row, newKey });
-    }
-    await db.batch(redo);
+      return {
+        sql: `UPDATE ${this.t} SET ${cols.map((c, i) => `${q(c.name)} = ${parts[i].sql}`).join(', ')} WHERE ${kw.sql} RETURNING ${[...this.returningKey(), ...cols.map((c) => q(c.name))].join(', ')}`,
+        bind: [...parts.flatMap((p) => p.bind ?? []), ...kw.bind],
+        checks: parts.filter((p) => p.check).map((p) => p.check),
+      };
+    });
+    let results;
+    try { results = await db.batch(stmts); } catch (e) { throw this.exprFailure(e, allParts, false); }
+    // Undo / Redo は計算結果の値で作る（Redo で式を計算し直さない）
+    const redo = [], undoStmts = [], out = [];
+    const nk = this.keyCols().length;
+    plans.forEach((p, i) => {
+      const ret = results[i].rows[0];
+      if (!ret) return;
+      p.newKey = Object.fromEntries(this.keyCols().map((k, j) => [k, ret[j]]));
+      const setSql = p.cols.map((c) => `${q(c.name)} = ?`).join(', ');
+      const kw = this.keyWhere(p.rowObj.key), nkw = this.keyWhere(p.newKey);
+      redo.push({ sql: `UPDATE ${this.t} SET ${setSql} WHERE ${kw.sql}`, bind: [...ret.slice(nk), ...kw.bind] });
+      undoStmts.unshift({ sql: `UPDATE ${this.t} SET ${setSql} WHERE ${nkw.sql}`, bind: [...p.cols.map((c) => p.rowObj.values[this.model.columns.indexOf(c)]), ...nkw.bind] });
+    });
     undo.push({ label: changes.length > 1 ? `${changes.length} セルの変更` : 'セルの変更', undo: undoStmts, redo });
-    const out = [];
-    for (const t of targets) {
-      const fresh = await this.fetchByKey(t.newKey);
-      if (fresh) out.push({ row: t.row, rowObj: fresh });
+    for (const p of plans) {
+      const fresh = p.newKey && await this.fetchByKey(p.newKey);
+      if (fresh) out.push({ row: p.row, rowObj: fresh });
     }
     return out;
   }
 
   async insert(rows) {
-    const stmts = [];
-    for (const vals of rows) {
-      const names = [], bind = [];
+    const allParts = [];
+    const stmts = rows.map((vals) => {
+      const cols = [], parts = [];
       vals.forEach((v, c) => {
         if (v === undefined) return;
         const col = this.model.columns[c];
-        names.push(q(col.name)); bind.push(convertInput(v, col.type));
+        cols.push(col); parts.push(this.toSqlPart(v, col, true));
       });
-      stmts.push(names.length
-        ? { sql: `INSERT INTO ${this.t} (${names.join(', ')}) VALUES (${bind.map(() => '?').join(', ')})`, bind }
-        : { sql: `INSERT INTO ${this.t} DEFAULT VALUES` });
-    }
-    const results = await db.batch(stmts);
-    // Undo/Redo 用に、挿入された行を丸ごと取得
+      allParts.push(...parts);
+      const ret = ` RETURNING ${this.returningKey().join(', ')}`;
+      return {
+        sql: cols.length
+          ? `INSERT INTO ${this.t} (${cols.map((c) => q(c.name)).join(', ')}) VALUES (${parts.map((p) => p.sql).join(', ')})${ret}`
+          : `INSERT INTO ${this.t} DEFAULT VALUES${ret}`,
+        bind: parts.flatMap((p) => p.bind ?? []),
+        checks: parts.filter((p) => p.check).map((p) => p.check),
+      };
+    });
+    let results;
+    try { results = await db.batch(stmts); } catch (e) { throw this.exprFailure(e, allParts, true); }
+    // Undo/Redo 用に、挿入された行を丸ごと取得（キーは RETURNING で受け取る）
     const inserted = [];
-    for (let i = 0; i < results.length; i++) {
-      let key;
-      if (this.hasRowid) key = { _rowid_: results[i].lastId };
-      else {
-        key = {};
-        for (const p of this.model.pk) {
-          const ci = this.model.columns.findIndex((c) => c.name === p);
-          key[p] = convertInput(rows[i][ci], this.model.columns[ci].type);
-        }
-      }
-      const row = await this.fetchByKey(key);
+    for (const r of results) {
+      const ret = r.rows[0];
+      if (!ret) continue;
+      const row = await this.fetchByKey(Object.fromEntries(this.keyCols().map((k, j) => [k, ret[j]])));
       if (row) inserted.push(row);
     }
     undo.push({

@@ -1,6 +1,6 @@
 // スプレッドシート風グリッド：仮想スクロール、セル選択、編集、コピー＆ペースト
 import { el, modKey, fmtBytes } from './ui.js';
-import { convertInput } from './sources.js';
+import { convertInput, formText, form, defaultToForm } from './sources.js';
 
 const RH = 28;          // 行の高さ
 const HH = 34;          // 見出しの高さ
@@ -30,7 +30,7 @@ export class Grid {
     this.rowCount = 0;
     this.cur = { r: 0, c: 0 };
     this.ext = { r: 0, c: 0 };
-    this.editing = null;   // { mode: 'enter'|'edit', r, c, original }
+    this.editing = null;   // { mode: 'enter'|'edit', r, c, start（開いたときのフォームの文字列） }
     this.draft = null;     // 新しい行の下書き { values: [列ごとの文字列|null|undefined(未入力)], errors: {c: msg} }
     this.widths = this.loadWidths();
     this.build();
@@ -51,6 +51,21 @@ export class Grid {
     delete this.draft.errors[c];
   }
 
+  /** 下書きの未入力のセルに薄く見せる文字（INSERT で何が入るか） */
+  placeholderFor(c) {
+    const col = this.cols[c];
+    if (!col || col.readonly) return '';
+    if (col.auto) return '（自動採番）';
+    if (col.dflt != null) return defaultToForm(col.dflt);
+    return col.notnull ? '' : '=NULL';
+  }
+
+  /** フォームを開いたときの文字列。下書きは持っているフォームの文字列、未入力は空 */
+  formAt(r, c) {
+    if (r === this.newRowIndex) return this.draft?.values[c] ?? '';
+    return formText(this.rowAt(r)?.values[c]);
+  }
+
   discardDraft() {
     if (!this.draft) return;
     this.draft = null;
@@ -65,7 +80,7 @@ export class Grid {
     const draftRow = this.newRowIndex;
     this.flushing = (async () => {
       try {
-        await this.source.insert([values]);
+        await this.source.insert([values.map((v) => (v === undefined ? undefined : form(v)))]);
         this.draft = null;
         const onNew = this.cur.r === draftRow;
         const editingNew = this.editing && this.editing.r === draftRow;
@@ -78,7 +93,8 @@ export class Grid {
       } catch (err) {
         this.hooks.onError?.(err);
         this.draft ??= { values, errors: {} };
-        this.draft.errors = this.draftErrors(err.message);
+        // 式を計算できなかった列が分かれば、その列に印を付ける
+        this.draft.errors = err.col >= 0 ? { [err.col]: err.message } : this.draftErrors(err.message);
         const firstErr = Object.keys(this.draft.errors).map(Number)[0];
         this.cur = { r: this.newRowIndex, c: firstErr ?? Math.min(this.cur.c, this.cols.length - 1) };
         this.ext = { ...this.cur };
@@ -274,7 +290,9 @@ export class Grid {
         if (r === this.cur.r && c === this.cur.c) cell.classList.add('cur');
         if (draft) {
           const v = draft.values[c];
-          if (v !== undefined) this.fillCell(cell, v, { ...col, fk: null }, { values: [] }, r, c);
+          // 未入力は INSERT で入るものを薄く、それ以外はフォームの文字列をそのまま
+          if (v === undefined) { cell.classList.add('ph'); cell.textContent = this.placeholderFor(c); }
+          else cell.textContent = v.replaceAll('\n', ' ⏎ ');
           if (draft.errors[c]) { cell.classList.add('err'); cell.title = draft.errors[c]; }
         } else if (!row) {
           cell.classList.add('loading');
@@ -538,8 +556,10 @@ export class Grid {
     }
     const v = this.currentValue();
     if (v instanceof Uint8Array) { this.hooks.onBlobEdit?.(r, c); this.sink.value = ''; return false; }
-    this.editing = { mode, r, c, original: v };
-    if (initial !== undefined) { /* 入力済みの文字をそのまま使う */ } else this.sink.value = v == null ? '' : String(v);
+    const start = this.formAt(r, c);
+    this.editing = { mode, r, c, start };
+    if (initial !== undefined) { /* 入力済みの文字をそのまま使う */ } else this.sink.value = start;
+    this.sink.placeholder = r === this.newRowIndex && v === undefined ? this.placeholderFor(c) : '';
     this.placeSink();
     if (mode === 'edit') { const n = this.sink.value.length; this.sink.setSelectionRange(n, n); }
     this.hooks.onEditState?.(true, this.sink.value);
@@ -558,6 +578,7 @@ export class Grid {
   cancelEdit() {
     this.editing = null;
     this.sink.value = '';
+    this.sink.placeholder = '';
     this.placeSink();
     this.hooks.onEditState?.(false);
   }
@@ -566,23 +587,26 @@ export class Grid {
   async setCurrent(text) {
     const { r, c } = this.cur;
     if (!this.canEdit(r, c)) return false;
-    if (r === this.newRowIndex) { this.draftSet(c, text); this.render(); this.emitSelect(); return true; }
-    return this.write([{ r, c, value: text }]);
+    if (text === this.formAt(r, c)) return true;
+    if (r === this.newRowIndex) { this.draftSet(c, text === '' ? undefined : text); this.render(); this.emitSelect(); return true; }
+    return this.write([{ r, c, value: form(text) }]);
   }
 
   async commitEdit({ move = 'down' } = {}) {
     if (!this.editing) return;
-    const { r, c, original, mode } = this.editing;
+    const { r, c, start } = this.editing;
     const text = this.sink.value;
     this.editing = null;
     this.sink.value = '';
+    this.sink.placeholder = '';
     this.placeSink();
     this.hooks.onEditState?.(false);
-    // 変化なしなら書かない。NULL のセルを開いて何も打たずに確定した場合も NULL のまま
-    const unchanged = original == null ? (text === '' && mode === 'edit') : String(original) === text;
+    // フォームが開いたときと同じなら何もしない
+    const unchanged = text === start;
     if (r === this.newRowIndex) {
       // 新しい行は下書きにためるだけ。Enter/Tab は右へ進み、最後の列で保存して次の新しい行へ
-      if (!unchanged && !(text === '' && original === undefined)) this.draftSet(c, text);
+      // 下書きはフォームの文字列のまま持つ。空は未入力
+      if (!unchanged) this.draftSet(c, text === '' ? undefined : text);
       if (move === 'down' || move === 'right') {
         if (c >= this.cols.length - 1) {
           this.moveTo(r, 0);
@@ -595,11 +619,10 @@ export class Grid {
       else { this.render(); this.emitSelect(); }
       return;
     }
-    const emptyNewRow = false;
     // 先に移動してから書き込む（書き込み待ちの間の入力を取りこぼさない）。失敗したら write がセルに戻す
     // 新しい行で Enter → 確定後も次の新しい行へ。Tab など横移動 → 追加された行に留まって続けて入力
     this.afterInsert = move === 'down' ? 'newrow' : 'stay';
-    const pending = !unchanged && !emptyNewRow ? this.write([{ r, c, value: text }]) : null;
+    const pending = !unchanged ? this.write([{ r, c, value: form(text) }]) : null;
     // 最後の行の最後の列で Tab：入力の要らない表なら次の行を作る（Excel のテーブルと同じ）
     if (move === 'right' && r === this.rowCount - 1 && c === this.cols.length - 1 && this.canInsertEmpty) {
       if (pending) await pending;
@@ -661,13 +684,13 @@ export class Grid {
         const ch = changes[0];
         this.cur = { r: ch.r, c: ch.c }; this.ext = { ...this.cur };
         this.render(); this.emitSelect();
-        if (ch.value !== null) {
-          this.sink.value = ch.value;
-          this.editing = { mode: 'edit', r: ch.r, c: ch.c, original: this.currentValue() };
+        if (ch.value?.form !== undefined) {
+          this.sink.value = ch.value.form;
+          this.editing = { mode: 'edit', r: ch.r, c: ch.c, start: this.formAt(ch.r, ch.c) };
           this.placeSink();
           this.sink.classList.add('invalid');
           setTimeout(() => this.sink.classList.remove('invalid'), 1500);
-          this.hooks.onEditState?.(true, ch.value);
+          this.hooks.onEditState?.(true, ch.value.form);
         }
         this.focus();
       }
@@ -678,7 +701,7 @@ export class Grid {
   async clearSelection() {
     const { r0, r1, c0, c1 } = this.range();
     if (r1 >= this.newRowIndex && this.draft) {
-      for (let c = c0; c <= c1; c++) this.draft.values[c] = undefined;
+      for (let c = c0; c <= c1; c++) if (!this.cols[c].readonly) this.draftSet(c, '=NULL');
       this.render(); this.emitSelect();
     }
     const changes = [];
@@ -730,7 +753,7 @@ export class Grid {
     const draft = this.hasDraft && changes.some((ch) => ch.r === this.newRowIndex) ? this.draft : null;
     if (draft) {
       draft.values.forEach((v, c) => {
-        if (v !== undefined && !changes.some((ch) => ch.r === this.newRowIndex && ch.c === c)) changes.push({ r: this.newRowIndex, c, value: v });
+        if (v !== undefined && !changes.some((ch) => ch.r === this.newRowIndex && ch.c === c)) changes.push({ r: this.newRowIndex, c, value: form(v) });
       });
     }
     const ok = await this.write(changes);
