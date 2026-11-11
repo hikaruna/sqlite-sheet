@@ -26,8 +26,40 @@ function renameKey(k, from, to) {
 export function getQueries(db) {
   try {
     const v = JSON.parse(localStorage.getItem('queries:' + db) || '[]');
-    return Array.isArray(v) ? v.filter((x) => x && typeof x.name === 'string' && typeof x.sql === 'string') : [];
+    if (!Array.isArray(v)) return [];
+    // 壊れた要素は捨て、同じ名前が重なっていたら最初の1つだけ残す
+    const seen = new Set();
+    return v.filter((x) => x && typeof x.name === 'string' && typeof x.sql === 'string' && !seen.has(x.name) && seen.add(x.name));
   } catch { return []; }
+}
+
+/** キー → 持ち主の DB 名（DB に属さないキーは null）。DB 名に「/」は使えないので w: は最初の「/」まで */
+function dbOfKey(k) {
+  for (const p of exact) if (k.startsWith(p)) return k.slice(p.length);
+  const m = k.match(/^w:([^/]*)\//);
+  return m ? m[1] : null;
+}
+
+function allKeys() {
+  const keys = [];
+  for (let i = 0; i < localStorage.length; i++) keys.push(localStorage.key(i));
+  return keys;
+}
+
+/** 起動時：もう存在しない DB の値を消す（アプリを通さない削除や途中終了の残り） */
+export function sweep(dbs) {
+  try {
+    const live = new Set(dbs);
+    for (const k of allKeys()) { const db = dbOfKey(k); if (db != null && !live.has(db)) localStorage.removeItem(k); }
+  } catch { /* 無視 */ }
+}
+
+/** DB を開いたとき：もう無い表・シートの列幅を消す。keep(rest) は「w:<DB>/」より後ろを受け取る */
+export function sweepWidths(db, keep) {
+  try {
+    const prefix = `w:${db}/`;
+    for (const k of allKeys()) if (k.startsWith(prefix) && !keep(k.slice(prefix.length))) localStorage.removeItem(k);
+  } catch { /* 無視 */ }
 }
 
 export function setQueries(db, list) {

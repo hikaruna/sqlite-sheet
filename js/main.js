@@ -42,6 +42,7 @@ async function boot() {
     return showFatal(e);
   }
   state.dbs = await db.list();
+  store.sweep(state.dbs); // 消えた DB の端末側データを掃除
   restoreUrl();
   addEventListener('popstate', route);
   await route();
@@ -392,6 +393,10 @@ async function deleteDb() {
 async function refreshObjects() {
   state.objects = await listObjects();
   state.queries = store.getQueries(state.dbName);
+  // もう無い表・シートの列幅を掃除（表は名前、ビュー・クエリは内部キーで保存している）
+  const tables = new Set(state.objects.filter((o) => o.type === 'table').map((o) => o.name));
+  const keys = new Set(allKeys());
+  store.sweepWidths(state.dbName, (rest) => tables.has(rest) || keys.has(rest));
   // シート全体が保護されている表（タブに 🔒 を出す）
   state.lockedSheets = new Set((await db.query(`SELECT tbl_name FROM sqlite_schema WHERE type = 'trigger' AND name GLOB 'protect_[0-9]*_ins'`)).rows.map(([n]) => n));
   renderTabs();
