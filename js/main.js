@@ -65,15 +65,20 @@ function parseHash() {
 
 function setHash() {
   const h = '#/' + [state.dbName, state.key].filter(Boolean).map(encodeURIComponent).join('/');
-  if (location.hash !== h) history.replaceState(null, '', h);
+  // DB を開く・閉じる移動は履歴に積み（「戻る」で戻れる）、シートの切り替えは置き換える
+  if (location.hash !== h) {
+    if (parseHash().dbName !== state.dbName) history.pushState(null, '', h);
+    else history.replaceState(null, '', h);
+  }
   document.title = [state.key?.slice(2), state.dbName, 'SQLiteシート'].filter(Boolean).join(' · ');
 }
 
 async function route() {
-  let { dbName, key } = parseHash();
-  if (!dbName) dbName = localStorage.getItem('last-db');
+  const { dbName, key } = parseHash();
+  // #/ は最初の画面。前回の DB を勝手には開かない
   if (!dbName || !state.dbs.includes(dbName)) {
-    if (parseHash().dbName && !state.dbs.includes(parseHash().dbName)) toast(`DB「${parseHash().dbName}」は見つかりません`, 'error');
+    if (dbName) toast(`DB「${dbName}」は見つかりません`, 'error');
+    if (state.grid && !(await state.grid.flushDraft())) return setHash();
     return showWelcome();
   }
   if (dbName !== state.dbName) await openDb(dbName, key);
@@ -205,7 +210,6 @@ async function openDb(name, key) {
   state.views = new Map();
   state.key = null;
   undo.clear();
-  localStorage.setItem('last-db', name);
   $('db-name').textContent = name;
   await refreshObjects();
   const keys = allKeys();
@@ -320,10 +324,9 @@ async function deleteDb() {
   try {
     await db.remove(name);
     state.dbs = await db.list();
-    localStorage.removeItem('last-db');
     toast(`「${name}」を削除しました`);
     state.dbName = null;
-    if (state.dbs.length) await openDb(state.dbs[0]); else showWelcome();
+    showWelcome();
   } catch (e) { toast(friendlyError(e.message), 'error'); }
 }
 
