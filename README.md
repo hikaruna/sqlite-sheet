@@ -20,7 +20,7 @@
 
 ビルド不要のバニラ JS（ES Modules）です。静的ファイルとして配信するだけで動きます。
 
-URL は `/<DB 名>?sheet=<シート名>` の形で、DB をパスで表します。存在しないパスにも `index.html` を返す（SPA フォールバック）サーバーで配信してください。ローカルでは [miniserve](https://github.com/svenstaro/miniserve) を使います（初回だけ `cargo install miniserve`。プロジェクトにはファイルを追加しません）。
+URL は `/<DB 名>?sheet=<シート名>` の形で、DB をパスで表します（保存クエリは `?sheet=~<名前>`。名前自体の先頭の `~` は `~~` と重ねて書きます）。存在しないパスにも `index.html` を返す（SPA フォールバック）サーバーで配信してください。ローカルでは [miniserve](https://github.com/svenstaro/miniserve) を使います（初回だけ `cargo install miniserve`。プロジェクトにはファイルを追加しません）。
 
 ```sh
 miniserve --spa --index index.html -p 8000 .
@@ -39,6 +39,7 @@ COOP/COEP ヘッダーは不要です（SharedArrayBuffer を使わない `opfs-
 |---|---|
 | `js/db-worker.js` | Worker 内で sqlite-wasm を動かし、`opfs-sahpool` に DB ごとのファイルを置く |
 | `js/db-client.js` | Worker との RPC。発行した SQL を履歴に流す |
+| `js/store.js` | DB ごとの端末側データ（保存クエリ・並び順・列幅）。DB の名前変更・複製・削除に追従 |
 | `js/schema.js` | スキーマの読み取り、CREATE TABLE の生成、テーブル再作成 SQL |
 | `js/grid.js` | 仮想スクロールのグリッド（選択・編集・コピペ） |
 | `js/sources.js` | テーブル／クエリをグリッドにつなぐ（UPDATE/INSERT/DELETE と Undo 記録） |
@@ -47,7 +48,7 @@ COOP/COEP ヘッダーは不要です（SharedArrayBuffer を使わない `opfs-
 | `js/main.js` | 画面全体・DB/シート管理 |
 | （外部）| 公式 [`@sqlite.org/sqlite-wasm`](https://www.npmjs.com/package/@sqlite.org/sqlite-wasm) 3.54.1-build1 を jsDelivr から ES module として import（`js/db-worker.js`） |
 
-クエリシートの SQL は DB 内の `_sqlite_sheet_queries` テーブルに保存されるので、書き出したファイルにも含まれます（他の SQLite ツールで開いても無害です）。
+DB の中にはアプリ用のデータを書き込みません。クエリシートの SQL・シートの並び順・列の幅などは端末の localStorage に DB ごとに保存されるので（`js/store.js`）、書き出した `.sqlite` ファイルには含まれません。
 
 ## 注意
 

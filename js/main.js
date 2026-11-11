@@ -1,16 +1,16 @@
 // アプリ本体：DB・シートの管理、画面の組み立て
 import { db, q } from './db-client.js';
 import { el, toast, menu, popover, closePopover, ask, confirmDialog, pickFile, download, modKey, isMac } from './ui.js';
-import { listObjects, readTable, createTableSql, migrationSql, constantDefault, APP_PREFIX, TYPES, affinity } from './schema.js';
+import { listObjects, readTable, createTableSql, migrationSql, constantDefault, TYPES, affinity } from './schema.js';
 import { Grid } from './grid.js';
 import { TableSource, QuerySource, FILTER_OPS, friendlyError, convertInput, formText, formToDefault } from './sources.js';
 import { DesignPanel } from './design-panel.js';
 import { SqlConsole } from './console.js';
 import { undo } from './undo.js';
-import { createSample } from './sample.js';
+import { createSample, SAMPLE_QUERIES } from './sample.js';
+import * as store from './store.js';
 import { readProtections, protectSql, unprotectSql, protectionChecker, canProtectRows, describe, KIND_ICON as PROT_ICON } from './protect.js';
 
-const QT = APP_PREFIX + 'queries';
 const MOD = isMac ? '⌘' : 'Ctrl+';
 
 const $ = (id) => document.getElementById(id);
@@ -59,8 +59,9 @@ function showFatal(e) {
     el('button.btn.primary', { on: { click: () => location.reload() } }, '再試行')));
 }
 
-// URL は「/<DB 名>?sheet=<シート名>」。DB はパス（移動は履歴に積む）、シートはクエリ（切り替えは置き換える）。
-// シート名に種類は付けない：テーブルとビューは SQLite で同名不可、保存クエリも takenNames() で重複を禁止している
+// URL は「/<DB 名>?sheet=<シート>」。DB はパス（移動は履歴に積む）、シートはクエリ文字列（切り替えは置き換える）。
+// <シート> はテーブル・ビューなら名前そのまま、保存クエリなら先頭に「~」。名前自体の先頭の「~」は2つに重ねるので、
+// 先頭の「~」が奇数個ならクエリ、偶数個ならテーブル・ビュー（テーブルとクエリが同名でも区別できる）
 const BASE = new URL('../', import.meta.url).pathname;
 const REDIRECT = 'redirect-url'; // 404.html が元の URL を預ける sessionStorage のキー
 
@@ -71,9 +72,25 @@ function parseUrl() {
   return { dbName, sheet: new URLSearchParams(location.search).get('sheet') };
 }
 
+/** 内部キー（'t:名前' 等）→ ?sheet= の値 */
+function sheetParam(key) {
+  const name = key.slice(2).replace(/^~+/, (m) => m + m);
+  return (key[0] === 'q' ? '~' : '') + name;
+}
+
+/** ?sheet= の値 → 内部キー（無ければ null） */
+function keyOfParam(v) {
+  if (!v) return null;
+  const n = v.match(/^~*/)[0].length, rest = v.slice(n);
+  if (n % 2) return 'q:' + '~'.repeat((n - 1) / 2) + rest;
+  const name = '~'.repeat(n / 2) + rest;
+  const o = state.objects.find((x) => x.name === name);
+  return o ? (o.type === 'table' ? 't:' : 'v:') + name : null;
+}
+
 function urlOf(dbName, key) {
   if (!dbName) return BASE;
-  return BASE + encodeURIComponent(dbName) + (key ? '?sheet=' + encodeURIComponent(key.slice(2)) : '');
+  return BASE + encodeURIComponent(dbName) + (key ? '?sheet=' + encodeURIComponent(sheetParam(key)) : '');
 }
 
 function setUrl() {
@@ -99,13 +116,6 @@ function restoreUrl() {
   }
 }
 
-// シート名 → 内部キー（重なったらテーブル・ビューを優先）
-function keyOfName(name) {
-  if (!name) return null;
-  const keys = allKeys();
-  return ['t:', 'v:', 'q:'].map((p) => p + name).find((k) => keys.includes(k)) || null;
-}
-
 async function route() {
   const { dbName, sheet } = parseUrl();
   // / は最初の画面。前回の DB を勝手には開かない
@@ -114,9 +124,9 @@ async function route() {
     if (state.grid && !(await state.grid.flushDraft())) return setUrl();
     return showWelcome();
   }
-  if (dbName !== state.dbName) await openDb(dbName, sheet);
+  if (dbName !== state.dbName) await openDb(dbName, null, sheet);
   else {
-    const key = keyOfName(sheet);
+    const key = keyOfParam(sheet);
     if (key && key !== state.key) await showSheet(key);
     else setUrl();
   }
@@ -237,8 +247,8 @@ function showWelcome() {
 // ======================================================================
 // DB 操作
 // ======================================================================
-// key は内部キー（'t:名前' 等）か、URL から来たシート名
-async function openDb(name, key) {
+// key は内部キー（'t:名前' 等）、param は URL の ?sheet= の値
+async function openDb(name, key, param) {
   // 未保存の新しい行があれば先に保存（失敗したら切り替えない）
   if (state.grid && !(await state.grid.flushDraft())) return;
   try {
@@ -252,8 +262,8 @@ async function openDb(name, key) {
   await refreshObjects();
   const keys = allKeys();
   const last = localStorage.getItem('last-sheet:' + name);
-  if (!keys.includes(key)) key = keyOfName(key);
-  await showSheet(key || (keys.includes(last) ? last : keys[0] || null));
+  if (param) key = keyOfParam(param);
+  await showSheet(keys.includes(key) ? key : keys.includes(last) ? last : keys[0] || null);
 }
 
 function validDbName(v) {
@@ -269,6 +279,7 @@ async function newDb(anchor) {
   });
   if (!name) return;
   try {
+    store.removeDb(name); // 同名で作り直したときに前の DB の設定を引き継がない
     await db.create(name);
     state.dbs = await db.list();
     await openDb(name);
@@ -280,8 +291,10 @@ async function makeSample() {
   let name = 'サンプル', i = 2;
   while (state.dbs.includes(name)) name = `サンプル${i++}`;
   try {
+    store.removeDb(name); // 同名で作り直したときに前の DB の設定を引き継がない
     await db.create(name);
     await createSample(db);
+    store.setQueries(name, SAMPLE_QUERIES);
     state.dbs = await db.list();
     state.dbName = null;
     await openDb(name);
@@ -299,6 +312,7 @@ async function importFile(file) {
   name = await ask($('db-btn'), { title: 'このファイルを読み込む名前', value: name, okLabel: '読み込む', validate: (v) => validDbName(v) || (state.dbs.includes(v) ? `「${v}」は既にあります` : null) });
   if (!name) return;
   try {
+    store.removeDb(name);
     await db.importDb(name, bytes);
     state.dbs = await db.list();
     state.dbName = null;
@@ -336,6 +350,7 @@ async function renameDb() {
   if (!to || to === from) return;
   try {
     await db.rename(from, to);
+    store.renameDb(from, to);
     state.dbs = await db.list();
     state.dbName = null;
     await openDb(to, state.key);
@@ -350,6 +365,7 @@ async function copyDb() {
   if (!to) return;
   try {
     await db.copy(from, to);
+    store.copyDb(from, to);
     state.dbs = await db.list();
     state.dbName = null;
     await openDb(to);
@@ -362,6 +378,7 @@ async function deleteDb() {
   if (!await confirmDialog({ title: `「${name}」を削除しますか？`, body: 'データベースのすべてのデータが失われ、元に戻せません。必要なら先に書き出してください。', okLabel: '削除', danger: true })) return;
   try {
     await db.remove(name);
+    store.removeDb(name);
     state.dbs = await db.list();
     toast(`「${name}」を削除しました`);
     state.dbName = null;
@@ -374,9 +391,7 @@ async function deleteDb() {
 // ======================================================================
 async function refreshObjects() {
   state.objects = await listObjects();
-  state.queries = [];
-  const hasQ = (await db.query(`SELECT 1 FROM sqlite_schema WHERE name = ?`, [QT])).rows.length;
-  if (hasQ) state.queries = (await db.query(`SELECT name, sql FROM ${q(QT)} ORDER BY rowid`)).rows.map(([name, sql]) => ({ name, sql }));
+  state.queries = store.getQueries(state.dbName);
   // シート全体が保護されている表（タブに 🔒 を出す）
   state.lockedSheets = new Set((await db.query(`SELECT tbl_name FROM sqlite_schema WHERE type = 'trigger' AND name GLOB 'protect_[0-9]*_ins'`)).rows.map(([n]) => n));
   renderTabs();
@@ -448,12 +463,16 @@ function uniqueName(base, taken) {
   return n;
 }
 
-const takenNames = () => [...state.objects.map((o) => o.name), ...state.queries.map((x) => x.name)];
+// 名前の一意性は持ち主ごと：テーブル・ビューは SQLite、保存クエリは端末側の一覧の中だけ（両者は同名でもよい）
+const objNames = () => state.objects.map((o) => o.name);
+const queryNames = () => state.queries.map((x) => x.name);
+const namesFor = (kind) => (kind === 'q' ? queryNames() : objNames());
+function saveQueries() { store.setQueries(state.dbName, state.queries); }
 
 async function newTable(anchor) {
   const name = await ask(anchor, {
-    title: '新しいテーブル', value: uniqueName('テーブル', takenNames()), okLabel: '作成',
-    validate: (v) => !v ? '名前を入力してください' : takenNames().includes(v) ? `「${v}」は既にあります` : null,
+    title: '新しいテーブル', value: uniqueName('テーブル', objNames()), okLabel: '作成',
+    validate: (v) => !v ? '名前を入力してください' : objNames().includes(v) ? `「${v}」は既にあります` : null,
   });
   if (!name) return;
   try {
@@ -464,17 +483,13 @@ async function newTable(anchor) {
   } catch (e) { toast(friendlyError(e.message), 'error'); }
 }
 
-async function ensureQueryTable() {
-  await db.exec(`CREATE TABLE IF NOT EXISTS ${q(QT)} (name TEXT PRIMARY KEY, sql TEXT NOT NULL) STRICT`);
-}
-
 async function newQuery(sql, base = 'クエリ') {
-  const name = uniqueName(base, takenNames());
+  const name = uniqueName(base, queryNames());
   const first = tableNames()[0];
   sql ??= first ? `SELECT *\nFROM ${q(first)}\nLIMIT 100` : 'SELECT 1';
   try {
-    await ensureQueryTable();
-    await db.exec(`INSERT INTO ${q(QT)} (name, sql) VALUES (?, ?)`, [name, sql]);
+    state.queries.push({ name, sql });
+    saveQueries();
     await refreshObjects();
     await showSheet('q:' + name);
     $('sheet-head').querySelector('textarea')?.focus();
@@ -490,7 +505,7 @@ async function renameSheet(key, anchor) {
   const kind = key[0], name = key.slice(2);
   const to = await ask(anchor, {
     title: `${KIND_NAME[kind]}の名前を変更`, value: name, okLabel: '変更',
-    validate: (v) => !v ? '名前を入力してください' : v !== name && takenNames().includes(v) ? `「${v}」は既にあります` : null,
+    validate: (v) => !v ? '名前を入力してください' : v !== name && namesFor(kind).includes(v) ? `「${v}」は既にあります` : null,
   });
   if (!to || to === name) return;
   try {
@@ -499,7 +514,7 @@ async function renameSheet(key, anchor) {
       const v = state.objects.find((o) => o.name === name);
       const { cols, select } = viewSelect(v.sql);
       await db.batch([{ sql: `DROP VIEW ${q(name)}` }, { sql: `CREATE VIEW ${q(to)}${cols} AS ${select}` }]);
-    } else await db.exec(`UPDATE ${q(QT)} SET name = ? WHERE name = ?`, [to, name]);
+    } else { state.queries.find((x) => x.name === name).name = to; saveQueries(); }
     const view = state.views.get(key);
     if (view) state.views.set(kind + ':' + to, view);
     renameInOrder(key, kind + ':' + to);
@@ -517,11 +532,11 @@ async function deleteSheet(key) {
   }
   if (!await confirmDialog({ title: `${KIND_NAME[kind]}「${name}」を削除しますか？`, body, okLabel: '削除', danger: true })) return;
   try {
+    const idx = allKeys().indexOf(key); // 消す前の位置（隣のシートを開くため）
     if (kind === 't') await db.exec(`DROP TABLE ${q(name)}`);
     else if (kind === 'v') await db.exec(`DROP VIEW ${q(name)}`);
-    else await db.exec(`DELETE FROM ${q(QT)} WHERE name = ?`, [name]);
+    else { state.queries = state.queries.filter((x) => x.name !== name); saveQueries(); }
     undo.clear();
-    const keys = allKeys(); const idx = keys.indexOf(key);
     await refreshObjects();
     const rest = allKeys();
     await showSheet(rest[Math.min(idx, rest.length - 1)] || null);
@@ -529,7 +544,7 @@ async function deleteSheet(key) {
 }
 
 async function duplicateTable(name, anchor) {
-  const to = await ask(anchor, { title: 'テーブルを複製', value: uniqueName(name + '_copy', takenNames()), okLabel: '複製', validate: (v) => !v ? '名前を入力してください' : takenNames().includes(v) ? `「${v}」は既にあります` : null });
+  const to = await ask(anchor, { title: 'テーブルを複製', value: uniqueName(name + '_copy', objNames()), okLabel: '複製', validate: (v) => !v ? '名前を入力してください' : objNames().includes(v) ? `「${v}」は既にあります` : null });
   if (!to) return;
   try {
     const m = await readTable(name);
@@ -700,7 +715,8 @@ function queryEditor(kind, name, error) {
       } else {
         // 保存する前に実行できるか確かめる
         await db.query(`SELECT * FROM (${sql}) LIMIT 0`);
-        await db.exec(`UPDATE ${q(QT)} SET sql = ? WHERE name = ?`, [sql, name]);
+        state.queries.find((x) => x.name === name).sql = sql;
+        saveQueries();
       }
       state.views.set(state.key, { sorts: [], filters: [] });
       await refreshObjects();
@@ -725,15 +741,14 @@ function queryEditor(kind, name, error) {
 
 async function saveAsView(queryName, sql) {
   sql = sql.trim().replace(/;+\s*$/, '');
-  const name = await ask($('sheet-head'), { title: 'ビューの名前', value: uniqueName(queryName, takenNames().filter((n) => n !== queryName)), okLabel: '作成', validate: (v) => !v ? '名前を入力してください' : v !== queryName && takenNames().includes(v) ? `「${v}」は既にあります` : null });
+  const name = await ask($('sheet-head'), { title: 'ビューの名前', value: uniqueName(queryName, objNames()), okLabel: '作成', validate: (v) => !v ? '名前を入力してください' : objNames().includes(v) ? `「${v}」は既にあります` : null });
   if (!name) return;
   try {
-    await db.batch([
-      { sql: `CREATE VIEW ${q(name)} AS ${sql}` },
-      ...(name === queryName ? [{ sql: `DELETE FROM ${q(QT)} WHERE name = ?`, bind: [queryName] }] : []),
-    ]);
-    if (name !== queryName && await confirmDialog({ title: 'ビューを作成しました', body: `元のクエリ「${queryName}」は削除しますか？`, okLabel: '削除する' })) {
-      await db.exec(`DELETE FROM ${q(QT)} WHERE name = ?`, [queryName]);
+    await db.exec(`CREATE VIEW ${q(name)} AS ${sql}`);
+    // 同名ならクエリをビューに置き換える。別名なら元のクエリを残すか尋ねる
+    if (name === queryName || await confirmDialog({ title: 'ビューを作成しました', body: `元のクエリ「${queryName}」は削除しますか？`, okLabel: '削除する' })) {
+      state.queries = state.queries.filter((x) => x.name !== queryName);
+      saveQueries();
     }
     await refreshObjects();
     await showSheet('v:' + name);
@@ -1288,7 +1303,7 @@ async function importCsv() {
     if (vals.length && vals.every((v) => /^[-+]?(\d+\.?\d*|\.\d+)(e[-+]?\d+)?$/i.test(v.trim()))) return 'REAL';
     return 'TEXT';
   });
-  const name = await ask($('tabs'), { title: `${data.length} 行・${header.length} 列を新しいテーブルに`, value: uniqueName(f.name.replace(/\.\w+$/, ''), takenNames()), okLabel: '作成', validate: (v) => !v ? '名前を入力してください' : takenNames().includes(v) ? `「${v}」は既にあります` : null });
+  const name = await ask($('tabs'), { title: `${data.length} 行・${header.length} 列を新しいテーブルに`, value: uniqueName(f.name.replace(/\.\w+$/, ''), objNames()), okLabel: '作成', validate: (v) => !v ? '名前を入力してください' : objNames().includes(v) ? `「${v}」は既にあります` : null });
   if (!name) return;
   const cols = header.map((h, i) => `  ${q(h)} ${types[i]}`).join(',\n');
   const ins = `INSERT INTO ${q(name)} (${header.map(q).join(', ')}) VALUES (${header.map(() => '?').join(', ')})`;

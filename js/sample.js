@@ -1,4 +1,14 @@
 // サンプル DB：正規化された小さな販売データ
+
+// 保存クエリは DB の外（端末側）に置く
+export const SAMPLE_QUERIES = [{
+  name: '顧客別の売上',
+  sql: `SELECT "顧客", count(DISTINCT "注文") AS "注文数", sum("金額") AS "売上"
+FROM "売上明細"
+GROUP BY "顧客"
+ORDER BY "売上" DESC`,
+}];
+
 export async function createSample(db) {
   const sql = `
 CREATE TABLE "都道府県" (
@@ -54,11 +64,6 @@ JOIN "注文" o ON o."id" = d."注文_id"
 JOIN "顧客" c ON c."id" = o."顧客_id"
 JOIN "商品" p ON p."コード" = d."商品コード";
 
-CREATE TABLE "_sqlite_sheet_queries" (name TEXT PRIMARY KEY, sql TEXT NOT NULL) STRICT;
-INSERT INTO "_sqlite_sheet_queries" VALUES ('顧客別の売上', 'SELECT "顧客", count(DISTINCT "注文") AS "注文数", sum("金額") AS "売上"
-FROM "売上明細"
-GROUP BY "顧客"
-ORDER BY "売上" DESC');
 `;
   await db.exec(sql, undefined, 'gui');
 }
