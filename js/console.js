@@ -108,7 +108,8 @@ export class SqlConsole {
         : `完了：${r.changes} 行に影響（${ms} ms）`;
       this.status.className = 'console-status ok';
       this.renderOut();
-      const isRead = /^\s*(select|with|pragma\s+\w+\s*;?\s*$|explain|values)/i.test(sql) && !/;\s*\S/.test(sql.replace(/;\s*$/, ''));
+      const isRead = /^\s*(select|with|pragma\s+\w+\s*;?\s*$|explain|values)/i.test(sql) && !/;\s*\S/.test(sql.replace(/;\s*$/, ''))
+        && !(/^\s*with\b/i.test(sql) && /\b(insert|update|delete|replace)\b/i.test(sql));
       if (!isRead) {
         if (/\b(create|drop|alter)\b/i.test(sql)) this.cb.onSchemaMaybeChanged();
         else this.cb.onDataChanged();

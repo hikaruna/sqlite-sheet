@@ -56,7 +56,8 @@ function run(sql, bind) {
   // 結果行0件の SELECT でも列名を返す
   if (!lastStmt && bind === undefined && /^\s*(select|with|pragma|values)/i.test(sql) && !sql.trim().replace(/;\s*$/, '').includes(';')) {
     const st = d.prepare(sql);
-    try { columns = st.getColumnNames(); } finally { st.finalize(); }
+    // WITH … INSERT など行を返さない文は列が0個（getColumnNames は例外になる）
+    try { if (st.columnCount > 0) columns = st.getColumnNames(); } finally { st.finalize(); }
   }
   return { columns, rows, changes: d.changes(), lastId: Number(sqlite3.capi.sqlite3_last_insert_rowid(d.pointer)) };
 }
