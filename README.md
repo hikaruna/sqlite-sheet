@@ -20,14 +20,17 @@
 
 ビルド不要のバニラ JS（ES Modules）です。静的ファイルとして配信するだけで動きます。
 
+URL は `/<DB 名>?sheet=<シート名>` の形で、DB をパスで表します。存在しないパスにも `index.html` を返す（SPA フォールバック）サーバーで配信してください。ローカルでは [miniserve](https://github.com/svenstaro/miniserve) を使います（初回だけ `cargo install miniserve`。プロジェクトにはファイルを追加しません）。
+
 ```sh
-python -m http.server 8000
+miniserve --spa --index index.html -p 8000 .
 # → http://localhost:8000/
 ```
 
 ### GitHub Pages で公開
 
 リポジトリの Settings → Pages で、このブランチのルートを公開するだけです。
+GitHub Pages は SPA フォールバックを設定できないため、`404.html` が元の URL を預けてアプリの入口へ転送し、アプリ側で元の URL に戻します。
 COOP/COEP ヘッダーは不要です（SharedArrayBuffer を使わない `opfs-sahpool` VFS を採用）。
 
 ## しくみ

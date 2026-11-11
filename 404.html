@@ -1,0 +1,14 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <title>SQLiteシート</title>
+  <script>
+    // GitHub Pages は「/<DB 名>」のような存在しないパスにこのページを返す。
+    // 元の URL を預けてアプリの入口（1段上）へ移り、アプリ側（js/main.js の restoreUrl）で元に戻す
+    try { sessionStorage.setItem('redirect-url', location.pathname + location.search + location.hash); } catch (e) {}
+    location.replace(location.pathname.replace(/[^/]*\/?$/, ''));
+  </script>
+</head>
+<body></body>
+</html>

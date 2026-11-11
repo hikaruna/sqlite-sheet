@@ -42,7 +42,8 @@ async function boot() {
     return showFatal(e);
   }
   state.dbs = await db.list();
-  addEventListener('hashchange', route);
+  restoreUrl();
+  addEventListener('popstate', route);
   await route();
 }
 
@@ -58,31 +59,67 @@ function showFatal(e) {
     el('button.btn.primary', { on: { click: () => location.reload() } }, '再試行')));
 }
 
-function parseHash() {
-  const parts = location.hash.replace(/^#\/?/, '').split('/').map(decodeURIComponent);
-  return { dbName: parts[0] || null, key: parts[1] || null };
+// URL は「/<DB 名>?sheet=<シート名>」。DB はパス（移動は履歴に積む）、シートはクエリ（切り替えは置き換える）。
+// シート名に種類は付けない：テーブルとビューは SQLite で同名不可、保存クエリも takenNames() で重複を禁止している
+const BASE = new URL('../', import.meta.url).pathname;
+const REDIRECT = 'redirect-url'; // 404.html が元の URL を預ける sessionStorage のキー
+
+function parseUrl() {
+  const path = location.pathname.startsWith(BASE) ? location.pathname.slice(BASE.length) : '';
+  let dbName = null;
+  try { dbName = decodeURIComponent(path.split('/')[0]) || null; } catch { /* 壊れたエンコードは無視 */ }
+  return { dbName, sheet: new URLSearchParams(location.search).get('sheet') };
 }
 
-function setHash() {
-  const h = '#/' + [state.dbName, state.key].filter(Boolean).map(encodeURIComponent).join('/');
-  // DB を開く・閉じる移動は履歴に積み（「戻る」で戻れる）、シートの切り替えは置き換える
-  if (location.hash !== h) {
-    if (parseHash().dbName !== state.dbName) history.pushState(null, '', h);
-    else history.replaceState(null, '', h);
+function urlOf(dbName, key) {
+  if (!dbName) return BASE;
+  return BASE + encodeURIComponent(dbName) + (key ? '?sheet=' + encodeURIComponent(key.slice(2)) : '');
+}
+
+function setUrl() {
+  const u = urlOf(state.dbName, state.key);
+  if (location.pathname + location.search + location.hash !== u) {
+    if (parseUrl().dbName !== state.dbName) history.pushState(null, '', u);
+    else history.replaceState(null, '', u);
   }
   document.title = [state.key?.slice(2), state.dbName, 'SQLiteシート'].filter(Boolean).join(' · ');
 }
 
+// 起動時：404.html から来た元の URL と、旧形式「#/DB/t:名前」を今の形に直す
+function restoreUrl() {
+  let u = null;
+  try { u = sessionStorage.getItem(REDIRECT); sessionStorage.removeItem(REDIRECT); } catch { /* 無視 */ }
+  if (u) history.replaceState(null, '', u);
+  const old = location.hash.match(/^#\/([^/]*)\/?(.*)$/);
+  if (old) {
+    try {
+      const [db, key] = [old[1], old[2]].map(decodeURIComponent);
+      history.replaceState(null, '', urlOf(db || null, /^[tvq]:/.test(key) ? key : null));
+    } catch { history.replaceState(null, '', BASE); }
+  }
+}
+
+// シート名 → 内部キー（重なったらテーブル・ビューを優先）
+function keyOfName(name) {
+  if (!name) return null;
+  const keys = allKeys();
+  return ['t:', 'v:', 'q:'].map((p) => p + name).find((k) => keys.includes(k)) || null;
+}
+
 async function route() {
-  const { dbName, key } = parseHash();
-  // #/ は最初の画面。前回の DB を勝手には開かない
+  const { dbName, sheet } = parseUrl();
+  // / は最初の画面。前回の DB を勝手には開かない
   if (!dbName || !state.dbs.includes(dbName)) {
     if (dbName) toast(`DB「${dbName}」は見つかりません`, 'error');
-    if (state.grid && !(await state.grid.flushDraft())) return setHash();
+    if (state.grid && !(await state.grid.flushDraft())) return setUrl();
     return showWelcome();
   }
-  if (dbName !== state.dbName) await openDb(dbName, key);
-  else if (key && key !== state.key) await showSheet(key);
+  if (dbName !== state.dbName) await openDb(dbName, sheet);
+  else {
+    const key = keyOfName(sheet);
+    if (key && key !== state.key) await showSheet(key);
+    else setUrl();
+  }
 }
 
 // ======================================================================
@@ -181,7 +218,7 @@ function showWelcome() {
   $('tabs').replaceChildren();
   $('sheet-head').replaceChildren();
   $('panel').hidden = true;
-  setHash();
+  setUrl();
   $('grid-host').replaceChildren(el('div.welcome',
     el('div.welcome-card',
       el('h1', 'SQLiteシート'),
@@ -200,6 +237,7 @@ function showWelcome() {
 // ======================================================================
 // DB 操作
 // ======================================================================
+// key は内部キー（'t:名前' 等）か、URL から来たシート名
 async function openDb(name, key) {
   // 未保存の新しい行があれば先に保存（失敗したら切り替えない）
   if (state.grid && !(await state.grid.flushDraft())) return;
@@ -214,7 +252,8 @@ async function openDb(name, key) {
   await refreshObjects();
   const keys = allKeys();
   const last = localStorage.getItem('last-sheet:' + name);
-  await showSheet(keys.includes(key) ? key : keys.includes(last) ? last : keys[0] || null);
+  if (!keys.includes(key)) key = keyOfName(key);
+  await showSheet(key || (keys.includes(last) ? last : keys[0] || null));
 }
 
 function validDbName(v) {
@@ -542,7 +581,7 @@ async function showSheet(key, { keepView = true } = {}) {
   }
   state.order = keys;
   state.key = key;
-  setHash();
+  setUrl();
   renderTabs();
   if (!key) {
     state.grid = null; state.source = null; state.model = null;
@@ -686,7 +725,7 @@ function queryEditor(kind, name, error) {
 
 async function saveAsView(queryName, sql) {
   sql = sql.trim().replace(/;+\s*$/, '');
-  const name = await ask($('sheet-head'), { title: 'ビューの名前', value: uniqueName(queryName, state.objects.map((o) => o.name)), okLabel: '作成', validate: (v) => !v ? '名前を入力してください' : state.objects.some((o) => o.name === v) ? `「${v}」は既にあります` : null });
+  const name = await ask($('sheet-head'), { title: 'ビューの名前', value: uniqueName(queryName, takenNames().filter((n) => n !== queryName)), okLabel: '作成', validate: (v) => !v ? '名前を入力してください' : v !== queryName && takenNames().includes(v) ? `「${v}」は既にあります` : null });
   if (!name) return;
   try {
     await db.batch([
