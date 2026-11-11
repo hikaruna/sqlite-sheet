@@ -139,8 +139,19 @@ async function route() {
 function buildChrome() {
   $('app').replaceChildren(
     el('header.topbar',
-      el('button#db-btn.db-btn', { title: 'データベース', on: { click: (e) => dbMenu(e.currentTarget) } },
-        el('span.db-icon', '◆'), el('span#db-name', '—'), el('span.caret', '▾')),
+      // 左上：アイコン＝ホーム（DB の一覧）、DB 名＝その場で名前を変更、ファイル＝DB の操作メニュー
+      el('button#home-btn.home-btn', { title: 'ホーム（データベースの一覧）', on: { click: goHome } }, '◆'),
+      el('input#db-name.db-name', {
+        hidden: true, spellcheck: false, title: 'クリックして名前を変更',
+        on: {
+          keydown: (e) => {
+            if (e.key === 'Enter') { e.preventDefault(); e.target.blur(); }
+            else if (e.key === 'Escape') { e.preventDefault(); e.target.value = state.dbName || ''; e.target.blur(); }
+          },
+          blur: (e) => commitDbName(e.target.value),
+        },
+      }),
+      el('button#file-btn.tool-btn.file-btn', { title: 'データベースの操作', on: { click: (e) => dbMenu(e.currentTarget) } }, 'ファイル', el('span.caret', ' ▾')),
       el('div.fx',
         el('span#fx-ref.fx-ref', ''),
         el('input#fx-input.fx-input', { spellcheck: false, placeholder: '', on: { keydown: onFxKey, focus: (e) => e.target.select() } })),
@@ -224,7 +235,7 @@ function toggleConsole(force) {
 // ======================================================================
 function showWelcome() {
   state.dbName = null; state.key = null; state.grid = null; state.source = null; state.model = null;
-  $('db-name').textContent = 'DB を選択';
+  $('db-name').hidden = true;
   $('fx-ref').textContent = ''; $('fx-input').value = ''; $('status').textContent = '';
   $('tabs').replaceChildren();
   $('sheet-head').replaceChildren();
@@ -259,7 +270,7 @@ async function openDb(name, key, param) {
   state.views = new Map();
   state.key = null;
   undo.clear();
-  $('db-name').textContent = name;
+  Object.assign($('db-name'), { value: name, hidden: false });
   await refreshObjects();
   const keys = allKeys();
   const last = localStorage.getItem('last-sheet:' + name);
@@ -274,7 +285,7 @@ function validDbName(v) {
 }
 
 async function newDb(anchor) {
-  const name = await ask(anchor instanceof Element ? anchor : $('db-btn'), {
+  const name = await ask(anchor instanceof Element ? anchor : $('file-btn'), {
     title: '新しいデータベース', placeholder: '名前', okLabel: '作成',
     validate: (v) => validDbName(v) || (state.dbs.includes(v) ? `「${v}」は既にあります` : null),
   });
@@ -310,7 +321,7 @@ async function importFile(file) {
   let name = file.name.replace(/\.(sqlite3?|db)$/i, '') || 'imported';
   const base = name; let i = 2;
   while (state.dbs.includes(name)) name = `${base} (${i++})`;
-  name = await ask($('db-btn'), { title: 'このファイルを読み込む名前', value: name, okLabel: '読み込む', validate: (v) => validDbName(v) || (state.dbs.includes(v) ? `「${v}」は既にあります` : null) });
+  name = await ask($('file-btn'), { title: 'このファイルを読み込む名前', value: name, okLabel: '読み込む', validate: (v) => validDbName(v) || (state.dbs.includes(v) ? `「${v}」は既にあります` : null) });
   if (!name) return;
   try {
     store.removeDb(name);
@@ -338,31 +349,52 @@ function dbMenu(anchor) {
   if (state.dbName) {
     items.push('-', { header: state.dbName },
       { label: '書き出し（.sqlite）', icon: '⤓', action: exportCurrent },
-      { label: '名前を変更…', icon: '✎', action: renameDb },
+      { label: '名前を変更…', icon: '✎', action: () => { $('db-name').focus(); $('db-name').select(); } },
       { label: '複製…', icon: '⧉', action: copyDb },
       { label: '削除…', icon: '🗑', danger: true, action: deleteDb });
   }
   menu(anchor, items);
 }
 
-async function renameDb() {
-  const from = state.dbName;
-  const to = await ask($('db-btn'), { title: 'データベースの名前を変更', value: from, okLabel: '変更', validate: (v) => validDbName(v) || (v !== from && state.dbs.includes(v) ? `「${v}」は既にあります` : null) });
-  if (!to || to === from) return;
+// ◆：ホーム（DB の一覧）へ。DB の移動なので履歴に積む（「戻る」で元の DB に戻れる）
+async function goHome() {
+  if (!state.dbName) return;
+  if (state.grid && !(await state.grid.flushDraft())) return;
+  history.pushState(null, '', urlOf(null));
+  showWelcome();
+}
+
+// DB 名の入力欄で確定したとき。だめな名前なら知らせて元に戻す
+let renaming = false;
+async function commitDbName(value) {
+  const from = state.dbName, to = value.trim(), input = $('db-name');
+  if (!from || renaming) return;
+  const err = to === from ? null : validDbName(to) || (state.dbs.includes(to) ? `「${to}」は既にあります` : null);
+  if (to === from || err) {
+    if (err) toast(err, 'error');
+    input.value = from;
+    return;
+  }
+  renaming = true;
   try {
+    // 未保存の新しい行は先に保存（失敗したら名前は変えない）
+    if (state.grid && !(await state.grid.flushDraft())) { input.value = from; return; }
     await db.rename(from, to);
     store.renameDb(from, to);
     state.dbs = await db.list();
+    // 名前を変えただけなので履歴は置き換える（「戻る」で古い名前の URL に戻らない）
+    history.replaceState(null, '', urlOf(to, state.key));
     state.dbName = null;
     await openDb(to, state.key);
-  } catch (e) { toast(friendlyError(e.message), 'error'); await openDb(from); }
+  } catch (e) { toast(friendlyError(e.message), 'error'); input.value = from; await openDb(from); }
+  finally { renaming = false; }
 }
 
 async function copyDb() {
   const from = state.dbName;
   let def = `${from} のコピー`, i = 2;
   while (state.dbs.includes(def)) def = `${from} のコピー ${i++}`;
-  const to = await ask($('db-btn'), { title: '複製先の名前', value: def, okLabel: '複製', validate: (v) => validDbName(v) || (state.dbs.includes(v) ? `「${v}」は既にあります` : null) });
+  const to = await ask($('file-btn'), { title: '複製先の名前', value: def, okLabel: '複製', validate: (v) => validDbName(v) || (state.dbs.includes(v) ? `「${v}」は既にあります` : null) });
   if (!to) return;
   try {
     await db.copy(from, to);

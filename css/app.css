@@ -118,15 +118,21 @@ select.input { padding-right: 4px; }
   height: 48px; padding: 0 10px;
   background: var(--surface); border-bottom: 1px solid var(--line);
 }
-.db-btn {
-  display: flex; align-items: center; gap: 8px; height: 32px; max-width: 240px;
-  padding: 0 10px; border: 1px solid transparent; border-radius: 8px; background: none;
-  font-weight: 650; font-size: 14px;
+.home-btn {
+  flex: none; width: 32px; height: 32px; border: 0; border-radius: 8px; background: none;
+  color: var(--accent); font-size: 16px; cursor: pointer;
 }
-.db-btn:hover { background: var(--surface-2); }
-.db-btn #db-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.db-icon { color: var(--accent); font-size: 12px; }
+.home-btn:hover { background: var(--surface-2); }
+.db-name {
+  flex: 0 1 auto; min-width: 3em; max-width: 240px; field-sizing: content; height: 32px;
+  margin-left: -6px; padding: 0 6px; border: 1px solid transparent; border-radius: 6px; background: none;
+  color: var(--text); font: inherit; font-weight: 650; font-size: 14px; text-overflow: ellipsis;
+}
+.db-name:hover { border-color: var(--line); }
+.db-name:focus { border-color: var(--accent); background: var(--surface); outline: none; box-shadow: 0 0 0 3px var(--sel); }
+.file-btn { flex: none; }
 .caret { color: var(--text-3); font-size: 10px; }
+.db-icon { color: var(--accent); font-size: 12px; }
 .fx {
   flex: 1; display: flex; align-items: center; min-width: 0; height: 32px;
   border: 1px solid var(--line); border-radius: 8px; background: var(--surface-2); overflow: hidden;
@@ -509,6 +515,11 @@ body.dropping::after {
   .panel { position: fixed; inset: 48px 0 38px auto; width: min(400px, 100vw); z-index: 20; box-shadow: var(--shadow); }
   .fx-ref { display: none; }
   .tool-btn { padding: 0 6px; }
+  /* 上部バーを画面幅に収める */
+  .topbar { gap: 4px; padding: 0 6px; }
+  .home-btn { width: 28px; }
+  .db-name { max-width: 30vw; }
+  .file-btn .caret, .top-actions .vsep { display: none; }
   /* 縦並び。コンソールが低くても結果・実行履歴の欄が潰れないよう、入力欄は高さの 4 割まで */
   .console { min-height: 240px; }
   .console-body { grid-template-columns: 1fr; grid-template-rows: minmax(56px, 40%) minmax(0, 1fr); }
