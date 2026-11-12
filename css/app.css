@@ -672,3 +672,38 @@ body.dropping::after {
 .home-sort { height: 26px; font-size: 12px; color: var(--text-2); }
 .home-cols { display: flex; justify-content: space-between; padding: 6px 48px 6px 34px; color: var(--text-3); font-size: 11px; border-bottom: 1px solid var(--line); }
 .home-row-time { flex: none; color: var(--text-3); font-size: 12px; font-weight: 400; }
+
+/* スマホのホーム：上部は浮いた角丸の検索窓（内側の左に ☰）。説明文とボタンの列は ☰ のメニューへ */
+.home-menu-btn, .narrow-only { display: none; }
+@media (max-width: 760px) { .wide-only { display: none; } .narrow-only { display: inline; } }
+@media (max-width: 760px) {
+  body.at-home .topbar { height: auto; padding: 8px 12px; background: var(--bg); border-bottom: 0; }
+  body.at-home .workspace { padding-top: 64px; }
+  body.at-home .home-btn, body.at-home .app-title { display: none; }
+  body.at-home .db-search {
+    flex: 1; margin: 0; display: flex; align-items: center; height: 48px; padding: 0 4px;
+    background: var(--surface); border-radius: 24px; box-shadow: var(--shadow);
+  }
+  body.at-home .home-menu-btn { display: grid; place-items: center; flex: none; width: 40px; height: 40px; font-size: 18px; color: var(--text-2); }
+  body.at-home .db-search-input { flex: 1; height: 40px; border: 0; background: none; padding: 0 8px; box-shadow: none !important; }
+  body.at-home .db-search-list { top: calc(100% + 6px); }
+  body.at-home .home-head, body.at-home .home-tools { display: none; }
+  body.at-home .welcome { padding-top: 8px; }
+  body.at-home .home-section { margin-top: 0; }
+}
+.drawer-wrap { position: fixed; inset: 0; z-index: 150; background: rgba(0, 0, 0, 0); transition: background .2s; }
+.drawer-wrap.open { background: rgba(0, 0, 0, .4); }
+.drawer {
+  position: absolute; top: 0; bottom: 0; left: 0; width: min(300px, 82vw); display: flex; flex-direction: column;
+  padding: 12px 8px; background: var(--surface); box-shadow: var(--shadow);
+  transform: translateX(-100%); transition: transform .2s ease-out;
+}
+.drawer-wrap.open .drawer { transform: none; }
+.drawer-head { display: flex; align-items: center; gap: 10px; padding: 12px 12px 16px; font-weight: 700; font-size: 16px; }
+.drawer-item {
+  display: flex; align-items: center; gap: 12px; height: 48px; padding: 0 12px; border: 0; border-radius: 24px;
+  background: none; color: var(--text); font: inherit; font-size: 15px; text-align: left; cursor: pointer;
+}
+.drawer-item:hover, .drawer-item:active { background: var(--surface-2); }
+.drawer-item .mi-icon { width: 24px; text-align: center; }
+.drawer-foot { margin-top: auto; padding: 12px; color: var(--text-3); font-size: 11px; }

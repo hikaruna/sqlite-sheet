@@ -157,6 +157,8 @@ function buildChrome() {
       // ホームでだけ出す：アプリ名と、DB を名前で探して開く検索窓
       el('span.app-title.home-only', 'SQLiteシート'),
       el('div.db-search.home-only',
+        // スマホだけ：検索窓の内側の左に、操作をまとめたメニュー（左から出る）を開くボタン
+        el('button.icon-btn.home-menu-btn', { title: 'メニュー', 'aria-label': 'メニュー', on: { click: homeDrawer } }, '☰'),
         el('input#db-search.db-search-input', {
           type: 'search', placeholder: 'データベースを検索', spellcheck: false, autocomplete: 'off',
           'aria-label': 'データベースを検索', role: 'combobox', 'aria-expanded': 'false', 'aria-controls': 'db-search-list',
@@ -322,7 +324,7 @@ function showWelcome() {
               title: `「${n}」の操作`, 'aria-label': `「${n}」の操作`,
               on: { click: (e) => menu(e.currentTarget, dbActions(n, { anchor: e.currentTarget, home: true }), { align: 'end' }) },
             }, '⋯'))))
-          : el('p.home-empty', 'まだデータベースがありません。上の「＋ 新規作成」か「✨ サンプル」から始めましょう。')),
+          : el('p.home-empty', 'まだデータベースがありません。', el('span.wide-only', '上の「＋ 新規作成」か「✨ サンプル」から始めましょう。'), el('span.narrow-only', '左上の ☰ から「新規作成」か「サンプル」を選んで始めましょう。'))),
       el('footer.home-foot', $('version').textContent))));
 }
 
@@ -345,6 +347,32 @@ function sortMenu(anchor) {
     label, icon: k === cur ? '✓' : '',
     action: () => { try { localStorage.setItem('home-sort', k); } catch { /* 無視 */ } showWelcome(); },
   })), { align: 'end' });
+}
+
+// スマホのホーム：左から出るメニュー。ホームの操作を一通りここから選べる
+function homeDrawer() {
+  const pickImport = async () => { const f = await pickFile('.sqlite,.sqlite3,.db,application/x-sqlite3'); if (f) importFile(f); };
+  const items = [
+    { label: '新規作成', icon: '＋', run: newDb },
+    { label: '取り込む', icon: '⤒', run: pickImport },
+    { label: 'サンプル', icon: '✨', run: makeSample },
+    files.supported ? { label: 'ローカルファイルを直接編集…', icon: '📂', run: fileModeDialog } : null,
+  ].filter(Boolean);
+  const close = () => {
+    wrap.classList.remove('open');
+    removeEventListener('keydown', onKey);
+    setTimeout(() => wrap.remove(), 200);
+  };
+  const onKey = (e) => { if (e.key === 'Escape') close(); };
+  const wrap = el('div.drawer-wrap', { on: { click: (e) => { if (e.target === wrap) close(); } } },
+    el('nav.drawer', { 'aria-label': 'メニュー' },
+      el('div.drawer-head', el('span.home-row-icon', '◆'), el('span', 'SQLiteシート')),
+      ...items.map((it) => el('button.drawer-item', { on: { click: () => { close(); it.run(); } } },
+        el('span.mi-icon', it.icon), el('span', it.label))),
+      el('div.drawer-foot', $('version').textContent)));
+  document.body.append(wrap);
+  addEventListener('keydown', onKey);
+  requestAnimationFrame(() => wrap.classList.add('open'));
 }
 
 // ホームの検索窓：入力に合う DB をプルダウンで出し、選ぶと開く
