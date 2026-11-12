@@ -524,6 +524,14 @@ select.input { padding-right: 4px; }
 /* ホームではシート用の上下のバーを出さない */
 /* 上部バー：ホームではアプリ名と検索窓だけ。シートの道具と下のバーは隠す */
 body:not(.at-home) .home-only { display: none; }
+/* ホームはページ全体をスクロールさせる（中の要素だけがスクロールすると、スマホで引っ張って更新できない） */
+body.at-home { height: auto; min-height: 100%; overflow: visible; }
+body.at-home #app { height: auto; min-height: 100%; }
+/* 上部バーは画面に固定する（sticky だと、引っ張ったときにページと一緒に下がってしまう） */
+body.at-home .topbar { position: fixed; top: 0; left: 0; right: 0; z-index: 10; }
+body.at-home .workspace { padding-top: 48px; }
+body.at-home .workspace, body.at-home .sheet, body.at-home .grid-host { display: block; }
+body.at-home .welcome { position: static; overflow: visible; min-height: calc(100vh - 48px); }
 body.at-home .topbar > :not(.home-btn, .home-only), body.at-home .bottombar { display: none; }
 .app-title { flex: none; font-weight: 700; font-size: 15px; }
 .db-search { position: relative; flex: 0 1 320px; margin-left: auto; }
