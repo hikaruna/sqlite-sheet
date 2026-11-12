@@ -10,6 +10,9 @@
   --text-3: #8b939d;
   --accent: #1a7f5a;
   --accent-soft: #e3f3ec;
+  /* 未確定の変更（設計パネルの未適用・トランザクション中の変更） */
+  --pending: #b7791f;
+  --pending-soft: #fdf4e3;
   --accent-line: #8fd0b4;
   --sel: rgba(26, 127, 90, 0.10);
   --danger: #c4372f;
@@ -36,6 +39,8 @@
     --text-3: #77808a;
     --accent: #3cc28d;
     --accent-soft: #1d3a2f;
+    --pending: #e0a84a;
+    --pending-soft: #3a2f1c;
     --accent-line: #2f8d68;
     --sel: rgba(60, 194, 141, 0.14);
     --danger: #ff6b61;
@@ -342,7 +347,16 @@ select.input { padding-right: 4px; }
   display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-top: 1px solid var(--line);
   font-size: 12px; color: var(--text-3);
 }
-.dp-foot.dirty { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+.dp-foot.dirty { background: var(--pending-soft); color: var(--pending); font-weight: 600; box-shadow: inset 3px 0 0 var(--pending); }
+/* 未確定の印：左の琥珀色の帯＋薄い色。変えた項目は琥珀色の枠 */
+.dp-col.pending, .dp-sec.pending { box-shadow: inset 3px 0 0 var(--pending); background: var(--pending-soft); }
+.dp-sec.pending { padding-left: 10px; padding-top: 8px; border-radius: 6px; }
+.pend-field.input, .pend-field.input:focus { border-color: var(--pending); box-shadow: 0 0 0 1px var(--pending); }
+.chk.pend-field { color: var(--pending); font-weight: 700; }
+.pend-tag { flex: none; padding: 0 5px; border: 1px solid var(--pending); border-radius: 4px; color: var(--pending); font-size: 10.5px; font-weight: 600; line-height: 16px; }
+.dp-col.deleted .dp-col-main { gap: 8px; padding-left: 12px; min-height: 36px; }
+.col-name-del { text-decoration: line-through; color: var(--text-3); }
+.dp-tab.has-pending::after { content: '●'; margin-left: 4px; color: var(--pending); font-size: 8px; vertical-align: 2px; }
 .dp-cols { display: grid; gap: 4px; }
 .dp-col { border: 1px solid var(--line); border-radius: 8px; background: var(--surface); }
 .dp-col.open { border-color: var(--line-strong); box-shadow: 0 1px 4px rgba(0,0,0,.05); }
