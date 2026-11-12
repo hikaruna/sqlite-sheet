@@ -278,19 +278,25 @@ function showWelcome() {
   $('sheet-head').replaceChildren();
   $('panel').hidden = true;
   setUrl();
+  const pickImport = async () => { const f = await pickFile('.sqlite,.sqlite3,.db,application/x-sqlite3'); if (f) importFile(f); };
+  // 操作はすべて一覧より上に置く（一覧が長くなっても埋もれない）
   $('grid-host').replaceChildren(el('div.welcome',
-    el('div.welcome-card',
-      el('h1', 'SQLiteシート'),
-      el('p.lead', 'スプレッドシートの手軽さで、正規化された SQLite データベースを。'),
-      el('p.muted', 'すべてブラウザの中で動き、データはこの端末（OPFS）に保存されます。'),
-      el('div.welcome-actions',
-        el('button.btn.primary.lg', { on: { click: newDb } }, '＋ 新しいデータベース'),
-        el('button.btn.lg', { on: { click: async () => { const f = await pickFile('.sqlite,.sqlite3,.db,application/x-sqlite3'); if (f) importFile(f); } } }, '📂 ファイルを開く'),
-        el('button.btn.lg', { on: { click: makeSample } }, '✨ サンプルで試す')),
-      state.dbs.length ? el('div.welcome-list',
+    el('div.home',
+      el('header.home-head',
+        el('h1', 'SQLiteシート'),
+        el('p.lead', 'スプレッドシートの手軽さで、SQLite データベースを。')),
+      el('div.home-tools',
+        el('button.btn.primary', { title: '空のデータベースを作る', on: { click: newDb } }, '＋ 新規作成'),
+        el('button.btn', { title: '.sqlite ファイルをデータベースとして取り込む（ドラッグ＆ドロップでも可）', on: { click: pickImport } }, '⤒ 取り込む'),
+        el('button.btn', { title: 'サンプルのデータベースを作る', on: { click: makeSample } }, '✨ サンプル'),
+        files.supported ? el('button.btn', { title: 'パソコンの .sqlite ファイルをそのまま開いて編集する', on: { click: fileModeDialog } }, '📂 ローカルファイルを直接編集…') : null),
+      el('section.home-section',
         el('h2', 'データベース'),
-        state.dbs.map((n) => el('button.welcome-db', { on: { click: () => openDb(n) } }, el('span.db-icon', '◆'), n))) : null,
-      el('p.muted.sm', '.sqlite ファイルをこの画面にドラッグ＆ドロップしても開けます。'))));
+        state.dbs.length
+          ? el('div.home-list', state.dbs.map((n) => el('div.home-item',
+            el('button.home-row', { title: `「${n}」を開く`, on: { click: () => openDb(n) } },
+              el('span.home-row-icon', '◆'), el('span.home-row-name', n)))))
+          : el('p.home-empty', 'まだデータベースがありません。上の「＋ 新規作成」か「✨ サンプル」から始めましょう。')))));
 }
 
 // 「ローカルファイルを直接編集」：主のモードとは別のモードなので、説明と入口をこのダイアログにまとめる（履歴には積まない）

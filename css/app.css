@@ -495,19 +495,29 @@ select.input { padding-right: 4px; }
 .toast.success { background: var(--accent); color: #fff; }
 .toast.out { opacity: 0; }
 
-/* ---------- ようこそ・空状態 ---------- */
-.welcome { position: absolute; inset: 0; overflow: auto; display: grid; place-items: center; padding: 32px 16px; background: var(--bg); }
-.welcome-card { width: min(560px, 100%); }
-.welcome h1 { font-size: 28px; margin: 0 0 8px; letter-spacing: -.01em; }
-.lead { font-size: 15px; color: var(--text-2); margin: 0 0 4px; }
-.welcome-actions { display: flex; flex-wrap: wrap; gap: 10px; margin: 24px 0 28px; }
-.welcome-list h2 { font-size: 12px; color: var(--text-3); margin: 0 0 8px; }
-.welcome-list { display: grid; gap: 4px; margin-bottom: 24px; }
-.welcome-db {
-  display: flex; align-items: center; gap: 10px; height: 40px; padding: 0 14px; border: 1px solid var(--line);
-  border-radius: 8px; background: var(--surface); text-align: left; font-size: 14px;
+/* ---------- ホーム・空状態 ---------- */
+.welcome { position: absolute; inset: 0; overflow: auto; padding: 48px 16px 32px; background: var(--bg); }
+.home { width: min(640px, 100%); margin: 0 auto; display: grid; gap: 16px; }
+.home-head { margin-bottom: 8px; }
+.home-head h1 { font-size: 28px; margin: 0 0 6px; letter-spacing: -.01em; }
+.lead { font-size: 15px; color: var(--text-2); margin: 0; }
+.home-tools { display: flex; flex-wrap: wrap; gap: 8px; }
+.home-tools .btn { height: 36px; padding: 0 14px; }
+.home-section { margin-top: 20px; }
+.home-section h2 { margin: 0 0 6px; padding: 0 12px; color: var(--text-3); font-size: 12px; font-weight: 600; }
+/* 区切り線のリスト */
+.home-list { border-top: 1px solid var(--line); }
+.home-item { display: flex; align-items: center; border-bottom: 1px solid var(--line); }
+.home-item:hover { background: var(--surface); }
+.home-row {
+  flex: 1; min-width: 0; display: flex; align-items: center; gap: 10px; height: 44px; padding: 0 12px;
+  border: 0; background: none; color: var(--text); text-align: left; font-size: 14px; cursor: pointer;
 }
-.welcome-db:hover { border-color: var(--accent); }
+.home-row:hover .home-row-name { color: var(--accent); }
+.home-row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; border-radius: 4px; }
+.home-row-icon { flex: none; color: var(--accent); font-size: 11px; }
+.home-row-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 550; }
+.home-empty { margin: 0; padding: 20px 12px; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); color: var(--text-3); font-size: 13px; }
 /* ローカルファイルを直接編集のダイアログ */
 .file-mode-notes { margin: 0 0 16px; padding-left: 1.2em; color: var(--text-2); font-size: 13px; line-height: 1.7; }
 .file-mode-pick { height: 38px; padding: 0 16px; }
@@ -529,6 +539,9 @@ select.input { padding-right: 4px; }
   display: grid; justify-items: start; gap: 2px; height: auto; padding: 8px 14px; text-align: left; line-height: 1.3;
 }
 .btn-hint { font-size: 12px; font-weight: 400; opacity: .85; }
+@media (max-width: 560px) {
+  .welcome { padding-top: 28px; }
+}
 .empty-db { position: absolute; inset: 0; display: grid; place-content: center; justify-items: center; gap: 4px; text-align: center; }
 .empty-db h2 { margin: 0; font-size: 18px; }
 .empty-db .row-gap { margin-top: 14px; }
