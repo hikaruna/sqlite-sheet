@@ -154,6 +154,15 @@ function buildChrome() {
     el('header.topbar',
       // 左上：アイコン＝ホーム（DB の一覧）、DB 名＝その場で名前を変更、ファイル＝DB の操作メニュー
       el('button#home-btn.home-btn', { title: 'ホーム（データベースの一覧）', on: { click: goHome } }, '◆'),
+      // ホームでだけ出す：アプリ名と、DB を名前で探して開く検索窓
+      el('span.app-title.home-only', 'SQLiteシート'),
+      el('div.db-search.home-only',
+        el('input#db-search.db-search-input', {
+          type: 'search', placeholder: 'データベースを検索', spellcheck: false, autocomplete: 'off',
+          'aria-label': 'データベースを検索', role: 'combobox', 'aria-expanded': 'false', 'aria-controls': 'db-search-list',
+          on: { input: renderSearch, focus: renderSearch, keydown: onSearchKey, blur: () => setTimeout(hideSearch, 150) },
+        }),
+        el('div#db-search-list.db-search-list', { role: 'listbox', hidden: true })),
       el('input#db-name.db-name', {
         hidden: true, spellcheck: false, title: 'クリックして名前を変更',
         on: {
@@ -222,7 +231,7 @@ function onGlobalKey(e) {
     else if (state.dbName) toast('データベースは、変更のたびに自動で保存されています');
     return;
   }
-  if (modKey(e) && e.key === '`') { e.preventDefault(); toggleConsole(); return; }
+  if (modKey(e) && e.key === '`') { e.preventDefault(); if (state.dbName) toggleConsole(); return; }
   if (modKey(e) && e.key.toLowerCase() === 'k') { e.preventDefault(); palette(); return; }
   const inField = e.target.closest?.('input, textarea, select, [contenteditable]') && !e.target.classList.contains('grid-sink');
   if (!inField && modKey(e) && e.key.toLowerCase() === 'z' && !e.target.classList?.contains('grid-sink')) {
@@ -269,6 +278,8 @@ function toggleConsole(force) {
 // ようこそ画面
 // ======================================================================
 function showWelcome() {
+  document.body.classList.add('at-home'); // ホームでは上部バーをホーム用（アプリ名・検索）にし、下のバーを隠す
+  sqlConsole?.toggle(false);
   if (state.file) db.close().catch(() => {}); // 未保存の確認は呼ぶ側で済ませている
   state.dbName = null; state.key = null; state.grid = null; state.source = null; state.model = null;
   state.file = null; setDirty(false);
@@ -280,10 +291,10 @@ function showWelcome() {
   setUrl();
   const pickImport = async () => { const f = await pickFile('.sqlite,.sqlite3,.db,application/x-sqlite3'); if (f) importFile(f); };
   // 操作はすべて一覧より上に置く（一覧が長くなっても埋もれない）
+  $('db-search').value = ''; hideSearch();
   $('grid-host').replaceChildren(el('div.welcome',
     el('div.home',
       el('header.home-head',
-        el('h1', 'SQLiteシート'),
         el('p.lead', 'スプレッドシートの手軽さで、SQLite データベースを。')),
       el('div.home-tools',
         el('button.btn.primary', { title: '空のデータベースを作る', on: { click: newDb } }, '＋ 新規作成'),
@@ -300,7 +311,38 @@ function showWelcome() {
               title: `「${n}」の操作`, 'aria-label': `「${n}」の操作`,
               on: { click: (e) => menu(e.currentTarget, dbActions(n, { anchor: e.currentTarget, home: true }), { align: 'end' }) },
             }, '⋯'))))
-          : el('p.home-empty', 'まだデータベースがありません。上の「＋ 新規作成」か「✨ サンプル」から始めましょう。')))));
+          : el('p.home-empty', 'まだデータベースがありません。上の「＋ 新規作成」か「✨ サンプル」から始めましょう。')),
+      el('footer.home-foot', $('version').textContent))));
+}
+
+// ホームの検索窓：入力に合う DB をプルダウンで出し、選ぶと開く
+let searchHits = [], searchSel = 0;
+function renderSearch() {
+  const input = $('db-search'), list = $('db-search-list');
+  const q = input.value.trim().toLowerCase();
+  searchHits = q ? state.dbs.filter((n) => n.toLowerCase().includes(q)) : [];
+  searchSel = Math.min(searchSel, Math.max(0, searchHits.length - 1));
+  if (!q) { hideSearch(); return; }
+  list.replaceChildren(...(searchHits.length
+    ? searchHits.map((n, i) => el('button.db-search-item' + (i === searchSel ? '.active' : ''), {
+      role: 'option', 'aria-selected': String(i === searchSel), tabIndex: -1,
+      on: { mousedown: (e) => e.preventDefault(), click: () => pickSearch(n) },
+    }, el('span.home-row-icon', '◆'), el('span', n)))
+    : [el('div.db-search-none', '見つかりません')]));
+  list.hidden = false; input.setAttribute('aria-expanded', 'true');
+}
+function hideSearch() { $('db-search-list').hidden = true; $('db-search').setAttribute('aria-expanded', 'false'); }
+function pickSearch(n) { $('db-search').value = ''; hideSearch(); $('db-search').blur(); openDb(n); }
+function onSearchKey(e) {
+  if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+    e.preventDefault();
+    if (searchHits.length) { searchSel = (searchSel + (e.key === 'ArrowDown' ? 1 : -1) + searchHits.length) % searchHits.length; renderSearch(); }
+  } else if (e.key === 'Enter') {
+    e.preventDefault();
+    if (searchHits[searchSel]) pickSearch(searchHits[searchSel]);
+  } else if (e.key === 'Escape') {
+    e.preventDefault(); e.target.value = ''; hideSearch();
+  } else searchSel = 0;
 }
 
 // 「ローカルファイルを直接編集」：主のモードとは別のモードなので、説明と入口をこのダイアログにまとめる（履歴には積まない）
@@ -357,6 +399,7 @@ async function openDb(name, key, param) {
 // DB を開いた直後の画面づくり（データベース・ローカルファイル共通）
 async function showDb(key, param) {
   const name = state.dbName;
+  document.body.classList.remove('at-home');
   state.views = new Map();
   state.key = null;
   undo.clear();
