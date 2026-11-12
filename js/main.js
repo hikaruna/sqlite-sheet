@@ -295,7 +295,11 @@ function showWelcome() {
         state.dbs.length
           ? el('div.home-list', state.dbs.map((n) => el('div.home-item',
             el('button.home-row', { title: `「${n}」を開く`, on: { click: () => openDb(n) } },
-              el('span.home-row-icon', '◆'), el('span.home-row-name', n)))))
+              el('span.home-row-icon', '◆'), el('span.home-row-name', n)),
+            el('button.icon-btn.home-more', {
+              title: `「${n}」の操作`, 'aria-label': `「${n}」の操作`,
+              on: { click: (e) => menu(e.currentTarget, dbActions(n, { anchor: e.currentTarget, home: true }), { align: 'end' }) },
+            }, '⋯'))))
           : el('p.home-empty', 'まだデータベースがありません。上の「＋ 新規作成」か「✨ サンプル」から始めましょう。')))));
 }
 
@@ -609,12 +613,12 @@ async function importFile(file) {
 }
 
 // データベースをファイルに書き出す。保存先を選べるブラウザでは選んでもらう
-async function exportCurrent() {
-  const filename = `${state.dbName}.sqlite`;
+async function exportCurrent(name = state.dbName) {
+  const filename = `${name}.sqlite`;
   try {
-    if (state.grid && !(await state.grid.flushDraft())) return;
+    if (name === state.dbName && state.grid && !(await state.grid.flushDraft())) return;
     if (typeof window.showSaveFilePicker !== 'function') {
-      download(await db.exportDb(state.dbName), filename, 'application/x-sqlite3');
+      download(await db.exportDb(name), filename, 'application/x-sqlite3');
       return;
     }
     let handle;
@@ -622,11 +626,25 @@ async function exportCurrent() {
       if (e.name === 'AbortError') return;
       throw e;
     }
-    const bytes = await db.exportDb(state.dbName);
+    const bytes = await db.exportDb(name);
     const w = await handle.createWritable();
     await w.write(bytes); await w.close();
     toast(`「${handle.name}」に書き出しました`, 'success');
   } catch (e) { toast(friendlyError(e.message), 'error'); }
+}
+
+/**
+ * あるデータベースに対する操作。ホームの「⋯」と、シート画面の「ファイル ▾」で同じものを使う。
+ * home なら「開く」を加え、名前の変更はポップオーバーで尋ねる（シート画面では DB 名の欄で直接変える）
+ */
+function dbActions(name, { anchor, home = false } = {}) {
+  return [
+    home ? { label: '開く', icon: '↗', action: () => openDb(name) } : null,
+    { label: 'ファイルに書き出す…', icon: '⤓', action: () => exportCurrent(name) },
+    { label: '名前を変更…', icon: '✎', action: () => (home ? renameDbAsk(name, anchor) : (() => { $('db-name').focus(); $('db-name').select(); })()) },
+    { label: '複製…', icon: '⧉', action: () => copyDb(name, anchor) },
+    { label: '削除…', icon: '🗑', danger: true, action: () => deleteDb(name) },
+  ].filter(Boolean);
 }
 
 function dbMenu(anchor) {
@@ -638,11 +656,7 @@ function dbMenu(anchor) {
       { label: 'データベースとして取り込む…', icon: '⤒', action: importFileToBrowser },
       { label: 'ファイルを閉じる', icon: '✕', action: closeFile }, '-');
   } else if (state.dbName) {
-    items.push({ header: `◆ ${state.dbName}` },
-      { label: 'ファイルに書き出す…', icon: '⤓', action: exportCurrent },
-      { label: '名前を変更…', icon: '✎', action: () => { $('db-name').focus(); $('db-name').select(); } },
-      { label: '複製…', icon: '⧉', action: copyDb },
-      { label: '削除…', icon: '🗑', danger: true, action: deleteDb }, '-');
+    items.push({ header: `◆ ${state.dbName}` }, ...dbActions(state.dbName, { anchor }), '-');
   }
   items.push({ header: 'データベース' });
   for (const n of state.dbs) items.push({ label: n, icon: n === state.dbName ? '✓' : '◆', action: () => { if (n !== state.dbName) openDb(n); } });
@@ -687,32 +701,47 @@ async function commitDbName(value) {
   finally { renaming = false; }
 }
 
-async function copyDb() {
-  const from = state.dbName;
+// ホームの「⋯」から名前を変える（開いていない DB）
+async function renameDbAsk(from, anchor) {
+  const to = await ask(anchor, {
+    title: '新しい名前', value: from, okLabel: '変更',
+    validate: (v) => (v === from ? null : validDbName(v) || (state.dbs.includes(v) ? `「${v}」は既にあります` : null)),
+  });
+  if (!to || to === from) return;
+  try {
+    await db.rename(from, to);
+    store.renameDb(from, to);
+    state.dbs = await db.list();
+    showWelcome();
+    toast(`「${from}」を「${to}」に変更しました`);
+  } catch (e) { toast(friendlyError(e.message), 'error'); }
+}
+
+// 複製。シート画面からなら複製を開き、ホームからなら一覧に加えるだけ
+async function copyDb(from = state.dbName, anchor = $('file-btn')) {
+  const opened = from === state.dbName;
   let def = `${from} のコピー`, i = 2;
   while (state.dbs.includes(def)) def = `${from} のコピー ${i++}`;
-  const to = await ask($('file-btn'), { title: '複製先の名前', value: def, okLabel: '複製', validate: (v) => validDbName(v) || (state.dbs.includes(v) ? `「${v}」は既にあります` : null) });
+  const to = await ask(anchor, { title: '複製先の名前', value: def, okLabel: '複製', validate: (v) => validDbName(v) || (state.dbs.includes(v) ? `「${v}」は既にあります` : null) });
   if (!to) return;
   try {
     await db.copy(from, to);
     requestPersist();
     store.copyDb(from, to);
     state.dbs = await db.list();
-    state.dbName = null;
-    await openDb(to);
+    if (opened) { state.dbName = null; await openDb(to); } else showWelcome();
     toast(`「${to}」を作成しました`, 'success');
   } catch (e) { toast(friendlyError(e.message), 'error'); }
 }
 
-async function deleteDb() {
-  const name = state.dbName;
+async function deleteDb(name = state.dbName) {
   if (!await confirmDialog({ title: `「${name}」を削除しますか？`, body: 'データベースのすべてのデータが失われ、元に戻せません。必要なら先に書き出してください。', okLabel: '削除', danger: true })) return;
   try {
     await db.remove(name);
     store.removeDb(name);
     state.dbs = await db.list();
     toast(`「${name}」を削除しました`);
-    state.dbName = null;
+    if (name === state.dbName) state.dbName = null;
     showWelcome();
   } catch (e) { toast(friendlyError(e.message), 'error'); }
 }
@@ -1683,7 +1712,7 @@ function palette() {
     { label: '新しいクエリ', icon: '＋', run: () => newQuery() },
     { label: 'SQL コンソールを開く', icon: '⌨', run: () => toggleConsole(true) },
     state.model ? { label: 'テーブルの設計を開く', icon: '⚙', run: () => togglePanel(true) } : null,
-    state.file ? null : { label: 'DB をファイルに書き出す', icon: '⤓', run: exportCurrent },
+    state.file ? null : { label: 'DB をファイルに書き出す', icon: '⤓', run: () => exportCurrent() },
     { label: 'CSV からテーブルを作成', icon: '⤒', run: importCsv },
     state.file ? { label: 'ファイルに保存', icon: '💾', run: () => saveFile() } : null,
     ...state.dbs.filter((n) => n !== state.dbName).map((n) => ({ label: n, hint: 'DB を開く', icon: '◆', run: () => openDb(n) })),

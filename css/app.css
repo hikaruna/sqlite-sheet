@@ -517,6 +517,9 @@ select.input { padding-right: 4px; }
 .home-row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; border-radius: 4px; }
 .home-row-icon { flex: none; color: var(--accent); font-size: 11px; }
 .home-row-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 550; }
+.home-more { flex: none; margin-right: 6px; color: var(--text-3); opacity: .55; }
+.home-item:hover .home-more, .home-more:focus-visible { opacity: 1; }
+@media (hover: none) { .home-more { opacity: 1; } }
 .home-empty { margin: 0; padding: 20px 12px; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); color: var(--text-3); font-size: 13px; }
 /* ローカルファイルを直接編集のダイアログ */
 .file-mode-notes { margin: 0 0 16px; padding-left: 1.2em; color: var(--text-2); font-size: 13px; line-height: 1.7; }
