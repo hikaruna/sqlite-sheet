@@ -132,6 +132,8 @@ function exportDb(name) {
 async function importDb(name, bytes) {
   if (name === currentName) close();
   await pool.reserveMinimumCapacity(pool.getFileNames().length + 4);
+  // 作ったばかりでまだ何も書いていない DB は 0 バイト。importDb は受け付けないので、空の DB として作る
+  if (!bytes.length) { new pool.OpfsSAHPoolDb(fileOf(name)).close(); return true; }
   await pool.importDb(fileOf(name), bytes);
   return true;
 }
