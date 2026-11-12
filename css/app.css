@@ -614,6 +614,8 @@ body.dropping::after {
   .grid-body, .gh-cell, .tabs { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
   /* キーボードが出たら、見える範囲に収める */
   #app { height: var(--vvh, 100%); }
+  /* iPhone は 16px 未満の入力欄をタップすると画面を拡大して戻さないので、入力欄の文字は 16px にする */
+  input, textarea, select, [contenteditable] { font-size: 16px !important; }
   .gr { height: 34px; }
   .gc { line-height: 33px; }
   .gh-resize { right: -10px; width: 20px; touch-action: none; }
