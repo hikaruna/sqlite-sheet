@@ -1321,6 +1321,18 @@ function gridHooks(kind) {
     onUndo: doUndo,
     onRedo: doRedo,
     onHeaderMenu: (c, anchor) => headerMenu(c, anchor),
+    // 列幅の変更も元に戻せるようにする（スプレッドシートと同じ）。別のシートに移っていたら保存値だけ戻す
+    onColumnWidth: (key, name, before, after) => {
+      const apply = (w) => {
+        if (state.grid?.source.widthKey === key) { state.grid.setColWidth(name, w); return; }
+        try {
+          const all = JSON.parse(localStorage.getItem('w:' + key) || '{}');
+          if (w == null) delete all[name]; else all[name] = w;
+          localStorage.setItem('w:' + key, JSON.stringify(all));
+        } catch { /* 無視 */ }
+      };
+      undo.push({ label: '列幅の変更', undoFn: () => apply(before), redoFn: () => apply(after) });
+    },
     onAddColumn: isTable ? (anchor) => quickAddColumn(anchor) : null,
     onContextMenu: (pos, range) => cellMenu(pos, range),
     onReadonlyEdit: (col) => toast(isTable ? (col ? `「${col.name}」は生成列のため編集できません` : '編集できません') : `${KIND_NAME[kind]}の結果は編集できません。元のテーブルで編集してください`),

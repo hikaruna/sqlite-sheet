@@ -219,6 +219,18 @@ export class Grid {
   saveWidths() {
     try { localStorage.setItem('w:' + this.source.widthKey, JSON.stringify(this.widths)); } catch { /* 無視 */ }
   }
+  /** 列幅を変える（undefined なら自動の幅に戻す）。元に戻す・やり直すからも呼ぶ */
+  setColWidth(name, w) {
+    if (w == null) delete this.widths[name]; else this.widths[name] = w;
+    this.saveWidths(); this.renderHeader(); this.render();
+  }
+
+  /** 列幅の変更を知らせる（元に戻すに積むため）。変わっていなければ何もしない */
+  emitWidth(name, before) {
+    const after = this.widths[name];
+    if (after !== before) this.hooks.onColumnWidth?.(this.source.widthKey, name, before, after);
+  }
+
   colW(c) { const col = this.cols[c]; return this.widths[col.name] ?? col.width ?? (col.width = autoWidth(col)); }
   colX(c) { let x = RHW; for (let i = 0; i < c; i++) x += this.colW(i); return x; }
   totalW() { return this.colX(this.cols.length) + (this.hooks.onAddColumn ? 48 : 0); }
@@ -281,7 +293,7 @@ export class Grid {
   startResize(e, c, kind) {
     if (e.button !== 0) return;
     e.preventDefault(); e.stopPropagation();
-    const startX = e.clientX, startW = this.colW(c);
+    const startX = e.clientX, startW = this.colW(c), name = this.cols[c].name, before = this.widths[name];
     const move = (ev) => {
       this.widths[this.cols[c].name] = Math.max(48, startW + (ev.clientX - startX) / this.z);
       this.renderHeader(); this.render();
@@ -289,6 +301,7 @@ export class Grid {
     const up = () => {
       removeEventListener(kind + 'move', move); removeEventListener(kind + 'up', up); removeEventListener('pointercancel', up);
       this.saveWidths();
+      this.emitWidth(name, before);
     };
     addEventListener(kind + 'move', move); addEventListener(kind + 'up', up); addEventListener('pointercancel', up);
   }

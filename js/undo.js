@@ -1,4 +1,5 @@
-// データ編集の Undo/Redo。各操作を「元に戻す SQL」と「やり直す SQL」の組で記録する
+// Undo/Redo。データの編集は「元に戻す SQL」と「やり直す SQL」の組で、
+// 列幅のような表示の変更は「元に戻す関数」と「やり直す関数」の組（undoFn / redoFn）で記録する
 import { db } from './db-client.js';
 
 const LIMIT = 200;
@@ -16,14 +17,14 @@ export const undo = {
   async undo() {
     const e = past.pop();
     if (!e) return null;
-    try { await db.batch(e.undo, 'undo'); } catch (err) { past.push(e); throw err; }
+    try { await (e.undoFn ? e.undoFn() : db.batch(e.undo, 'undo')); } catch (err) { past.push(e); throw err; }
     future.push(e); emit();
     return e.label;
   },
   async redo() {
     const e = future.pop();
     if (!e) return null;
-    try { await db.batch(e.redo, 'redo'); } catch (err) { future.push(e); throw err; }
+    try { await (e.redoFn ? e.redoFn() : db.batch(e.redo, 'redo')); } catch (err) { future.push(e); throw err; }
     past.push(e); emit();
     return e.label;
   },
