@@ -461,6 +461,8 @@ async function openDb(name, key, param) {
 async function showDb(key, param) {
   const name = state.dbName;
   document.body.classList.remove('at-home');
+  // ホームはページ全体がスクロールする。下までスクロールしたまま開くと、シート画面の上が切れて下が空くので一番上に戻す
+  window.scrollTo(0, 0);
   state.views = new Map();
   state.key = null;
   undo.clear();
