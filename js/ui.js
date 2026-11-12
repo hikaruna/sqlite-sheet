@@ -172,6 +172,40 @@ export function confirmDialog({ title, body, okLabel = 'OK', danger = false, cod
   });
 }
 
+/**
+ * 3つ以上の選択肢があるダイアログ。choices: [{label, value, hint?, primary?, danger?}]。
+ * 選んだ value（Esc は null）を返す
+ */
+export function choiceDialog({ title, body, choices }) {
+  return new Promise((resolve) => {
+    const dlg = el('dialog.modal');
+    const close = (v) => { dlg.close(); dlg.remove(); resolve(v); };
+    dlg.append(...[
+      el('h2', title),
+      body ? el('p', body) : null,
+      el('div.modal-actions.choice-actions', choices.map((c) => el('button.btn', {
+        class: c.danger ? 'danger' : c.primary ? 'primary' : '', autofocus: !!c.primary,
+        title: c.hint || '', on: { click: () => close(c.value ?? null) },
+      }, c.label, c.hint ? el('span.btn-hint', c.hint) : null))),
+    ].filter(Boolean));
+    dlg.addEventListener('cancel', (e) => { e.preventDefault(); close(null); });
+    document.body.append(dlg);
+    dlg.showModal();
+  });
+}
+
+/** 中身を自由に組むモーダル。{close} を返す（Esc・外側のクリックでも閉じる） */
+export function modal(children, { className = '' } = {}) {
+  const dlg = el('dialog.modal' + (className ? '.' + className : ''));
+  const close = () => { if (dlg.open) dlg.close(); dlg.remove(); };
+  dlg.append(...children.filter(Boolean));
+  dlg.addEventListener('cancel', (e) => { e.preventDefault(); close(); });
+  dlg.addEventListener('click', (e) => { if (e.target === dlg) close(); }); // 外側（::backdrop）のクリック
+  document.body.append(dlg);
+  dlg.showModal();
+  return { close };
+}
+
 /** ファイル選択 */
 export function pickFile(accept) {
   return new Promise((resolve) => {

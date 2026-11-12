@@ -2,6 +2,9 @@
 import sqlite3InitModule from 'https://cdn.jsdelivr.net/npm/@sqlite.org/sqlite-wasm@3.54.1-build1/dist/index.mjs';
 
 let sqlite3, pool, db = null, currentName = null;
+// 開いている DB の種類。'file' は端末のファイルをメモリに読み込んだもので、保存（save）したときだけファイルへ書く
+let kind = null, handle = null, dirty = false;
+let stamp = null; // 最後に読み書きしたときのファイルの { lastModified, size }。ほかのアプリによる変更を見つけるため
 
 // sahpool はパスを URL のパス名として正規化（パーセントエンコード）して保存する
 const fileOf = (name) => new URL(`/${name}.sqlite3`, 'file://irrelevant').pathname;
@@ -19,16 +22,80 @@ function list() {
     .sort((a, b) => a.localeCompare(b));
 }
 
-function close() {
-  if (db) { db.close(); db = null; currentName = null; }
+/** 未保存の変更ができたことを main に知らせる（OPFS の DB では何もしない） */
+function markDirty() {
+  if (kind !== 'file' || dirty) return;
+  dirty = true;
+  self.postMessage({ event: 'dirty', dirty: true });
+}
+
+function setDirty(v) {
+  if (dirty === v) return;
+  dirty = v;
+  self.postMessage({ event: 'dirty', dirty: v });
+}
+
+const stampOf = (f) => ({ lastModified: f.lastModified, size: f.size });
+
+/** 開いた（保存した）後に、ファイルがほかのアプリで変更されたか */
+async function checkFile() {
+  if (kind !== 'file') return { changed: false, dirty: false };
+  const f = await handle.getFile();
+  return { changed: f.lastModified !== stamp.lastModified || f.size !== stamp.size, dirty };
+}
+
+// ファイルへ書き込む。ほかのアプリで変更されていたら、force でない限り書かずに CONFLICT を返す。
+// createWritable は一時ファイルに書いて close で差し替えるので、途中で落ちても元のファイルは壊れない
+async function save(force = false) {
+  if (kind !== 'file') throw new Error('ファイルを開いていません');
+  if (!force && (await checkFile()).changed) throw new Error('CONFLICT');
+  const bytes = sqlite3.capi.sqlite3_js_db_export(db);
+  const w = await handle.createWritable();
+  try { await w.write(bytes); await w.close(); } catch (e) {
+    await w.abort().catch(() => {});
+    throw new Error('ファイルに保存できませんでした：' + (e?.message ?? e));
+  }
+  stamp = stampOf(await handle.getFile());
+  setDirty(false);
+  return true;
+}
+
+// 未保存の変更は捨てる（保存するかどうかは main が先に尋ねる）
+async function close() {
+  if (!db) return true;
+  db.close(); db = null; currentName = null; kind = null; handle = null; stamp = null;
+  setDirty(false);
+  return true;
 }
 
 async function open(name) {
-  close();
+  await close();
   await pool.reserveMinimumCapacity(pool.getFileNames().length + 4);
   db = new pool.OpfsSAHPoolDb(fileOf(name));
   db.exec('PRAGMA foreign_keys = ON');
-  currentName = name;
+  currentName = name; kind = 'opfs';
+  return true;
+}
+
+// 端末のファイルを開く（中身をメモリに読み込む。読み直しにも使う）
+async function openFile(name, h) {
+  const f = await h.getFile();
+  const bytes = new Uint8Array(await f.arrayBuffer());
+  if (bytes.length && new TextDecoder().decode(bytes.subarray(0, 15)) !== 'SQLite format 3') {
+    throw new Error('SQLite のデータベースファイルではありません');
+  }
+  await close();
+  const d = new sqlite3.oo1.DB(':memory:');
+  try {
+    if (bytes.length) {
+      const p = sqlite3.wasm.allocFromTypedArray(bytes);
+      const { capi } = sqlite3;
+      d.checkRc(capi.sqlite3_deserialize(d.pointer, 'main', p, bytes.length, bytes.length,
+        capi.SQLITE_DESERIALIZE_FREEONCLOSE | capi.SQLITE_DESERIALIZE_RESIZEABLE));
+    }
+    d.exec('PRAGMA foreign_keys = ON');
+  } catch (e) { d.close(); throw e; }
+  db = d; currentName = name; kind = 'file'; handle = h; stamp = stampOf(f);
   return true;
 }
 
@@ -40,6 +107,7 @@ function need() {
 // 複数文を実行し、最後に行を返した文の結果を返す
 function run(sql, bind) {
   const d = need();
+  const before = sqlite3.capi.sqlite3_total_changes(d.pointer);
   let lastStmt = null, columns = [], rows = [];
   d.exec({
     sql, bind,
@@ -59,6 +127,7 @@ function run(sql, bind) {
     // WITH … INSERT など行を返さない文は列が0個（getColumnNames は例外になる）
     try { if (st.columnCount > 0) columns = st.getColumnNames(); } finally { st.finalize(); }
   }
+  if (sqlite3.capi.sqlite3_total_changes(d.pointer) !== before) markDirty();
   return { columns, rows, changes: d.changes(), lastId: Number(sqlite3.capi.sqlite3_last_insert_rowid(d.pointer)) };
 }
 
@@ -86,6 +155,7 @@ function batch(stmts) {
       results.push(run(s.sql, s.bind));
     }
     d.exec('RELEASE sheet_batch');
+    markDirty();
   } catch (e) {
     d.exec('ROLLBACK TO sheet_batch; RELEASE sheet_batch');
     throw e;
@@ -107,6 +177,7 @@ function rebuild(stmts) {
         throw new Error(`外部キー制約に違反する行が ${bad.length} 件あるため適用できません（例: ${bad[0].table} の rowid ${bad[0].rowid} → ${bad[0].parent}）`);
       }
       d.exec('COMMIT');
+      markDirty();
     } catch (e) {
       d.exec('ROLLBACK');
       throw e;
@@ -123,14 +194,22 @@ async function create(name) {
   return true;
 }
 
+// 書き込み用：行の変更がなくても（CREATE TABLE など）未保存の印を付ける
+function exec(sql, bind) {
+  const r = run(sql, bind);
+  markDirty();
+  return r;
+}
+
 function exportDb(name) {
+  if (name === currentName && kind === 'file') return sqlite3.capi.sqlite3_js_db_export(db);
   if (name === currentName) need().exec('PRAGMA wal_checkpoint');
   const bytes = pool.exportFile(fileOf(name));
   return bytes;
 }
 
 async function importDb(name, bytes) {
-  if (name === currentName) close();
+  if (name === currentName) await close();
   await pool.reserveMinimumCapacity(pool.getFileNames().length + 4);
   // 作ったばかりでまだ何も書いていない DB は 0 バイト。importDb は受け付けないので、空の DB として作る
   if (!bytes.length) { new pool.OpfsSAHPoolDb(fileOf(name)).close(); return true; }
@@ -138,8 +217,8 @@ async function importDb(name, bytes) {
   return true;
 }
 
-function remove(name) {
-  if (name === currentName) close();
+async function remove(name) {
+  if (name === currentName) await close();
   pool.unlink(fileOf(name));
   return true;
 }
@@ -148,7 +227,7 @@ async function rename(from, to) {
   if (list().includes(to)) throw new Error(`「${to}」は既にあります`);
   const bytes = exportDb(from);
   await importDb(to, bytes);
-  remove(from);
+  await remove(from);
   return true;
 }
 
@@ -158,9 +237,13 @@ async function copy(from, to) {
   return true;
 }
 
-const api = { init, list, open, close, run, batch, rebuild, create, exportDb, importDb, remove, rename, copy };
+const api = { init, list, open, openFile, close, save, checkFile, run, exec, batch, rebuild, create, exportDb, importDb, remove, rename, copy };
 
-self.onmessage = async (e) => {
+// 呼び出しは1つずつ順に処理する（ファイルの読み書きを待つ間に、次の呼び出しが割り込まないように）
+let queue = Promise.resolve();
+self.onmessage = (e) => { queue = queue.then(() => dispatch(e)); };
+
+async function dispatch(e) {
   const { id, method, args } = e.data;
   try {
     const result = await api[method](...args);
@@ -169,4 +252,4 @@ self.onmessage = async (e) => {
   } catch (err) {
     self.postMessage({ id, error: String(err?.message ?? err).replace(/^SQLITE_\w+: (sqlite3 result code \d+: )?/, '') });
   }
-};
+}

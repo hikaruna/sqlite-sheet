@@ -131,6 +131,13 @@ select.input { padding-right: 4px; }
 .db-name:hover { border-color: var(--line); }
 .db-name:focus { border-color: var(--accent); background: var(--surface); outline: none; box-shadow: 0 0 0 3px var(--sel); }
 .file-btn { flex: none; }
+.save-state {
+  flex: none; height: 26px; padding: 0 8px; border: 1px solid transparent; border-radius: 6px; background: none;
+  color: var(--text-3); font-size: 12px; white-space: nowrap;
+}
+.save-state:disabled { cursor: default; }
+.save-state.dirty { border-color: var(--accent-line); background: var(--accent-soft); color: var(--accent); font-weight: 600; cursor: pointer; }
+.save-state.dirty:hover { filter: brightness(0.97); }
 .caret { color: var(--text-3); font-size: 10px; }
 .db-icon { color: var(--accent); font-size: 12px; }
 .fx {
@@ -501,6 +508,27 @@ select.input { padding-right: 4px; }
   border-radius: 8px; background: var(--surface); text-align: left; font-size: 14px;
 }
 .welcome-db:hover { border-color: var(--accent); }
+/* ローカルファイルを直接編集のダイアログ */
+.file-mode-notes { margin: 0 0 16px; padding-left: 1.2em; color: var(--text-2); font-size: 13px; line-height: 1.7; }
+.file-mode-pick { height: 38px; padding: 0 16px; }
+.recent-list h3 { margin: 20px 0 6px; color: var(--text-3); font-size: 12px; font-weight: 600; }
+.recent-item { display: flex; align-items: center; gap: 2px; border-top: 1px solid var(--line); }
+.recent-item:last-child { border-bottom: 1px solid var(--line); }
+.recent-row {
+  flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; height: 36px; padding: 0 8px;
+  border: 0; background: none; color: var(--text); text-align: left; font-size: 13px; cursor: pointer;
+}
+.recent-row:hover { color: var(--accent); }
+.recent-icon { flex: none; font-size: 12px; }
+.recent-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.recent-ago { flex: none; color: var(--text-3); font-size: 12px; }
+.recent-x { flex: none; width: 28px; height: 28px; color: var(--text-3); font-size: 12px; }
+/* 選択肢のダイアログ：説明つきの選択肢は縦に並べ、説明をボタンの中の2行目に */
+.choice-actions:has(.btn-hint) { flex-direction: column-reverse; align-items: stretch; }
+.choice-actions:has(.btn-hint) .btn {
+  display: grid; justify-items: start; gap: 2px; height: auto; padding: 8px 14px; text-align: left; line-height: 1.3;
+}
+.btn-hint { font-size: 12px; font-weight: 400; opacity: .85; }
 .empty-db { position: absolute; inset: 0; display: grid; place-content: center; justify-items: center; gap: 4px; text-align: center; }
 .empty-db h2 { margin: 0; font-size: 18px; }
 .empty-db .row-gap { margin-top: 14px; }

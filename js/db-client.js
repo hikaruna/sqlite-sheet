@@ -3,8 +3,11 @@ const worker = new Worker(new URL('./db-worker.js', import.meta.url), { type: 'm
 let seq = 0;
 const pending = new Map();
 const logListeners = new Set();
+const dirtyListeners = new Set();
 
 worker.onmessage = (e) => {
+  // ファイル DB に未保存の変更があるかの知らせ（id のない通知）
+  if (e.data.event === 'dirty') { for (const f of dirtyListeners) f(e.data.dirty); return; }
   const { id, result, error } = e.data;
   const p = pending.get(id);
   if (!p) return;
@@ -39,7 +42,13 @@ export const db = {
   init: () => call('init'),
   list: () => call('list'),
   open: (name) => call('open', name),
+  /** 端末のファイル（FileSystemFileHandle）をメモリに読み込んで開く（読み直しにも使う） */
+  openFile: (name, handle) => call('openFile', name, handle),
   close: () => call('close'),
+  /** ファイルへ保存する。ほかのアプリで変更されていれば force でない限り 'CONFLICT' で失敗する */
+  save: (force = false) => call('save', force),
+  /** {changed: ほかのアプリで変更されたか, dirty: 未保存の変更があるか} */
+  checkFile: () => call('checkFile'),
   create: (name) => call('create', name),
   remove: (name) => call('remove', name),
   rename: (a, b) => call('rename', a, b),
@@ -49,10 +58,12 @@ export const db = {
   /** 読み取り用。ログに出さない */
   query: (sql, bind) => call('run', sql, bind),
   /** 書き込み用。ログに出す */
-  exec: (sql, bind, source = 'gui') => logged(() => call('run', sql, bind), [{ sql, bind }], source),
+  exec: (sql, bind, source = 'gui') => logged(() => call('exec', sql, bind), [{ sql, bind }], source),
   batch: (stmts, source = 'gui') => logged(() => call('batch', stmts), stmts, source),
   rebuild: (stmts, source = 'gui') => logged(() => call('rebuild', stmts), stmts, source),
   onLog: (f) => logListeners.add(f),
+  /** ファイル DB の未保存の変更の有無（true/false）の購読 */
+  onDirty: (f) => dirtyListeners.add(f),
 };
 
 /** 識別子のクォート */
