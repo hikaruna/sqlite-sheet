@@ -39,11 +39,56 @@ export function closePopover() {
   if (current) { const c = current; current = null; c.node.remove(); c.onClose?.(); }
 }
 
+/**
+ * タッチの長押し。pointerdown から呼ぶ。指を動かさずに押し続けたら onLong を呼び、離したときの click は捨てる。
+ * iOS は長押しで contextmenu を出さないので、右クリックの代わりにこれを使う
+ */
+export function touchHold(e, onLong, ms = 500) {
+  if (e.pointerType === 'mouse') return;
+  const x0 = e.clientX, y0 = e.clientY;
+  let fired = false;
+  const end = () => {
+    clearTimeout(timer);
+    removeEventListener('pointermove', move); removeEventListener('pointerup', up); removeEventListener('pointercancel', end);
+  };
+  const up = () => {
+    end();
+    if (!fired) return;
+    // 長押しの後に指を離したときの click（あれば）を捨てる
+    const eat = (ev) => { ev.stopPropagation(); ev.preventDefault(); };
+    addEventListener('click', eat, { capture: true, once: true });
+    setTimeout(() => removeEventListener('click', eat, { capture: true }), 300);
+  };
+  const move = (ev) => { if (!fired && Math.hypot(ev.clientX - x0, ev.clientY - y0) > 10) end(); };
+  const timer = setTimeout(() => { fired = true; navigator.vibrate?.(10); onLong(); }, ms);
+  addEventListener('pointermove', move); addEventListener('pointerup', up); addEventListener('pointercancel', end);
+}
+
+/** 狭い画面（スマホ）か。CSS の @media (max-width: 760px) と揃える */
+export const narrow = matchMedia('(max-width: 760px)');
+
+// ソフトキーボードが出ると見える範囲が狭まる。その高さを CSS に渡し、画面全体と下から出すシートを見える範囲に収める
+if (window.visualViewport) {
+  const vv = visualViewport;
+  const sync = () => {
+    document.documentElement.style.setProperty('--vvh', vv.height + 'px');
+    document.documentElement.style.setProperty('--kb', Math.max(0, innerHeight - vv.height - vv.offsetTop) + 'px');
+  };
+  vv.addEventListener('resize', sync); vv.addEventListener('scroll', sync); sync();
+}
+
 /** anchor（要素 or {x,y}）の近くに content を出す */
 export function popover(anchor, content, { onClose, className = '', align = 'start' } = {}) {
   closePopover();
   const node = el('div.popover', { class: className }, content);
   document.body.append(node);
+  current = { node, onClose };
+  // 狭い画面：スマホのスプレッドシートと同じく、画面の下から出すシートにする
+  if (narrow.matches) {
+    node.classList.add('as-sheet');
+    node.querySelector('[autofocus], input, textarea, select')?.focus();
+    return node;
+  }
   let x, y;
   if (anchor instanceof Element) {
     const r = anchor.getBoundingClientRect();
@@ -62,7 +107,8 @@ export function popover(anchor, content, { onClose, className = '', align = 'sta
 
 // ポップオーバーの上で開いた確認ダイアログを操作しても、ポップオーバー（と入力中の内容）は閉じない
 const modalOpen = () => !!document.querySelector('dialog.modal[open]');
-addEventListener('mousedown', (e) => {
+// pointerdown で閉じる：タッチではメニューを開いた後にブラウザが mousedown を出すので、mousedown だと開いた直後に閉じてしまう
+addEventListener('pointerdown', (e) => {
   if (current && !current.node.contains(e.target) && !e.target.closest?.('dialog.modal')) closePopover();
 }, true);
 addEventListener('keydown', (e) => {

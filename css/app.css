@@ -526,3 +526,62 @@ body.dropping::after {
   .console-input { border-right: 0; border-bottom: 1px solid var(--line); }
   .sheet-sql { display: none; }
 }
+
+/* ---------- スマホ・タッチ端末 ---------- */
+.more-btn { display: none; }
+/* 範囲を広げるつまみ（タッチ端末だけ grid.js が出す） */
+.grid-handle {
+  position: absolute; z-index: 5; width: 22px; height: 22px; margin: -11px 0 0 -11px; touch-action: none;
+}
+.grid-handle::after {
+  content: ''; position: absolute; inset: 5px; border-radius: 50%;
+  background: var(--accent); border: 2px solid var(--surface); box-shadow: 0 1px 3px rgb(0 0 0 / .3);
+}
+@media (hover: none) {
+  .gh-btn { opacity: 1; }
+}
+@media (pointer: coarse) {
+  /* ダブルタップでの拡大をやめる。長押しで文字選択・吹き出しを出さない */
+  html { touch-action: manipulation; }
+  .grid-body, .gh-cell, .tabs { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+  /* キーボードが出たら、見える範囲に収める */
+  #app { height: var(--vvh, 100%); }
+  .gr { height: 34px; }
+  .gc { line-height: 33px; }
+  .gh-resize { right: -10px; width: 20px; touch-action: none; }
+  .gh-btn { width: 28px; height: 28px; }
+  .icon-btn { width: 36px; height: 36px; }
+  .tool-btn, .btn { height: 36px; }
+  .btn.sm { height: 32px; }
+  .menu-item { height: 42px; font-size: 14px; }
+  .menu-item kbd { display: none; }
+  .chip { height: 30px; }
+  .chip-x { padding: 0 6px; font-size: 16px; }
+  .bottombar { height: 44px; }
+  .tab-add { width: 44px; }
+  /* iOS は 16px 未満の入力欄にフォーカスすると画面を拡大するので、入力欄は 16px */
+  input, textarea, select, .grid-sink { font-size: 16px; }
+}
+@media (max-width: 760px) {
+  .more-btn { display: inline-grid; }
+  #panel-btn, #console-btn, .cmd-btn { display: none; }
+  .version { display: none; }
+  /* メニュー・ポップオーバーは画面の下から出すシート */
+  .popover.as-sheet {
+    left: 0 !important; right: 0; top: auto !important; bottom: var(--kb, 0px);
+    width: 100%; min-width: 0; max-width: none; max-height: 75%; overflow: auto;
+    border-radius: 14px 14px 0 0; border-width: 1px 0 0; padding-bottom: env(safe-area-inset-bottom);
+    animation: sheet-up .16s ease-out;
+  }
+  .popover.as-sheet .menu { max-height: none; }
+  .popover.as-sheet .ask, .popover.as-sheet .filter-form, .popover.as-sheet .add-col,
+  .popover.as-sheet .fk-picker, .popover.as-sheet .prot-panel { width: auto; max-width: none; }
+  .palette-pop.as-sheet { width: 100%; }
+  .modal { width: calc(100vw - 16px); padding: 18px 16px 14px; }
+  /* 設計パネル・SQL コンソールは全画面 */
+  .panel { inset: 0 !important; width: 100% !important; z-index: 50; }
+  .console { position: fixed; inset: 0; height: auto !important; z-index: 50; border-top: 0; }
+  .console-resize { display: none; }
+  #toasts { bottom: calc(60px + var(--kb, 0px)); }
+}
+@keyframes sheet-up { from { transform: translateY(30%); opacity: .4; } }

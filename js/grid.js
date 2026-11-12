@@ -2,7 +2,10 @@
 import { el, modKey, fmtBytes } from './ui.js';
 import { convertInput, formText, form, defaultToForm } from './sources.js';
 
-const RH = 28;          // 行の高さ
+// タッチ端末（指で操作する）か。行を高くし、タップ・長押し・つまみで操作する
+export const TOUCH = matchMedia('(pointer: coarse)').matches;
+const RH = TOUCH ? 34 : 28; // 行の高さ
+const LONG_PRESS = 500;
 const HH = 34;          // 見出しの高さ
 const RHW = 56;         // 行番号の幅
 const PAGE = 200;
@@ -123,7 +126,11 @@ export class Grid {
     this.header = el('div.grid-header');
     this.body = el('div.grid-body');
     this.sink = el('textarea.grid-sink', { spellcheck: false, autocomplete: 'off', rows: 1, 'aria-label': 'セル入力' });
-    this.inner.append(this.body, this.sink);
+    // タッチ端末：選んでいるだけのときはキーボードを出さない（編集を始めたら出す）
+    if (TOUCH) this.sink.inputMode = 'none';
+    // 範囲を広げるつまみ（タッチ端末だけ。指でなぞるとスクロールになるので）
+    this.handle = el('div.grid-handle', { hidden: true, on: { pointerdown: (e) => this.startHandleDrag(e) } });
+    this.inner.append(this.body, this.sink, this.handle);
     this.scroll.append(this.header, this.inner);
     this.host.append(this.scroll);
     this.empty = null;
@@ -131,6 +138,7 @@ export class Grid {
     this.scroll.addEventListener('scroll', () => this.render(), { passive: true });
     new ResizeObserver(() => this.render()).observe(this.scroll);
     this.body.addEventListener('mousedown', (e) => this.onMouseDown(e));
+    this.body.addEventListener('pointerdown', (e) => this.onTouchDown(e));
     this.body.addEventListener('contextmenu', (e) => this.onContextMenu(e));
     this.sink.addEventListener('keydown', (e) => this.onKey(e));
     this.sink.addEventListener('input', () => this.onSinkInput());
@@ -183,16 +191,18 @@ export class Grid {
         class: col.readonly ? 'ro' : '',
         title: col.title || '',
         on: {
+          pointerdown: (e) => {
+            if (e.pointerType === 'mouse' || e.target.closest('.gh-btn, .gh-resize')) return;
+            // タッチ：タップで列を選び、列メニューを出す（スクロールのために指を動かしたら何もしない）
+            this.tap(e, () => { this.selectCol(c, false); this.hooks.onHeaderMenu?.(c, cell); });
+          },
           mousedown: (e) => {
             if (e.button !== 0 || e.target.closest('.gh-btn, .gh-resize')) return;
+            if (this.touchRecent()) return;
             e.preventDefault();
-            // カーソルは列の先頭（Shift なら始めの列のまま）、範囲は最後の行まで
-            this.cur = { r: 0, c: e.shiftKey ? this.cur.c : c };
-            this.ext = { r: Math.max(0, this.rowCount - 1), c };
-            this.colSelect = true;
-            this.render(); this.emitSelect(); this.focus();
+            this.selectCol(c, e.shiftKey);
           },
-          contextmenu: (e) => { e.preventDefault(); this.hooks.onHeaderMenu?.(c, { x: e.clientX, y: e.clientY }); },
+          contextmenu: (e) => { e.preventDefault(); if (!this.touchRecent()) this.hooks.onHeaderMenu?.(c, { x: e.clientX, y: e.clientY }); },
         },
       },
       el('span.gh-name', col.name),
@@ -202,7 +212,10 @@ export class Grid {
         (col.sort.dir === 'asc' ? '↑' : '↓') + (col.sort.total > 1 ? col.sort.rank : '')) : null,
       col.filtered ? el('span.gh-filter', { title: '絞り込み中' }, '⏷') : null,
       el('button.gh-btn', { title: '列メニュー', on: { click: (e) => { e.stopPropagation(); this.hooks.onHeaderMenu?.(c, e.currentTarget); } } }, '⋮'),
-      el('div.gh-resize', { on: { mousedown: (e) => this.startResize(e, c) } }));
+      el('div.gh-resize', { on: {
+        mousedown: (e) => { if (!this.touchRecent()) this.startResize(e, c, 'mouse'); },
+        pointerdown: (e) => { if (e.pointerType !== 'mouse') { this.lastTouch = Date.now(); this.startResize(e, c, 'pointer'); } },
+      } }));
       h.append(cell);
     });
     if (this.hooks.onAddColumn) {
@@ -210,15 +223,29 @@ export class Grid {
     }
   }
 
-  startResize(e, c) {
+  /** カーソルは列の先頭（extend なら始めの列のまま）、範囲は最後の行まで */
+  selectCol(c, extend) {
+    if (this.editing) this.commitEdit({ move: null });
+    this.cur = { r: 0, c: extend ? this.cur.c : c };
+    this.ext = { r: Math.max(0, this.rowCount - 1), c };
+    this.colSelect = true;
+    this.render(); this.emitSelect(); this.focus();
+  }
+
+  /** 列幅のドラッグ。マウスは mouse*、指は pointer* のイベントで追う */
+  startResize(e, c, kind) {
+    if (e.button !== 0) return;
     e.preventDefault(); e.stopPropagation();
     const startX = e.clientX, startW = this.colW(c);
     const move = (ev) => {
       this.widths[this.cols[c].name] = Math.max(48, startW + ev.clientX - startX);
       this.renderHeader(); this.render();
     };
-    const up = () => { removeEventListener('mousemove', move); removeEventListener('mouseup', up); this.saveWidths(); };
-    addEventListener('mousemove', move); addEventListener('mouseup', up);
+    const up = () => {
+      removeEventListener(kind + 'move', move); removeEventListener(kind + 'up', up); removeEventListener('pointercancel', up);
+      this.saveWidths();
+    };
+    addEventListener(kind + 'move', move); addEventListener(kind + 'up', up); addEventListener('pointercancel', up);
   }
 
   // ---------- データ取得 ----------
@@ -365,6 +392,17 @@ export class Grid {
     Object.assign(this.sink.style, { left: left + 'px', top: y + 'px', width: w + 'px', height: RH + 'px' });
     if (this.editing) this.sink.style.height = Math.max(RH, Math.min(200, this.sink.scrollHeight)) + 'px';
     this.sink.classList.toggle('editing', !!this.editing);
+    if (TOUCH && !this.editing) this.sink.inputMode = 'none';
+    this.placeHandle();
+  }
+
+  /** 範囲の右下に、範囲を広げるつまみを置く（タッチ端末・編集していないときだけ） */
+  placeHandle() {
+    const show = TOUCH && !this.editing && this.cols.length > 0 && this.rowCount > 0 && this.cur.r !== this.newRowIndex;
+    this.handle.hidden = !show;
+    if (!show) return;
+    const { r1, c1 } = this.range();
+    Object.assign(this.handle.style, { left: (this.colX(c1) + this.colW(c1)) + 'px', top: ((r1 + 1) * RH) + 'px' });
   }
 
   /** 入力欄のフォントで測った、いちばん長い行の幅 */
@@ -448,6 +486,7 @@ export class Grid {
   }
 
   onMouseDown(e) {
+    if (this.touchRecent()) { e.preventDefault(); return; } // タッチの後にブラウザが出すマウスのイベント
     const hit = this.cellFromEvent(e);
     if (!hit) return;
     if (e.button === 2) {
@@ -487,8 +526,91 @@ export class Grid {
     }
   }
 
+  // ---------- タッチ ----------
+  /** 直前の操作がタッチだったか（タッチの後にブラウザが出すマウスのイベント・contextmenu を無視するため） */
+  touchRecent() { return Date.now() - (this.lastTouch || 0) < 800; }
+
+  /**
+   * タッチの1回の操作を見分ける：指を動かさずに離したら onTap、押し続けたら onLong。
+   * 指が動いたらスクロールなので、ブラウザに任せて何もしない
+   */
+  tap(e, onTap, onLong) {
+    this.lastTouch = Date.now();
+    const x0 = e.clientX, y0 = e.clientY;
+    let done = false;
+    const end = () => {
+      done = true; clearTimeout(timer);
+      removeEventListener('pointermove', move); removeEventListener('pointerup', up); removeEventListener('pointercancel', end);
+      this.lastTouch = Date.now();
+    };
+    const move = (ev) => { if (Math.hypot(ev.clientX - x0, ev.clientY - y0) > 10) end(); };
+    const up = () => { if (done) return; end(); onTap(); };
+    const timer = onLong ? setTimeout(() => { if (done) return; end(); onLong(); }, LONG_PRESS) : 0;
+    addEventListener('pointermove', move); addEventListener('pointerup', up); addEventListener('pointercancel', end);
+  }
+
+  onTouchDown(e) {
+    if (e.pointerType === 'mouse') return;
+    const hit = this.cellFromEvent(e);
+    if (!hit || e.target.closest('.fk-drop')) { this.lastTouch = Date.now(); return; }
+    const x = e.clientX, y = e.clientY;
+    this.tap(e, () => this.onTap(hit), () => {
+      // 長押し：右クリックと同じ。範囲の外なら選択を移してからメニュー
+      if (this.editing) this.commitEdit({ move: null });
+      const { r0, r1, c0, c1 } = this.range();
+      const inside = hit.r >= r0 && hit.r <= r1 && (hit.head || (hit.c >= c0 && hit.c <= c1));
+      if (!inside && hit.r !== this.newRowIndex) hit.head ? this.selectRows(hit.r, hit.r) : this.moveTo(hit.r, hit.c);
+      navigator.vibrate?.(10);
+      this.hooks.onContextMenu?.({ x, y }, { ...this.range(), head: hit.head });
+    });
+  }
+
+  /** タップ：セルを選ぶ。選んでいる1つのセルをもう一度タップしたら編集（キーボードを出す） */
+  onTap(hit) {
+    const again = !hit.head && hit.r === this.cur.r && hit.c === this.cur.c
+      && this.ext.r === this.cur.r && this.ext.c === this.cur.c && !this.colSelect;
+    if (this.editing) {
+      if (again) return; // 編集中のセルのタップ（入力欄の中のカーソル移動）はそのまま
+      this.commitEdit({ move: null });
+    }
+    if (hit.r === this.newRowIndex && !this.draft) { this.focus(); this.addRow(); return; }
+    if (hit.r === this.newRowIndex && hit.head) { this.moveTo(hit.r, 0); this.focus(); return; }
+    if (hit.head) { this.selectRows(hit.r, hit.r); this.focus(); return; }
+    if (again) { this.editByTouch(); return; }
+    this.moveTo(hit.r, hit.c);
+    this.focus();
+  }
+
+  /** タッチで編集を始める：キーボードが出るよう、入力の種類を戻してからフォーカスし直す */
+  editByTouch() {
+    if (!this.beginEdit('edit')) { this.focus(); return false; }
+    this.sinkFocusKeep = true;
+    this.sink.blur();
+    this.sinkFocusKeep = false;
+    this.sink.inputMode = 'text';
+    this.sink.focus({ preventScroll: true });
+    return true;
+  }
+
+  /** つまみをドラッグして範囲の端を動かす */
+  startHandleDrag(e) {
+    e.preventDefault(); e.stopPropagation();
+    this.lastTouch = Date.now();
+    const move = (ev) => {
+      const target = document.elementFromPoint(ev.clientX, ev.clientY);
+      const h = target && this.body.contains(target) ? this.cellFromEvent({ target }) : null;
+      if (h && !h.head && h.r !== this.newRowIndex && (h.r !== this.ext.r || h.c !== this.ext.c)) this.moveTo(h.r, h.c, true);
+    };
+    const up = () => {
+      removeEventListener('pointermove', move); removeEventListener('pointerup', up); removeEventListener('pointercancel', up);
+      this.lastTouch = Date.now();
+    };
+    addEventListener('pointermove', move); addEventListener('pointerup', up); addEventListener('pointercancel', up);
+  }
+
   onContextMenu(e) {
     e.preventDefault();
+    if (this.touchRecent()) return; // タッチの長押しは onTouchDown で扱う
     const hit = this.cellFromEvent(e);
     if (!hit) return;
     this.hooks.onContextMenu?.({ x: e.clientX, y: e.clientY }, { ...this.range(), head: hit.head });

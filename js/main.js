@@ -1,6 +1,6 @@
 // アプリ本体：DB・シートの管理、画面の組み立て
 import { db, q } from './db-client.js';
-import { el, toast, menu, popover, closePopover, ask, confirmDialog, pickFile, download, modKey, isMac } from './ui.js';
+import { el, toast, menu, popover, closePopover, ask, confirmDialog, pickFile, download, modKey, isMac, touchHold } from './ui.js';
 import { listObjects, readTable, createTableSql, migrationSql, constantDefault, TYPES, affinity } from './schema.js';
 import { Grid } from './grid.js';
 import { TableSource, QuerySource, FILTER_OPS, friendlyError, convertInput, formText, formToDefault } from './sources.js';
@@ -161,7 +161,9 @@ function buildChrome() {
         el('span.vsep'),
         el('button#panel-btn.tool-btn', { title: 'テーブルの設計（列・キー・制約）', on: { click: () => togglePanel() } }, '⚙ 設計'),
         el('button#console-btn.tool-btn', { title: `SQL コンソール（${MOD}\`）`, on: { click: () => toggleConsole() } }, '⌨ SQL'),
-        el('button.tool-btn', { title: `コマンド（${MOD}K）`, on: { click: () => palette() } }, `${MOD}K`))),
+        el('button.tool-btn.cmd-btn', { title: `コマンド（${MOD}K）`, on: { click: () => palette() } }, `${MOD}K`),
+        // 狭い画面では設計・SQL・コマンドをこのメニューにまとめる
+        el('button#more-btn.icon-btn.more-btn', { title: 'その他', on: { click: (e) => moreMenu(e.currentTarget) } }, '⋯'))),
     el('main.workspace',
       el('section#sheet.sheet',
         el('div#sheet-head.sheet-head'),
@@ -222,6 +224,14 @@ async function doRedo() {
     const label = await undo.redo();
     if (label) { toast(`やり直しました：${label}`); await state.grid?.reload(); }
   } catch (e) { toast('やり直せませんでした：' + friendlyError(e.message), 'error'); }
+}
+
+function moreMenu(anchor) {
+  menu(anchor, [
+    { icon: '⚙', label: 'テーブルの設計', disabled: $('panel-btn').disabled, action: () => togglePanel() },
+    { icon: '⌨', label: 'SQL コンソール', action: () => toggleConsole() },
+    { icon: '⌕', label: 'コマンド', action: () => palette() },
+  ], { align: 'end' });
 }
 
 function toggleConsole(force) {
@@ -460,9 +470,14 @@ function renderTabs() {
       class: (key === state.key ? 'on ' : '') + 'k-' + kind,
       title: `${KIND_NAME[kind]}：${name}`,
       on: {
-        click: () => showSheet(key),
+        // タッチ：開いているタブをもう一度タップするか、長押しでタブのメニュー（スプレッドシートのアプリと同じ）
+        click: (e) => {
+          if (e.pointerType && e.pointerType !== 'mouse' && key === state.key) tabMenu(key, e.currentTarget);
+          else showSheet(key);
+        },
+        pointerdown: (e) => { const t = e.currentTarget; touchHold(e, () => tabMenu(key, t)); },
         dblclick: (e) => renameSheet(key, e.currentTarget),
-        contextmenu: (e) => { e.preventDefault(); tabMenu(key, e.currentTarget); },
+        contextmenu: (e) => { e.preventDefault(); if (e.pointerType !== 'touch') tabMenu(key, e.currentTarget); },
       },
     }, el('span.tab-icon', KIND_ICON[kind]), name, kind === 't' && state.lockedSheets?.has(name) ? el('span.tab-lock', { title: 'シート全体が保護されています' }, '🔒') : null);
   }));
