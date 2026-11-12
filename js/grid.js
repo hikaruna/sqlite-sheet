@@ -10,6 +10,7 @@ const HH = 34;          // 見出しの高さ
 const RHW = 56;         // 行番号の幅
 const PAGE = 200;
 const DEFAULT_W = 150;
+const MIN_W = 20;        // 列幅の最小（1文字のデータに合わせても使えるように）
 // 表の拡大率（タッチ端末で二本指でつまむ）。見出しと表の中身に CSS の zoom を掛ける。
 // スクロール位置・表示の大きさは拡大後の値なので、行や列の位置と比べるときは z で割る
 const ZOOM_MIN = 0.5, ZOOM_MAX = 2;
@@ -231,6 +232,34 @@ export class Grid {
     if (after !== before) this.hooks.onColumnWidth?.(this.source.widthKey, name, before, after);
   }
 
+  /**
+   * 列幅を中身に合わせる（境界線のダブルクリック・ダブルタップ）。
+   * 読み込み済みの行の値がすべて収まる幅にする（見出しは数えない。まだ読んでいない行も数えない）
+   */
+  autoFit(c) {
+    const col = this.cols[c];
+    if (!col) return;
+    const before = this.widths[col.name];
+    // 実際と同じ CSS で、幅を決めずに並べて測る
+    const probe = el('div.gr', { style: { position: 'absolute', visibility: 'hidden', top: 0, left: 0, width: 'max-content', display: 'block' } });
+    const cells = [];
+    for (const [p, rows] of this.pages) {
+      rows.forEach((row, i) => {
+        if (!row) return;
+        const cell = el('div.gc', { style: { width: 'max-content', display: 'block' } });
+        this.fillCell(cell, row.values[c], col, row, p * PAGE + i, c);
+        cells.push(cell);
+      });
+    }
+    probe.append(...cells);
+    this.body.append(probe);
+    const w = Math.max(MIN_W, ...cells.map((x) => x.offsetWidth));
+    probe.remove();
+    this.widths[col.name] = Math.ceil(w) + 2;
+    this.saveWidths(); this.renderHeader(); this.render();
+    this.emitWidth(col.name, before);
+  }
+
   colW(c) { const col = this.cols[c]; return this.widths[col.name] ?? col.width ?? (col.width = autoWidth(col)); }
   colX(c) { let x = RHW; for (let i = 0; i < c; i++) x += this.colW(i); return x; }
   totalW() { return this.colX(this.cols.length) + (this.hooks.onAddColumn ? 48 : 0); }
@@ -262,16 +291,27 @@ export class Grid {
           contextmenu: (e) => { e.preventDefault(); if (!this.touchRecent()) this.hooks.onHeaderMenu?.(c, { x: e.clientX, y: e.clientY }); },
         },
       },
+      // 中身は .gh-inner に入れて、はみ出た分を切る（境界線のつまみは外に置いて切らない）
+      el('div.gh-inner',
       el('span.gh-name', col.name),
       ...(col.badges || []).map((b) => el('span.gh-badge', { class: b.cls || '', title: b.title || '' }, b.text)),
       el('span.gh-spacer'),
       col.sort ? el('span.gh-sort', { title: col.sort.total > 1 ? `並べ替えの第${col.sort.rank}基準` : '並べ替え中' },
         (col.sort.dir === 'asc' ? '↑' : '↓') + (col.sort.total > 1 ? col.sort.rank : '')) : null,
       col.filtered ? el('span.gh-filter', { title: '絞り込み中' }, '⏷') : null,
-      el('button.gh-btn', { title: '列メニュー', on: { click: (e) => { e.stopPropagation(); this.hooks.onHeaderMenu?.(c, e.currentTarget); } } }, '⋮'),
-      el('div.gh-resize', { on: {
+      el('button.gh-btn', { title: '列メニュー', on: { click: (e) => { e.stopPropagation(); this.hooks.onHeaderMenu?.(c, e.currentTarget); } } }, '⋮')),
+      el('div.gh-resize', { title: 'ドラッグで幅を変更・ダブルクリックで中身に合わせる', on: {
         mousedown: (e) => { if (!this.touchRecent()) this.startResize(e, c, 'mouse'); },
-        pointerdown: (e) => { if (e.pointerType !== 'mouse') { this.lastTouch = Date.now(); this.startResize(e, c, 'pointer'); } },
+        dblclick: (e) => { e.preventDefault(); e.stopPropagation(); if (!this.touchRecent()) this.autoFit(c); },
+        pointerdown: (e) => {
+          if (e.pointerType === 'mouse') return;
+          this.lastTouch = Date.now();
+          // ダブルタップで中身に合わせる
+          const t = this.lastResizeTap;
+          this.lastResizeTap = { c, at: Date.now() };
+          if (t && t.c === c && Date.now() - t.at < 350) { e.preventDefault(); this.lastResizeTap = null; this.autoFit(c); return; }
+          this.startResize(e, c, 'pointer');
+        },
       } }));
       h.append(cell);
     });
@@ -295,7 +335,7 @@ export class Grid {
     e.preventDefault(); e.stopPropagation();
     const startX = e.clientX, startW = this.colW(c), name = this.cols[c].name, before = this.widths[name];
     const move = (ev) => {
-      this.widths[this.cols[c].name] = Math.max(48, startW + (ev.clientX - startX) / this.z);
+      this.widths[this.cols[c].name] = Math.max(MIN_W, startW + (ev.clientX - startX) / this.z);
       this.renderHeader(); this.render();
     };
     const up = () => {

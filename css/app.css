@@ -213,8 +213,12 @@ select.input { padding-right: 4px; }
 }
 .gh-cell {
   position: relative; flex: none; display: flex; align-items: center; gap: 4px; height: 100%;
-  padding: 0 4px 0 9px; border-right: 1px solid var(--line); font-weight: 600; user-select: none; cursor: default;
+  border-right: 1px solid var(--line); font-weight: 600; user-select: none; cursor: default;
 }
+/* 狭いときは右からはみ出た分を切る。列名は最後まで残し、それでも入らなければ列名も「…」で切る */
+.gh-inner { flex: 1; min-width: 0; height: 100%; display: flex; align-items: center; gap: 4px; padding: 0 4px 0 8px; overflow: hidden; }
+.gh-inner > * { flex-shrink: 0; }
+.gh-inner > .gh-name { max-width: 100%; }
 .gh-cell:hover { background: var(--surface-3); }
 .gh-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .gh-spacer { flex: 1; }
