@@ -653,3 +653,10 @@ body.dropping::after {
   #toasts { bottom: calc(60px + var(--kb, 0px)); }
 }
 @keyframes sheet-up { from { transform: translateY(30%); opacity: .4; } }
+
+/* ホームの一覧：見出し・並べ替え・最終閲覧の列 */
+.home-section-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
+.home-section-head h2 { margin: 0; }
+.home-sort { height: 26px; font-size: 12px; color: var(--text-2); }
+.home-cols { display: flex; justify-content: space-between; padding: 6px 48px 6px 34px; color: var(--text-3); font-size: 11px; border-bottom: 1px solid var(--line); }
+.home-row-time { flex: none; color: var(--text-3); font-size: 12px; font-weight: 400; }

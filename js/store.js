@@ -3,10 +3,11 @@
 //   order:<DB>       シートの並び順
 //   last-sheet:<DB>  最後に開いたシート
 //   w:<DB>/<表>      列の幅
+//   meta:<DB>        {created, viewed, updated}：作成・最後に開いた・最後に書き込んだ時刻（ミリ秒）
 // DB の名前変更・複製・削除・作り直しに合わせて、ここでまとめて付け替える・消す。
 import { toast } from './ui.js';
 
-const exact = ['queries:', 'order:', 'last-sheet:'];
+const exact = ['queries:', 'order:', 'last-sheet:', 'meta:'];
 
 /** その DB に属するキー（w: は「w:<DB>/」で一致させ、別 DB 名の前方一致を拾わない） */
 function keysOf(db) {
@@ -71,6 +72,24 @@ export function setQueries(db, list) {
   }
 }
 
+/** {created, viewed, updated}（無いものは undefined） */
+export function getMeta(db) {
+  try { const v = JSON.parse(localStorage.getItem('meta:' + db) || '{}'); return v && typeof v === 'object' ? v : {}; } catch { return {}; }
+}
+
+/** 時刻を記録する。field は 'created' | 'viewed' | 'updated' */
+export function touch(db, field, at = Date.now()) {
+  try { localStorage.setItem('meta:' + db, JSON.stringify({ ...getMeta(db), [field]: at })); } catch { /* 無視 */ }
+}
+
+/**
+ * まだ記録のない DB に作成時刻を付ける。新しく作った・取り込んだ DB はここで記録される。
+ * 記録を始める前からある DB は、本当の作成時刻がわからないので、初めて見つけた時刻にする
+ */
+export function ensureCreated(dbs) {
+  for (const db of dbs) if (getMeta(db).created == null) touch(db, 'created');
+}
+
 export function removeDb(db) {
   try { for (const k of keysOf(db)) localStorage.removeItem(k); } catch { /* 無視 */ }
 }
@@ -80,6 +99,12 @@ export function copyDb(from, to) {
     removeDb(to);
     for (const k of keysOf(from)) localStorage.setItem(renameKey(k, from, to), localStorage.getItem(k));
   } catch { /* 見た目の設定なので失敗しても続ける */ }
+}
+
+/** 複製：設定は引き継ぎ、時刻は新しく作った DB として付け直す */
+export function duplicateDb(from, to) {
+  copyDb(from, to);
+  try { localStorage.setItem('meta:' + to, JSON.stringify({ created: Date.now() })); } catch { /* 無視 */ }
 }
 
 export function renameDb(from, to) {

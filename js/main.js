@@ -206,7 +206,8 @@ function buildChrome() {
     onDataChanged: async () => { undo.clear(); await state.grid?.reload(); },
   });
   undo.onChange(updateUndoButtons);
-  db.onLog(() => {});
+  // DB への書き込み（成功したもの）を最終更新として記録する。ローカルファイルは対象外
+  db.onLog((e) => { if (!e.error && state.dbName && !state.file) store.touch(state.dbName, 'updated'); });
   db.onDirty(setDirty);
   // タブに戻ってきたら、ファイルがほかのアプリで変更されていないか確かめる
   document.addEventListener('visibilitychange', () => { if (!document.hidden) checkExternalChange(); });
@@ -292,6 +293,7 @@ function showWelcome() {
   const pickImport = async () => { const f = await pickFile('.sqlite,.sqlite3,.db,application/x-sqlite3'); if (f) importFile(f); };
   // 操作はすべて一覧より上に置く（一覧が長くなっても埋もれない）
   $('db-search').value = ''; hideSearch();
+  store.ensureCreated(state.dbs);
   $('grid-host').replaceChildren(el('div.welcome',
     el('div.home',
       el('header.home-head',
@@ -302,17 +304,42 @@ function showWelcome() {
         el('button.btn', { title: 'サンプルのデータベースを作る', on: { click: makeSample } }, '✨ サンプル'),
         files.supported ? el('button.btn', { title: 'パソコンの .sqlite ファイルをそのまま開いて編集する', on: { click: fileModeDialog } }, '📂 ローカルファイルを直接編集…') : null),
       el('section.home-section',
-        el('h2', 'データベース'),
+        el('div.home-section-head',
+          el('h2', 'データベース'),
+          state.dbs.length > 1 ? el('button.tool-btn.home-sort', { title: '並べ替え', on: { click: (e) => sortMenu(e.currentTarget) } },
+            `並べ替え：${SORTS[homeSort()]}`, el('span.caret', ' ▾')) : null),
         state.dbs.length
-          ? el('div.home-list', state.dbs.map((n) => el('div.home-item',
+          ? el('div.home-list', el('div.home-cols', el('span', '名前'), el('span', '最終閲覧')), sortedDbs().map((n) => el('div.home-item',
             el('button.home-row', { title: `「${n}」を開く`, on: { click: () => openDb(n) } },
-              el('span.home-row-icon', '◆'), el('span.home-row-name', n)),
+              el('span.home-row-icon', '◆'), el('span.home-row-name', n),
+              el('span.home-row-time', viewedText(n))),
             el('button.icon-btn.home-more', {
               title: `「${n}」の操作`, 'aria-label': `「${n}」の操作`,
               on: { click: (e) => menu(e.currentTarget, dbActions(n, { anchor: e.currentTarget, home: true }), { align: 'end' }) },
             }, '⋯'))))
           : el('p.home-empty', 'まだデータベースがありません。上の「＋ 新規作成」か「✨ サンプル」から始めましょう。')),
       el('footer.home-foot', $('version').textContent))));
+}
+
+// ホームの一覧の並べ替え（選んだものは覚えておく）。時刻の記録がないときは作成時刻を使う
+const SORTS = { viewed: '最終閲覧', updated: '最終更新', name: '名前' };
+function homeSort() { try { const v = localStorage.getItem('home-sort'); return v in SORTS ? v : 'viewed'; } catch { return 'viewed'; } }
+function sortedDbs() {
+  const by = homeSort();
+  if (by === 'name') return [...state.dbs];
+  const t = (n) => { const m = store.getMeta(n); return m[by] ?? m.created ?? 0; };
+  return [...state.dbs].sort((a, b) => t(b) - t(a) || a.localeCompare(b));
+}
+function viewedText(n) {
+  const m = store.getMeta(n), t = m.viewed ?? m.created;
+  return t ? ago(t) : '—';
+}
+function sortMenu(anchor) {
+  const cur = homeSort();
+  menu(anchor, Object.entries(SORTS).map(([k, label]) => ({
+    label, icon: k === cur ? '✓' : '',
+    action: () => { try { localStorage.setItem('home-sort', k); } catch { /* 無視 */ } showWelcome(); },
+  })), { align: 'end' });
 }
 
 // ホームの検索窓：入力に合う DB をプルダウンで出し、選ぶと開く
@@ -393,6 +420,7 @@ async function openDb(name, key, param) {
   } catch (e) { toast(friendlyError(e.message), 'error'); return showWelcome(); }
   state.file = null; setDirty(false);
   state.dbName = name;
+  store.touch(name, 'viewed');
   await showDb(key, param);
 }
 
@@ -770,7 +798,7 @@ async function copyDb(from = state.dbName, anchor = $('file-btn')) {
   try {
     await db.copy(from, to);
     requestPersist();
-    store.copyDb(from, to);
+    store.duplicateDb(from, to);
     state.dbs = await db.list();
     if (opened) { state.dbName = null; await openDb(to); } else showWelcome();
     toast(`「${to}」を作成しました`, 'success');
