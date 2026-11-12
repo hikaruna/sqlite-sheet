@@ -342,7 +342,8 @@ export class Grid {
       if (isNew && !this.draft) {
         // 下書きを開いていないときは、行番号欄の「＋」だけ（列追加の「＋」と対になる見た目）
         const here = this.cur.r === r;
-        frag.append(el('div.gr.row-adder', { class: here ? 'cur' : '', style: { top: (r * RH) + 'px', width: RHW + 'px' }, dataset: { r } },
+        // 行は表の幅いっぱいにする（行番号の欄と同じく、横にスクロールしても「＋」が左に残るように）
+        frag.append(el('div.gr.row-adder', { class: here ? 'cur' : '', style: { top: (r * RH) + 'px', width: this.totalW() + 'px' }, dataset: { r } },
           el('div.gr-head', { style: { width: RHW + 'px' }, title: '行を追加（最後の行で ↓ でも開きます）' }, '＋')));
         continue;
       }

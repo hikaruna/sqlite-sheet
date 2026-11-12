@@ -271,7 +271,9 @@ select.input { padding-right: 4px; }
 .gc.num .fk-label { float: left; margin: 0 6px 0 0; }
 .gr.new .gc { background: transparent; }
 .gr.new .placeholder { color: var(--text-3); font-size: 12px; }
-.gr.row-adder { display: flex; cursor: pointer; }
+/* 押せるのは「＋」だけ（行は「＋」を左に残すために表の幅いっぱいにしている） */
+.gr.row-adder { display: flex; pointer-events: none; }
+.gr.row-adder .gr-head { pointer-events: auto; cursor: pointer; }
 .gr.row-adder .gr-head { color: var(--text-3); font-size: 16px; background: none; }
 .gr.row-adder:hover .gr-head { color: var(--accent); background: var(--surface-3); }
 .gr.row-adder.cur .gr-head { color: var(--accent); box-shadow: inset 0 0 0 2px var(--accent); }
