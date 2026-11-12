@@ -212,6 +212,11 @@ function buildChrome() {
   // タブに戻ってきたら、ファイルがほかのアプリで変更されていないか確かめる
   document.addEventListener('visibilitychange', () => { if (!document.hidden) checkExternalChange(); });
   addEventListener('keydown', onGlobalKey);
+  // iPhone：シート画面ではページ全体を拡大させない（表は Grid が自分で拡大する）。
+  // document に付けると、ホームで引っ張って更新できなくなるおそれがあるので、シート画面の要素にだけ付ける
+  for (const sel of ['.topbar', '.workspace', '.bottombar']) {
+    document.querySelector(sel).addEventListener('gesturestart', (e) => { if (!document.body.classList.contains('at-home')) e.preventDefault(); });
+  }
   // 未保存の新しい行があるまま閉じようとしたら確認
   // ファイルに保存していない変更があるときも確認
   addEventListener('beforeunload', (e) => { if (state.grid?.hasDraft || (state.file && state.dirty)) { e.preventDefault(); e.returnValue = ''; } });

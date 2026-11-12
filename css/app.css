@@ -611,6 +611,8 @@ body.dropping::after {
 @media (pointer: coarse) {
   /* ダブルタップでの拡大をやめる。長押しで文字選択・吹き出しを出さない */
   html { touch-action: manipulation; }
+  /* シート画面ではページ全体の拡大をさせない（表だけを二本指で拡大する） */
+  body:not(.at-home) #app { touch-action: pan-x pan-y; }
   .grid-body, .gh-cell, .tabs { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
   /* キーボードが出たら、見える範囲に収める */
   #app { height: var(--vvh, 100%); }

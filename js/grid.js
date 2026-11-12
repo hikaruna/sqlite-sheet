@@ -10,6 +10,10 @@ const HH = 34;          // 見出しの高さ
 const RHW = 56;         // 行番号の幅
 const PAGE = 200;
 const DEFAULT_W = 150;
+// 表の拡大率（タッチ端末で二本指でつまむ）。見出しと表の中身に CSS の zoom を掛ける。
+// スクロール位置・表示の大きさは拡大後の値なので、行や列の位置と比べるときは z で割る
+const ZOOM_MIN = 0.5, ZOOM_MAX = 2;
+const loadZoom = () => { try { const v = Number(localStorage.getItem('grid-zoom')); return v >= ZOOM_MIN && v <= ZOOM_MAX ? v : 1; } catch { return 1; } };
 
 export const NULL_LABEL = 'NULL';
 
@@ -36,6 +40,7 @@ export class Grid {
     this.editing = null;   // { mode: 'enter'|'edit', r, c, start（開いたときのフォームの文字列） }
     this.draft = null;     // 新しい行の下書き { values: [列ごとの文字列|null|undefined(未入力)], errors: {c: msg} }
     this.widths = this.loadWidths();
+    this.z = TOUCH ? loadZoom() : 1;
     this.build();
   }
 
@@ -134,6 +139,8 @@ export class Grid {
     this.scroll.append(this.header, this.inner);
     this.host.append(this.scroll);
     this.empty = null;
+    this.applyZoom();
+    if (TOUCH) this.setupPinch();
 
     this.scroll.addEventListener('scroll', () => this.render(), { passive: true });
     new ResizeObserver(() => this.render()).observe(this.scroll);
@@ -166,6 +173,44 @@ export class Grid {
   }
 
   focus() { this.sink.focus({ preventScroll: true }); }
+
+  // ---------- 拡大（タッチ端末） ----------
+  applyZoom() { this.header.style.zoom = this.inner.style.zoom = String(this.z); }
+
+  /** 二本指でつまんで表だけを拡大縮小する。指の間にある位置が動かないようにスクロールを合わせる */
+  setupPinch() {
+    const s = this.scroll;
+    let start = null;
+    const mid = (t) => {
+      const rect = s.getBoundingClientRect();
+      return { x: (t[0].clientX + t[1].clientX) / 2 - rect.left, y: (t[0].clientY + t[1].clientY) / 2 - rect.top };
+    };
+    const dist = (t) => Math.hypot(t[0].clientX - t[1].clientX, t[0].clientY - t[1].clientY);
+    s.addEventListener('touchstart', (e) => {
+      if (e.touches.length !== 2) return;
+      const m = mid(e.touches);
+      this.pinching = true;
+      start = { d: dist(e.touches), z: this.z, cx: (s.scrollLeft + m.x) / this.z, cy: (s.scrollTop + m.y) / this.z };
+    }, { passive: true });
+    s.addEventListener('touchmove', (e) => {
+      if (!start || e.touches.length !== 2) return;
+      e.preventDefault(); // ページ全体の拡大・スクロールをさせない
+      const z = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, start.z * dist(e.touches) / start.d));
+      const m = mid(e.touches);
+      this.z = z; this.applyZoom();
+      s.scrollLeft = start.cx * z - m.x; s.scrollTop = start.cy * z - m.y;
+    }, { passive: false });
+    const end = (e) => {
+      if (!start || e.touches.length >= 2) return;
+      start = null; this.pinching = false;
+      this.z = Math.round(this.z * 100) / 100;
+      this.applyZoom(); this.render();
+      try { localStorage.setItem('grid-zoom', String(this.z)); } catch { /* 無視 */ }
+    };
+    s.addEventListener('touchend', end); s.addEventListener('touchcancel', end);
+    // iPhone：つまむ操作でページ全体が拡大されないようにする
+    s.addEventListener('gesturestart', (e) => e.preventDefault());
+  }
 
   // ---------- 列幅 ----------
   loadWidths() {
@@ -238,7 +283,7 @@ export class Grid {
     e.preventDefault(); e.stopPropagation();
     const startX = e.clientX, startW = this.colW(c);
     const move = (ev) => {
-      this.widths[this.cols[c].name] = Math.max(48, startW + ev.clientX - startX);
+      this.widths[this.cols[c].name] = Math.max(48, startW + (ev.clientX - startX) / this.z);
       this.renderHeader(); this.render();
     };
     const up = () => {
@@ -283,8 +328,10 @@ export class Grid {
 
   // ---------- 描画 ----------
   render() {
-    const st = this.scroll.scrollTop;
-    const vh = this.scroll.clientHeight;
+    // つまんでいる間は描き直さない。指の下のセルを作り直すと、iPhone はその指の続きの操作を届けなくなる
+    if (this.pinching) return;
+    const st = this.scroll.scrollTop / this.z;
+    const vh = this.scroll.clientHeight / this.z;
     const first = Math.max(0, Math.floor((st - HH) / RH) - 4);
     const last = Math.min(this.totalRows - 1, Math.ceil((st + vh) / RH) + 4);
     const { r0, r1, c0, c1 } = this.range();
@@ -381,10 +428,10 @@ export class Grid {
       num = typeof conv === 'number' || typeof conv === 'bigint';
       const need = Math.max(cw, this.textWidth(this.sink.value) + 20);
       if (num) {
-        const maxW = Math.max(cw, x + cw - (this.scroll.scrollLeft + RHW));
+        const maxW = Math.max(cw, x + cw - (this.scroll.scrollLeft / this.z + RHW));
         w = Math.min(maxW, need); left = x + cw - w;
       } else {
-        const maxW = Math.max(cw, this.scroll.scrollLeft + this.scroll.clientWidth - x - 4);
+        const maxW = Math.max(cw, (this.scroll.scrollLeft + this.scroll.clientWidth) / this.z - x - 4);
         w = Math.min(maxW, need);
       }
     }
@@ -460,11 +507,12 @@ export class Grid {
   ensureVisible(target = this.cur) {
     const { r, c } = target;
     const s = this.scroll;
-    const top = r * RH, bottom = top + RH + HH;
+    const z = this.z;
+    const top = r * RH * z, bottom = top + (RH + HH) * z;
     if (top < s.scrollTop) s.scrollTop = top;
     else if (bottom > s.scrollTop + s.clientHeight) s.scrollTop = bottom - s.clientHeight;
-    const x = this.colX(c), w = this.colW(c);
-    if (x - RHW < s.scrollLeft) s.scrollLeft = x - RHW;
+    const x = this.colX(c) * z, w = this.colW(c) * z;
+    if (x - RHW * z < s.scrollLeft) s.scrollLeft = x - RHW * z;
     else if (x + w > s.scrollLeft + s.clientWidth) s.scrollLeft = x + w - s.clientWidth;
   }
 
@@ -920,7 +968,7 @@ export class Grid {
       }
       this.moveTo(r + dr, c + dc, ext);
     };
-    const pageRows = Math.max(1, Math.floor(this.scroll.clientHeight / RH) - 2);
+    const pageRows = Math.max(1, Math.floor(this.scroll.clientHeight / this.z / RH) - 2);
     if (k === 'ArrowDown' && e.altKey && this.cols[c]?.fk && this.hooks.onFkPick) {
       e.preventDefault();
       const cellEl = this.body.querySelector(`.gr[data-r="${r}"] .gc[data-c="${c}"]`);
