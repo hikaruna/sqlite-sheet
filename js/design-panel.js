@@ -469,6 +469,18 @@ export class DesignPanel {
     });
     if (!ok) return;
     try {
+      // 名前だけの変更（表の名前・列名）は、元に戻せる形で main に任せる
+      const renames = this.draft.columns.filter((c) => c.from != null && c.from !== c.name).map((c) => [c.from, c.name]);
+      const renameOnly = p.kind === 'alter' && this.draft.columns.every((c) => c.from != null)
+        && p.stmts.length === (this.draft.name !== this.model.name ? 1 : 0) + renames.length;
+      if (renameOnly && this.ctx.onRename) {
+        const name = this.draft.name;
+        await this.ctx.onRename({ fromTable: this.model.name, toTable: name, cols: renames });
+        toast('テーブルを変更しました', 'success');
+        // 表の名前が変わると、main が新しいパネルに差し替える。差し替えられていなければ（列名だけ）自分で描き直す
+        if (this.footer.isConnected) { this.setModel(await readTable(name)); this.render(); }
+        return;
+      }
       if (p.kind === 'alter') {
         await db.batch(p.stmts.map((sql) => ({ sql })));
         // トランザクション中の未確定の印を、表・列の名前の変更に追従させる

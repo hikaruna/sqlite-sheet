@@ -1060,18 +1060,70 @@ async function renameSheet(key, anchor) {
   });
   if (!to || to === name) return;
   try {
-    if (kind === 't') { await db.exec(`ALTER TABLE ${q(name)} RENAME TO ${q(to)}`); txMarks.renameTable(name, to); }
-    else if (kind === 'v') {
-      const v = state.objects.find((o) => o.name === name);
-      const { cols, select } = viewSelect(v.sql);
-      await db.batch([{ sql: `DROP VIEW ${q(name)}` }, { sql: `CREATE VIEW ${q(to)}${cols} AS ${select}` }]);
-    } else { state.queries.find((x) => x.name === name).name = to; saveQueries(); }
-    const view = state.views.get(key);
-    if (view) state.views.set(kind + ':' + to, view);
-    renameInOrder(key, kind + ':' + to);
-    await refreshObjects();
-    await showSheet(kind + ':' + to, { keepView: true });
+    await doRenameSheet(kind, name, to);
+    // 名前の変更も元に戻せる（戻すときは、どのシートを開いていても名前だけを戻す）
+    undo.push({
+      label: `${KIND_NAME[kind]}の名前の変更`,
+      undoFn: () => doRenameSheet(kind, to, name),
+      redoFn: () => doRenameSheet(kind, name, to),
+    });
   } catch (e) { toast(friendlyError(e.message), 'error'); }
+}
+
+/** シート（表・ビュー・クエリ）の名前を変える。元に戻す・やり直すからも呼ぶ */
+async function doRenameSheet(kind, from, to) {
+  if (kind === 't') return renameSchema({ fromTable: from, toTable: to, cols: [] });
+  if (kind === 'v') {
+    const v = state.objects.find((o) => o.name === from);
+    const { cols, select } = viewSelect(v.sql);
+    await db.batch([{ sql: `DROP VIEW ${q(from)}` }, { sql: `CREATE VIEW ${q(to)}${cols} AS ${select}` }]);
+  } else { state.queries.find((x) => x.name === from).name = to; saveQueries(); }
+  const wasOpen = state.key === kind + ':' + from;
+  moveSheetState(kind + ':' + from, kind + ':' + to);
+  await refreshObjects();
+  if (wasOpen) await showSheet(kind + ':' + to, { keepView: true });
+}
+
+/** 名前が変わったシートの、並び順・並べ替えや絞り込みの状態を新しい名前へ移す */
+function moveSheetState(fromKey, toKey) {
+  if (fromKey === toKey) return;
+  const view = state.views.get(fromKey);
+  if (view) { state.views.set(toKey, view); state.views.delete(fromKey); }
+  renameInOrder(fromKey, toKey);
+}
+
+/**
+ * 表の名前・列名を変える（名前だけの変更）。シートの名前の変更・設計パネル・元に戻す／やり直すから呼ぶ。
+ * cols は [[元の列名, 新しい列名]]。列名の変更は新しい表の名前で行う
+ */
+async function renameSchema({ fromTable, toTable, cols }) {
+  const stmts = [];
+  if (fromTable !== toTable) stmts.push({ sql: `ALTER TABLE ${q(fromTable)} RENAME TO ${q(toTable)}` });
+  for (const [a, b] of cols) stmts.push({ sql: `ALTER TABLE ${q(toTable)} RENAME COLUMN ${q(a)} TO ${q(b)}` });
+  await db.batch(stmts);
+  const fromKey = 't:' + fromTable, toKey = 't:' + toTable;
+  const wasOpen = state.key === fromKey;
+  // 未確定の印・並べ替えや絞り込み・列幅を、新しい名前に付け替える
+  txMarks.renameTable(fromTable, toTable);
+  for (const [a, b] of cols) txMarks.renameColumn(toTable, a, b);
+  moveSheetState(fromKey, toKey);
+  const view = state.views.get(toKey);
+  if (view) {
+    const ren = (c) => cols.find(([a]) => a === c)?.[1] ?? c;
+    view.sorts.forEach((s) => { s.col = ren(s.col); });
+    view.filters.forEach((f) => { f.col = ren(f.col); });
+  }
+  try {
+    const wk = (t) => `w:${state.dbName}/${t}`;
+    const widths = JSON.parse(localStorage.getItem(wk(fromTable)) || 'null');
+    if (widths) {
+      for (const [a, b] of cols) if (a in widths) { widths[b] = widths[a]; delete widths[a]; }
+      localStorage.removeItem(wk(fromTable));
+      localStorage.setItem(wk(toTable), JSON.stringify(widths));
+    }
+  } catch { /* 見た目の設定なので失敗しても続ける */ }
+  await refreshObjects();
+  if (wasOpen) await showSheet(toKey, { keepView: true });
 }
 
 async function deleteSheet(key) {
@@ -1820,6 +1872,16 @@ function updatePanel(focusCol) {
     focusCol,
     tab: prev?.tab,
     onClose: () => togglePanel(false),
+    // 名前だけの変更は元に戻せる（それ以外の設計の変更は、今までどおり記録を消す）
+    onRename: async (r) => {
+      await renameSchema(r);
+      const back = { fromTable: r.toTable, toTable: r.fromTable, cols: r.cols.map(([a, b]) => [b, a]) };
+      undo.push({
+        label: r.cols.length ? '列名の変更' : 'テーブルの名前の変更',
+        undoFn: () => renameSchema(back),
+        redoFn: () => renameSchema(r),
+      });
+    },
     onApplied: async (newName, opts) => {
       if (!opts?.quiet) undo.clear();
       const key = 't:' + newName;
