@@ -1,6 +1,6 @@
 // アプリ本体：DB・シートの管理、画面の組み立て
 import { db, q } from './db-client.js';
-import { el, toast, menu, popover, closePopover, ask, confirmDialog, choiceDialog, modal, pickFile, download, modKey, isMac, touchHold } from './ui.js';
+import { el, toast, menu, popover, closePopover, ask, confirmDialog, choiceDialog, modal, pickFile, download, modKey, isMac, touchHold, icon } from './ui.js';
 import { listObjects, readTable, createTableSql, migrationSql, constantDefault, TYPES, affinity } from './schema.js';
 import { Grid } from './grid.js';
 import { TableSource, QuerySource, FILTER_OPS, friendlyError, convertInput, formText, formToDefault } from './sources.js';
@@ -176,23 +176,40 @@ function buildChrome() {
           blur: (e) => commitDbName(e.target.value),
         },
       }),
+      // 今のシート（パンくず）。押すとシートのメニュー（タブの右クリックと同じ）
+      el('span#crumb-sep.crumb-sep', { hidden: true }, '›'),
+      el('button#sheet-crumb.sheet-crumb', { hidden: true, title: 'シートの操作', on: { click: (e) => state.key && tabMenu(state.key, e.currentTarget) } }),
       // ファイルを直接編集しているときだけ出す。未保存ならクリックで保存
       el('button#save-state.save-state', { hidden: true, on: { click: () => saveFile() } }),
-      // トランザクション中だけ出す。押すと確定・取り消しを選べる
-      el('button#tx-state.tx-state', { hidden: true, title: 'トランザクション中（押すと確定・取り消し）', on: { click: (e) => txMenu(e.currentTarget) } }, '● トランザクション中'),
-      el('button#file-btn.tool-btn.file-btn', { title: 'データベースの操作', on: { click: (e) => dbMenu(e.currentTarget) } }, 'ファイル', el('span.caret', ' ▾')),
-      el('div.fx',
-        el('span#fx-ref.fx-ref', ''),
-        el('input#fx-input.fx-input', { spellcheck: false, placeholder: '', on: { keydown: onFxKey, focus: (e) => e.target.select() } })),
-      el('div.top-actions',
-        el('button#undo-btn.icon-btn', { title: '元に戻す', disabled: true, on: { click: doUndo } }, '↶'),
-        el('button#redo-btn.icon-btn', { title: 'やり直す', disabled: true, on: { click: doRedo } }, '↷'),
-        el('span.vsep'),
-        el('button#panel-btn.tool-btn', { title: 'テーブルの設計（列・キー・制約）', on: { click: () => togglePanel() } }, '⚙ 設計'),
-        el('button#console-btn.tool-btn', { title: `SQL コンソール（${MOD}\`）`, on: { click: () => toggleConsole() } }, '⌨ SQL'),
-        el('button.tool-btn.cmd-btn', { title: `コマンド（${MOD}K）`, on: { click: () => palette() } }, `${MOD}K`),
-        // 狭い画面では設計・SQL・コマンドをこのメニューにまとめる
-        el('button#more-btn.icon-btn.more-btn', { title: 'その他', on: { click: (e) => moreMenu(e.currentTarget) } }, '⋯'))),
+      // メニューバー：機能の正式な入口（ツールバーはその近道）。狭い画面では ☰ 1つにまとめる
+      el('nav.menubar',
+        el('button#file-btn.menubar-btn', { on: { click: (e) => dbMenu(e.currentTarget) } }, 'ファイル'),
+        el('button.menubar-btn', { on: { click: (e) => menu(e.currentTarget, editItems()) } }, '編集'),
+        el('button.menubar-btn', { on: { click: (e) => menu(e.currentTarget, dataItems()) } }, 'データ'),
+        el('button.menubar-btn', { on: { click: (e) => menu(e.currentTarget, toolItems()) } }, 'ツール')),
+      el('button.icon-btn.menubar-all', { title: 'メニュー', 'aria-label': 'メニュー', on: { click: (e) => allMenu(e.currentTarget) } }, '☰')),
+    // ツールバー（シート画面だけ）：編集の取り消し・表示の操作・パネル
+    el('div.toolbar',
+      el('button#undo-btn.tb-btn', { title: '元に戻す', disabled: true, on: { click: doUndo } }, icon('undo')),
+      el('button#redo-btn.tb-btn', { title: 'やり直す', disabled: true, on: { click: doRedo } }, icon('redo')),
+      el('span.vsep'),
+      // トランザクション：ふだんは「開始」、実行中は確定・取り消しをその場で
+      el('button#tx-begin.tb-btn', { title: 'トランザクションを開始（確定するまで変更を保存しない）', on: { click: beginTx } }, icon('tx'), el('span.tb-label', 'トランザクション')),
+      el('span#tx-box.tx-box', { hidden: true },
+        el('span.tx-label', { title: '確定するまで変更は保存されません' }, '● トランザクション中'),
+        el('button.tb-btn.tx-commit', { title: '確定（COMMIT）', on: { click: commitTx } }, '確定'),
+        el('button.tb-btn.tx-rollback', { title: '取り消し（ROLLBACK）', on: { click: rollbackTx } }, '取り消し')),
+      el('span.vsep'),
+      // 保護：テーブルなら常に出す（保護がなくても、ここから新しく保護できる）
+      el('button#prot-btn.tb-btn', { title: 'シートと範囲の保護', on: { click: (e) => protPanel(e.currentTarget) } }, icon('lock'), el('span.tb-label', '保護'), el('span#prot-n.tb-count', { hidden: true })),
+      el('span.grow'),
+      el('button#panel-btn.tb-btn', { title: 'テーブルの設計（列・キー・制約）', on: { click: () => togglePanel() } }, icon('design'), el('span.tb-label', '設計')),
+      el('button#console-btn.tb-btn', { title: `SQL コンソール（${MOD}\`）`, on: { click: () => toggleConsole() } }, icon('terminal'), el('span.tb-label', 'SQL')),
+      el('button.tb-btn.cmd-btn', { title: `コマンド（${MOD}K）`, on: { click: () => palette() } }, el('kbd.tb-kbd', `${MOD}K`))),
+    // 数式バー（値のエリア）：名前ボックス ＋ fx ＋ 入力欄
+    el('div.fxbar',
+      el('span#fx-ref.fx-ref', ''),
+      el('input#fx-input.fx-input', { spellcheck: false, placeholder: '', on: { keydown: onFxKey, focus: (e) => e.target.select() } })),
     el('main.workspace',
       el('section#sheet.sheet',
         el('div#sheet-head.sheet-head'),
@@ -222,7 +239,7 @@ function buildChrome() {
   addEventListener('keydown', onGlobalKey);
   // iPhone：シート画面ではページ全体を拡大させない（表は Grid が自分で拡大する）。
   // document に付けると、ホームで引っ張って更新できなくなるおそれがあるので、シート画面の要素にだけ付ける
-  for (const sel of ['.topbar', '.workspace', '.bottombar']) {
+  for (const sel of ['.topbar', '.toolbar', '.fxbar', '.workspace', '.bottombar']) {
     document.querySelector(sel).addEventListener('gesturestart', (e) => { if (!document.body.classList.contains('at-home')) e.preventDefault(); });
   }
   // 未保存の新しい行があるまま閉じようとしたら確認
@@ -294,17 +311,8 @@ async function showUndone(e, dir) {
   return many + (hidden ? '（絞り込みで表示されていません）' : '');
 }
 
-function moreMenu(anchor) {
-  menu(anchor, [
-    { icon: '⚙', label: 'テーブルの設計', disabled: $('panel-btn').disabled, action: () => togglePanel() },
-    { icon: '⌨', label: 'SQL コンソール', action: () => toggleConsole() },
-    { icon: '⌕', label: 'コマンド', action: () => palette() },
-  ], { align: 'end' });
-}
-
 function toggleConsole(force) {
   const open = sqlConsole.toggle(force);
-  $('console-btn').classList.toggle('on', open);
   if (!open) state.grid?.focus();
 }
 
@@ -516,7 +524,8 @@ let txUndoSnap = null;
 function setTx(v) {
   if (state.inTx === v) return;
   state.inTx = v;
-  $('tx-state').hidden = !v;
+  $('tx-box').hidden = !v;
+  $('tx-begin').hidden = v;
   txMarks.clear();
   undo.resetTx();
   txMarks.on = v;
@@ -547,14 +556,6 @@ async function rollbackTx() {
     toast('取り消しました');
     return true;
   } catch (e) { toast('取り消せませんでした：' + friendlyError(e.message), 'error'); return false; }
-}
-
-function txMenu(anchor) {
-  menu(anchor, [
-    { header: 'トランザクション中' },
-    { label: '確定（COMMIT）', icon: '✓', action: commitTx },
-    { label: '取り消し（ROLLBACK）', icon: '↶', danger: true, action: rollbackTx },
-  ]);
 }
 
 /** 離れる前に：トランザクション中なら確定か取り消しを選んでもらう */
@@ -845,7 +846,7 @@ function dbActions(name, { anchor, home = false } = {}) {
   ].filter(Boolean);
 }
 
-function dbMenu(anchor) {
+function dbMenu(anchor, { list = false } = {}) {
   const items = [];
   // 今開いているもの
   if (state.file) {
@@ -856,19 +857,61 @@ function dbMenu(anchor) {
   } else if (state.dbName) {
     items.push({ header: `◆ ${state.dbName}` }, ...dbActions(state.dbName, { anchor }), '-');
   }
-  if (state.dbName) {
-    items.push(...(state.inTx
-      ? [{ label: 'トランザクションを確定（COMMIT）', icon: '✓', action: commitTx },
-        { label: 'トランザクションを取り消し（ROLLBACK）', icon: '↶', danger: true, action: rollbackTx }]
-      : [{ label: 'トランザクションを開始', icon: '⧗', action: beginTx }]), '-');
-  }
   items.push({ header: 'データベース' });
   for (const n of state.dbs) items.push({ label: n, icon: n === state.dbName ? '✓' : '◆', action: () => { if (n !== state.dbName) openDb(n); } });
   items.push({ label: '新規作成…', icon: '＋', action: () => newDb(anchor) },
     { label: '.sqlite ファイルを取り込む…', icon: '⤒', action: async () => { const f = await pickFile('.sqlite,.sqlite3,.db'); if (f) importFile(f); } },
     { label: 'サンプルを作成', icon: '✨', action: makeSample });
   if (files.supported) items.push('-', { label: 'ローカルファイルを直接編集…', icon: '📂', action: fileModeDialog });
+  if (list) return items;
   menu(anchor, items);
+}
+
+// ---------- メニューバーの各メニュー ----------
+function editItems() {
+  return [
+    { label: undo.canUndo() ? `元に戻す：${undo.peekUndo()}` : '元に戻す', icon: '↶', kbd: `${MOD}Z`, disabled: !undo.canUndo(), action: doUndo },
+    { label: undo.canRedo() ? `やり直す：${undo.peekRedo()}` : 'やり直す', icon: '↷', kbd: `${MOD}Y`, disabled: !undo.canRedo(), action: doRedo },
+  ];
+}
+
+function dataItems() {
+  const isTable = state.key?.[0] === 't' && !!state.model;
+  const name = state.key?.slice(2), locked = isTable && state.lockedSheets?.has(name);
+  const anchor = $('prot-btn');
+  return [
+    { header: '保護' },
+    { label: '保護されたシートと範囲…', icon: '🔒', disabled: !isTable, action: () => protPanel(anchor) },
+    locked
+      ? { label: 'シートの保護を外す…', icon: '🔓', action: () => unprotect(state.prots.find((p) => p.kind === 'sheet')) }
+      : { label: 'シート全体を保護…', icon: '🔒', disabled: !isTable, action: () => protect({ kind: 'sheet' }, anchor) },
+    { label: '選択範囲を保護…', icon: '▦', disabled: !isTable || !state.grid, action: () => protectSelection(anchor) },
+    '-',
+    { header: 'トランザクション' },
+    ...(state.inTx
+      ? [{ label: '確定（COMMIT）', icon: '✓', action: commitTx },
+        { label: '取り消し（ROLLBACK）', icon: '↶', danger: true, action: rollbackTx }]
+      : [{ label: 'トランザクションを開始', icon: '⧗', action: beginTx }]),
+  ];
+}
+
+function toolItems() {
+  const isTable = state.key?.[0] === 't' && !!state.model;
+  return [
+    { label: 'テーブルの設計', icon: '⚙', disabled: !isTable, action: () => togglePanel() },
+    { label: 'SQL コンソール', icon: '⌨', kbd: `${MOD}\``, action: () => toggleConsole() },
+    { label: 'コマンド', icon: '⌕', kbd: `${MOD}K`, action: () => palette() },
+  ];
+}
+
+/** 狭い画面：メニューバーの中身を1つのメニューに */
+function allMenu(anchor) {
+  menu(anchor, [
+    { header: 'ファイル' }, ...dbMenu(anchor, { list: true }), '-',
+    { header: '編集' }, ...editItems(), '-',
+    ...dataItems(), '-',
+    { header: 'ツール' }, ...toolItems(),
+  ]);
 }
 
 // ◆：ホーム（DB の一覧）へ。DB の移動なので履歴に積む（「戻る」で元の DB に戻れる）
@@ -1003,6 +1046,10 @@ function renderTabs() {
     }, el('span.tab-icon', KIND_ICON[kind]), name, kind === 't' && state.lockedSheets?.has(name) ? el('span.tab-lock', { title: 'シート全体が保護されています' }, '🔒') : null);
   }));
   tabs.querySelector('.tab.on')?.scrollIntoView({ inline: 'nearest', block: 'nearest' });
+  // 上部のパンくず：DB 名 › 今のシート
+  const crumb = $('sheet-crumb'), has = !!state.key;
+  crumb.hidden = $('crumb-sep').hidden = !has;
+  if (has) crumb.replaceChildren(el('span.tab-icon', KIND_ICON[state.key[0]]), el('span.crumb-name', state.key.slice(2)));
 }
 
 function tabMenu(key, anchor) {
@@ -1307,13 +1354,12 @@ function renderSheetHead(kind, name, error) {
     }, `${f.col} ${FILTER_OPS.find((o) => o.id === f.op)?.label.replace(/^\S+ /, '') ?? f.op}${FILTER_OPS.find((o) => o.id === f.op)?.noValue ? '' : ' 「' + f.value + '」'}`,
     el('button.chip-x', { title: '絞り込みを解除', on: { click: () => { view.filters.splice(i, 1); reloadSheet(); } } }, '×'))),
     el('span.grow'),
-    kind === 't' && state.prots?.length ? el('button.chip.prot', { title: 'このシートの保護', on: { click: (e) => protPanel(e.currentTarget) } },
-      `🔒 保護 ${state.prots.length}`) : null,
     kind === 't' && state.source ? el('code.sheet-sql', { title: 'このシートが実行している SQL' }, state.source.displaySql()) : null,
   );
-  // 何もかかっていないクエリ／ビューではバーごと出さない
-  if (view.sorts.length || view.filters.length || kind === 't') parts.push(chips);
+  // 並べ替え・絞り込みがあるときだけ出す
+  if (view.sorts.length || view.filters.length) parts.push(chips);
   head.replaceChildren(...parts);
+  updateProtBtn(kind);
 }
 
 function queryEditor(kind, name, error) {
@@ -1513,7 +1559,7 @@ function updateFx(s) {
   s ??= { r: g.cur.r, c: g.cur.c, row: g.rowAt(g.cur.r), isNew: g.cur.r === g.newRowIndex, col: g.cols[g.cur.c], range: g.range() };
   const col = s.col;
   const draft = s.isNew && g.hasDraft;
-  ref.textContent = col ? (s.isNew ? (g.draft ? `✎ ${draft ? '未保存' : '新しい行'} · ${col.name}` : '＋ 行を追加（クリックか Enter）') : `${s.r + 1} · ${col.name}`) : '';
+  ref.textContent = col ? (s.isNew ? (g.draft ? `✎ ${draft ? '未保存' : '新しい行'} · ${col.name}` : '＋ 行を追加（クリックか Enter）') : `${col.name} · ${s.r + 1}行目`) : '';
   const v = s.isNew ? (g.draft ? g.draft.values[s.c] : undefined) : s.row?.values[s.c];
   fx.readOnly = !state.source.editable || col?.readonly || v instanceof Uint8Array;
   fx.classList.toggle('null', false);
@@ -1811,19 +1857,37 @@ async function unprotect(p) {
   } catch (e) { toast(friendlyError(e.message), 'error'); }
 }
 
-/** このシートの保護の一覧。クリックで範囲を選択、🔓 で外す */
+function updateProtBtn(kind = state.key?.[0]) {
+  const b = $('prot-btn'), n = kind === 't' ? state.prots?.length || 0 : 0;
+  b.disabled = kind !== 't';
+  b.title = kind === 't' ? 'シートと範囲の保護' : '保護できるのはテーブルだけです';
+  $('prot-n').hidden = !n;
+  $('prot-n').textContent = n;
+}
+
+/** このシートの保護：一覧（クリックで範囲を選択、🔓 で外す）と、新しく保護する入口 */
 function protPanel(anchor) {
-  const m = state.model;
+  const name = state.key.slice(2), locked = state.lockedSheets?.has(name);
   popover(anchor, el('div.prot-panel',
+    protSection(state.model),
+    el('div.prot-actions',
+      locked ? null : el('button.btn.sm', { on: { click: () => { closePopover(); protect({ kind: 'sheet' }, anchor); } } }, '🔒 シート全体を保護…'),
+      el('button.btn.sm', { disabled: !state.grid, on: { click: () => { closePopover(); protectSelection(anchor); } } }, '▦ 選択範囲を保護…'))),
+  { align: 'start' });
+}
+
+function protSection(m) {
+  return el('div',
     el('div.ask-title', '🔒 保護されたシートと範囲'),
-    el('div.prot-list', state.prots.map((p) => el('div.prot-item', {
+    state.prots?.length ? null : el('div.prot-empty', 'このシートには保護がありません。'),
+    el('div.prot-list', (state.prots || []).map((p) => el('div.prot-item', {
       title: 'クリックで範囲を選択',
       on: { click: (e) => { if (!e.target.closest('button')) { closePopover(); selectProtection(p); } } },
     },
     el('span.prot-icon', PROT_ICON[p.kind]),
     el('div.prot-text', el('div.prot-note', p.note || describe(m, p)), p.note ? el('div.prot-what', describe(m, p)) : null),
     el('button.btn.sm', { title: '保護を外す', on: { click: () => { closePopover(); unprotect(p); } } }, '🔓 外す')))),
-    el('div.prot-foot', 'セルを選んで右クリック →「範囲を保護…」で追加できます')), { align: 'end' });
+    el('div.prot-foot', '範囲は、選んでから下のボタンか右クリック →「範囲を保護…」で'));
 }
 
 /** 保護の範囲をグリッドで選択する（先頭 5000 行の中で探す） */

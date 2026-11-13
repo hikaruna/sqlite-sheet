@@ -145,21 +145,58 @@ select.input { padding-right: 4px; }
 .save-state.dirty:hover { filter: brightness(0.97); }
 .caret { color: var(--text-3); font-size: 10px; }
 .db-icon { color: var(--accent); font-size: 12px; }
-.fx {
-  flex: 1; display: flex; align-items: center; min-width: 0; height: 32px;
-  border: 1px solid var(--line); border-radius: 8px; background: var(--surface-2); overflow: hidden;
+/* パンくず：DB 名 › シート */
+.crumb-sep { flex: none; color: var(--text-3); font-size: 15px; margin: 0 -4px; }
+.sheet-crumb {
+  flex: 0 1 auto; min-width: 0; display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 8px;
+  border: 1px solid transparent; border-radius: 6px; background: none; color: var(--text); font-size: 14px; font-weight: 550;
 }
-.fx:focus-within { border-color: var(--accent); background: var(--surface); }
+.sheet-crumb:hover { background: var(--surface-2); }
+.crumb-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.menubar { display: flex; align-items: center; gap: 0; margin-left: 4px; }
+.menubar-btn { height: 28px; padding: 0 8px; border: 0; border-radius: 6px; background: none; color: var(--text-2); font-size: 13px; white-space: nowrap; }
+.menubar-btn:hover { background: var(--surface-2); color: var(--text); }
+.menubar-all { display: none; margin-left: auto; }
+.ico { width: 16px; height: 16px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.75; stroke-linecap: round; stroke-linejoin: round; }
+
+/* ツールバー */
+.toolbar {
+  display: flex; align-items: center; gap: 2px; height: 40px; padding: 0 8px;
+  background: var(--surface); border-bottom: 1px solid var(--line);
+}
+.tb-btn {
+  flex: none; display: inline-flex; align-items: center; gap: 6px; height: 28px; min-width: 28px; padding: 0 7px;
+  border: 1px solid transparent; border-radius: 6px; background: none; color: var(--text-2); white-space: nowrap; justify-content: center;
+}
+@media (hover: hover) { .tb-btn:hover:not(:disabled) { background: var(--surface-2); color: var(--text); } }
+.tb-btn:disabled { opacity: .4; cursor: default; }
+/* SQL ボタンはコンソールが開いているあいだ押下状態（× や「コンソールで SELECT」で開閉しても合う） */
+.tb-btn.on, body.console-open #console-btn { background: var(--accent-soft); color: var(--accent); border-color: var(--accent-line); }
+.tb-kbd { font: 11px var(--sans); color: var(--text-3); padding: 1px 6px; border: 1px solid var(--line-strong); border-radius: 4px; }
+
+/* 数式バー（値のエリア） */
+.fxbar {
+  display: flex; align-items: center; height: 34px;
+  background: var(--surface); border-bottom: 1px solid var(--line);
+}
 .fx-ref {
-  flex: none; max-width: 220px; padding: 0 10px; height: 100%; display: flex; align-items: center;
+  flex: none; width: 180px; height: 100%; padding: 0 10px; display: flex; align-items: center;
   border-right: 1px solid var(--line); color: var(--text-2); font-size: 12px;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-.fx-ref:empty { display: none; }
-.fx-input { flex: 1; min-width: 0; height: 100%; border: 0; background: none; padding: 0 10px; outline: none; }
+.tb-count { min-width: 16px; padding: 0 5px; border-radius: 999px; background: var(--surface-3); color: var(--text-2); font-size: 11px; line-height: 16px; text-align: center; }
+.tx-box { display: inline-flex; align-items: center; gap: 2px; height: 28px; padding: 0 2px 0 10px; border: 1px solid var(--pending); border-radius: 6px; background: var(--pending-soft); }
+.tx-label { color: var(--pending); font-size: 12px; font-weight: 600; white-space: nowrap; margin-right: 4px; }
+.tx-box .tb-btn { height: 22px; padding: 0 8px; font-size: 12px; }
+.tx-commit { color: var(--pending) !important; font-weight: 600; }
+.tx-rollback { color: var(--text-2); }
+.prot-empty { color: var(--text-3); font-size: 12.5px; padding: 6px 2px; }
+.prot-actions { display: flex; gap: 6px; flex-wrap: wrap; padding-top: 8px; }
+.fx-input { flex: 1; min-width: 0; height: 100%; border: 0; background: none; padding: 0 10px; outline: none; color: var(--text); }
+.fxbar:focus-within { box-shadow: inset 0 -2px 0 var(--accent); }
 .fx-input.null::placeholder { font-style: italic; }
 .fx-input[readonly] { color: var(--text-2); }
-.top-actions { display: flex; align-items: center; gap: 2px; }
+body.at-home .toolbar, body.at-home .fxbar { display: none; }
 
 /* ---------- 作業領域 ---------- */
 .workspace { flex: 1; display: flex; min-height: 0; }
@@ -367,12 +404,6 @@ select.input { padding-right: 4px; }
 /* SQL コンソールの実行履歴：元に戻した実行 */
 .log-item.undone .log-sql { text-decoration: line-through; opacity: .6; }
 .log-undone { margin-left: 6px; padding: 0 5px; border: 1px solid var(--line-strong); border-radius: 4px; color: var(--text-3); font-size: 10.5px; }
-/* 上部バーの「トランザクション中」 */
-.tx-state {
-  flex: none; height: 26px; padding: 0 8px; border: 1px solid var(--pending); border-radius: 6px;
-  background: var(--pending-soft); color: var(--pending); font-size: 12px; font-weight: 600; white-space: nowrap;
-}
-.tx-state:hover { filter: brightness(0.97); }
 .dp-tab.has-pending::after { content: '●'; margin-left: 4px; color: var(--pending); font-size: 8px; vertical-align: 2px; }
 .dp-cols { display: grid; gap: 4px; }
 .dp-col { border: 1px solid var(--line); border-radius: 8px; background: var(--surface); }
@@ -625,14 +656,19 @@ body.dropping::after {
 }
 
 @media (max-width: 760px) {
-  .panel { position: fixed; inset: 48px 0 38px auto; width: min(400px, 100vw); z-index: 20; box-shadow: var(--shadow); }
-  .fx-ref { display: none; }
+  .panel { position: fixed; inset: 122px 0 38px auto; width: min(400px, 100vw); z-index: 20; box-shadow: var(--shadow); }
+  .fx-ref { width: 96px; }
   .tool-btn { padding: 0 6px; }
+  .toolbar { overflow-x: auto; scrollbar-width: none; }
+  .tb-label, .cmd-btn, .tx-label, .menubar { display: none; }
+  body:not(.at-home) .menubar-all { display: inline-grid; place-items: center; }
+  .tx-box { padding-left: 2px; }
   /* 上部バーを画面幅に収める */
   .topbar { gap: 4px; padding: 0 6px; }
   .home-btn { width: 28px; }
   .db-name { max-width: 30vw; }
-  .file-btn .caret, .top-actions .vsep { display: none; }
+  .db-name { max-width: 28vw; }
+  .crumb-name { max-width: 28vw; }
   /* 縦並び。コンソールが低くても結果・実行履歴の欄が潰れないよう、入力欄は高さの 4 割まで */
   .console { min-height: 240px; }
   .console-body { grid-template-columns: 1fr; grid-template-rows: minmax(56px, 40%) minmax(0, 1fr); }
@@ -641,7 +677,6 @@ body.dropping::after {
 }
 
 /* ---------- スマホ・タッチ端末 ---------- */
-.more-btn { display: none; }
 /* 範囲を広げるつまみ（タッチ端末だけ grid.js が出す） */
 .grid-handle {
   position: absolute; z-index: 5; width: 22px; height: 22px; margin: -11px 0 0 -11px; touch-action: none;
@@ -669,6 +704,8 @@ body.dropping::after {
   .gh-btn { width: 28px; height: 28px; }
   .icon-btn { width: 36px; height: 36px; }
   .tool-btn, .btn { height: 36px; }
+  .tb-btn { height: 34px; min-width: 34px; }
+  .toolbar { height: 44px; }
   .btn.sm { height: 32px; }
   .menu-item { height: 42px; font-size: 14px; }
   .menu-item kbd { display: none; }
@@ -680,8 +717,6 @@ body.dropping::after {
   input, textarea, select, .grid-sink { font-size: 16px; }
 }
 @media (max-width: 760px) {
-  .more-btn { display: inline-grid; }
-  #panel-btn, #console-btn, .cmd-btn { display: none; }
   .version { display: none; }
   /* メニュー・ポップオーバーは画面の下から出すシート */
   .popover.as-sheet {
