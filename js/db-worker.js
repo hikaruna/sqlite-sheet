@@ -1,5 +1,6 @@
 // SQLite を独占する Worker。opfs-sahpool VFS を使うので COOP/COEP ヘッダー不要。
 import sqlite3InitModule from 'https://cdn.jsdelivr.net/npm/@sqlite.org/sqlite-wasm@3.54.1-build1/dist/index.mjs';
+import { addRegexpFunctions } from './regexp.js';
 
 let sqlite3, pool, db = null, currentName = null;
 // 開いている DB の種類。'file' は端末のファイルをメモリに読み込んだもので、保存（save）したときだけファイルへ書く
@@ -83,11 +84,17 @@ async function close() {
   return true;
 }
 
+/** 開いた接続の準備（DB ファイルではなく接続ごとの設定なので、開くたびに行う） */
+function setup(d) {
+  d.exec('PRAGMA foreign_keys = ON');
+  addRegexpFunctions(d);
+}
+
 async function open(name) {
   await close();
   await pool.reserveMinimumCapacity(pool.getFileNames().length + 4);
   db = new pool.OpfsSAHPoolDb(fileOf(name));
-  db.exec('PRAGMA foreign_keys = ON');
+  setup(db);
   currentName = name; kind = 'opfs';
   return true;
 }
@@ -108,7 +115,7 @@ async function openFile(name, h) {
       d.checkRc(capi.sqlite3_deserialize(d.pointer, 'main', p, bytes.length, bytes.length,
         capi.SQLITE_DESERIALIZE_FREEONCLOSE | capi.SQLITE_DESERIALIZE_RESIZEABLE));
     }
-    d.exec('PRAGMA foreign_keys = ON');
+    setup(d);
   } catch (e) { d.close(); throw e; }
   db = d; currentName = name; kind = 'file'; handle = h; stamp = stampOf(f);
   return true;
