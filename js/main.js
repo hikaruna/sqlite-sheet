@@ -4,6 +4,7 @@ import { el, toast, menu, popover, closePopover, ask, confirmDialog, choiceDialo
 import { listObjects, readTable, createTableSql, migrationSql, constantDefault, TYPES, affinity } from './schema.js';
 import { Grid } from './grid.js';
 import { TableSource, QuerySource, FILTER_OPS, friendlyError, convertInput, formText, formToDefault } from './sources.js';
+import { txMarks } from './txmarks.js';
 import { DesignPanel } from './design-panel.js';
 import { SqlConsole } from './console.js';
 import { undo } from './undo.js';
@@ -177,6 +178,8 @@ function buildChrome() {
       }),
       // ファイルを直接編集しているときだけ出す。未保存ならクリックで保存
       el('button#save-state.save-state', { hidden: true, on: { click: () => saveFile() } }),
+      // トランザクション中だけ出す。押すと確定・取り消しを選べる
+      el('button#tx-state.tx-state', { hidden: true, title: 'トランザクション中（押すと確定・取り消し）', on: { click: (e) => txMenu(e.currentTarget) } }, '● トランザクション中'),
       el('button#file-btn.tool-btn.file-btn', { title: 'データベースの操作', on: { click: (e) => dbMenu(e.currentTarget) } }, 'ファイル', el('span.caret', ' ▾')),
       el('div.fx',
         el('span#fx-ref.fx-ref', ''),
@@ -211,6 +214,7 @@ function buildChrome() {
   // DB への書き込み（成功したもの）を最終更新として記録する。ローカルファイルは対象外
   db.onLog((e) => { if (!e.error && state.dbName && !state.file) store.touch(state.dbName, 'updated'); });
   db.onDirty(setDirty);
+  db.onTx(setTx);
   // タブに戻ってきたら、ファイルがほかのアプリで変更されていないか確かめる
   document.addEventListener('visibilitychange', () => { if (!document.hidden) checkExternalChange(); });
   addEventListener('keydown', onGlobalKey);
@@ -221,7 +225,7 @@ function buildChrome() {
   }
   // 未保存の新しい行があるまま閉じようとしたら確認
   // ファイルに保存していない変更があるときも確認
-  addEventListener('beforeunload', (e) => { if (state.grid?.hasDraft || (state.file && state.dirty)) { e.preventDefault(); e.returnValue = ''; } });
+  addEventListener('beforeunload', (e) => { if (state.grid?.hasDraft || state.inTx || (state.file && state.dirty)) { e.preventDefault(); e.returnValue = ''; } });
   // .sqlite ファイルのドラッグ＆ドロップ
   addEventListener('dragover', (e) => { if (e.dataTransfer?.types.includes('Files')) { e.preventDefault(); document.body.classList.add('dropping'); } });
   addEventListener('dragleave', (e) => { if (!e.relatedTarget) document.body.classList.remove('dropping'); });
@@ -483,6 +487,71 @@ async function showDb(key, param) {
 // ======================================================================
 const dbLabel = () => (state.file ? state.file.name : state.dbName);
 
+// ---------- トランザクション ----------
+// 開始中の変更は確定（COMMIT）するまで DB に残らない。変えたセル・足した行には未確定の印を付ける
+// 開始時の「元に戻す」の記録の写し。取り消したら、記録もこの状態に戻す
+let txUndoSnap = null;
+function setTx(v) {
+  if (state.inTx === v) return;
+  state.inTx = v;
+  $('tx-state').hidden = !v;
+  txMarks.clear();
+  undo.resetTx();
+  txMarks.on = v;
+  if (v) txUndoSnap = undo.snapshot();
+  state.grid?.render();
+}
+
+async function beginTx() {
+  if (state.grid && !(await state.grid.flushDraft())) return;
+  try { await db.begin(); toast('トランザクションを開始しました。確定するまで変更は保存されません'); }
+  catch (e) { toast(friendlyError(e.message), 'error'); }
+}
+
+async function commitTx() {
+  if (state.grid && !(await state.grid.flushDraft())) return false;
+  try { await db.commit(); toast('確定しました', 'success'); return true; }
+  catch (e) { toast('確定できませんでした：' + friendlyError(e.message), 'error'); return false; }
+}
+
+async function rollbackTx() {
+  state.grid?.discardDraft?.();
+  try {
+    const snap = txUndoSnap;
+    await db.rollback();
+    if (snap) undo.restore(snap);
+    await refreshObjects();
+    if (state.key) await showSheet(state.key, { keepView: true });
+    toast('取り消しました');
+    return true;
+  } catch (e) { toast('取り消せませんでした：' + friendlyError(e.message), 'error'); return false; }
+}
+
+function txMenu(anchor) {
+  menu(anchor, [
+    { header: 'トランザクション中' },
+    { label: '確定（COMMIT）', icon: '✓', action: commitTx },
+    { label: '取り消し（ROLLBACK）', icon: '↶', danger: true, action: rollbackTx },
+  ]);
+}
+
+/** 離れる前に：トランザクション中なら確定か取り消しを選んでもらう */
+async function settleTx() {
+  if (!state.inTx) return true;
+  const c = await choiceDialog({
+    title: 'トランザクション中です',
+    body: '確定していない変更があります。どうしますか？',
+    choices: [
+      { label: 'キャンセル', value: null },
+      { label: '取り消す（ROLLBACK）', value: 'rollback', danger: true },
+      { label: '確定する（COMMIT）', value: 'commit', primary: true },
+    ],
+  });
+  if (c === 'commit') return commitTx();
+  if (c === 'rollback') return rollbackTx();
+  return false;
+}
+
 function setDirty(v) {
   state.dirty = !!v;
   const b = $('save-state');
@@ -500,6 +569,7 @@ function setDirty(v) {
 /** 今の DB から離れてよいか。未保存の新しい行は保存し、ファイルの未保存の変更は保存するか尋ねる */
 async function leaveCurrent() {
   if (state.grid && !(await state.grid.flushDraft())) return false;
+  if (!(await settleTx())) return false;
   if (!state.file || !state.dirty) return true;
   const c = await choiceDialog({
     title: `「${state.file.name}」への変更を保存しますか？`,
@@ -764,6 +834,12 @@ function dbMenu(anchor) {
   } else if (state.dbName) {
     items.push({ header: `◆ ${state.dbName}` }, ...dbActions(state.dbName, { anchor }), '-');
   }
+  if (state.dbName) {
+    items.push(...(state.inTx
+      ? [{ label: 'トランザクションを確定（COMMIT）', icon: '✓', action: commitTx },
+        { label: 'トランザクションを取り消し（ROLLBACK）', icon: '↶', danger: true, action: rollbackTx }]
+      : [{ label: 'トランザクションを開始', icon: '⧗', action: beginTx }]), '-');
+  }
   items.push({ header: 'データベース' });
   for (const n of state.dbs) items.push({ label: n, icon: n === state.dbName ? '✓' : '◆', action: () => { if (n !== state.dbName) openDb(n); } });
   items.push({ label: '新規作成…', icon: '＋', action: () => newDb(anchor) },
@@ -984,7 +1060,7 @@ async function renameSheet(key, anchor) {
   });
   if (!to || to === name) return;
   try {
-    if (kind === 't') await db.exec(`ALTER TABLE ${q(name)} RENAME TO ${q(to)}`);
+    if (kind === 't') { await db.exec(`ALTER TABLE ${q(name)} RENAME TO ${q(to)}`); txMarks.renameTable(name, to); }
     else if (kind === 'v') {
       const v = state.objects.find((o) => o.name === name);
       const { cols, select } = viewSelect(v.sql);
@@ -1831,6 +1907,10 @@ function palette() {
     { label: 'SQL コンソールを開く', icon: '⌨', run: () => toggleConsole(true) },
     state.model ? { label: 'テーブルの設計を開く', icon: '⚙', run: () => togglePanel(true) } : null,
     state.file ? null : { label: 'DB をファイルに書き出す', icon: '⤓', run: () => exportCurrent() },
+    ...(state.inTx
+      ? [{ label: 'トランザクションを確定（COMMIT）', icon: '✓', run: commitTx },
+        { label: 'トランザクションを取り消し（ROLLBACK）', icon: '↶', run: rollbackTx }]
+      : [{ label: 'トランザクションを開始', icon: '⧗', run: beginTx }]),
     { label: 'CSV からテーブルを作成', icon: '⤒', run: importCsv },
     state.file ? { label: 'ファイルに保存', icon: '💾', run: () => saveFile() } : null,
     ...state.dbs.filter((n) => n !== state.dbName).map((n) => ({ label: n, hint: 'DB を開く', icon: '◆', run: () => openDb(n) })),

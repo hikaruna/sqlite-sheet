@@ -4,10 +4,13 @@ let seq = 0;
 const pending = new Map();
 const logListeners = new Set();
 const dirtyListeners = new Set();
+const txListeners = new Set();
+let inTx = false;
 
 worker.onmessage = (e) => {
   // ファイル DB に未保存の変更があるかの知らせ（id のない通知）
   if (e.data.event === 'dirty') { for (const f of dirtyListeners) f(e.data.dirty); return; }
+  if (e.data.event === 'tx') { inTx = e.data.inTx; for (const f of txListeners) f(e.data.inTx); return; }
   const { id, result, error } = e.data;
   const p = pending.get(id);
   if (!p) return;
@@ -64,6 +67,13 @@ export const db = {
   onLog: (f) => logListeners.add(f),
   /** ファイル DB の未保存の変更の有無（true/false）の購読 */
   onDirty: (f) => dirtyListeners.add(f),
+  /** トランザクション中か（true/false）の購読。SQL コンソールの BEGIN / COMMIT でも届く */
+  onTx: (f) => txListeners.add(f),
+  /** 今トランザクション中か */
+  inTx: () => inTx,
+  begin: () => logged(() => call('begin'), [{ sql: 'BEGIN' }], 'gui'),
+  commit: () => logged(() => call('commit'), [{ sql: 'COMMIT' }], 'gui'),
+  rollback: () => logged(() => call('rollback'), [{ sql: 'ROLLBACK' }], 'gui'),
 };
 
 /** 識別子のクォート */

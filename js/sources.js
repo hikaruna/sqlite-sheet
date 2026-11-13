@@ -2,6 +2,7 @@
 import { db, q, inline, lit } from './db-client.js';
 import { affinity } from './schema.js';
 import { undo } from './undo.js';
+import { txMarks } from './txmarks.js';
 
 export const FILTER_OPS = [
   { id: 'eq', label: '＝ 等しい', sql: (c) => `${c} = ?` },
@@ -308,6 +309,10 @@ export class TableSource {
   /** RETURNING で返すキーの列 */
   returningKey() { return this.keyCols().map((k) => (k === '_rowid_' ? '_rowid_' : q(k))); }
 
+  /** トランザクション中に変えたセル・足した行か（未確定の印のため） */
+  isPendingCell(rowObj, c) { return txMarks.has(this.model.name, rowObj?.key, this.model.columns[c]?.name); }
+  isPendingRow(rowObj) { return txMarks.has(this.model.name, rowObj?.key, null); }
+
   async update(changes) {
     const byRow = new Map();
     for (const ch of changes) {
@@ -341,7 +346,14 @@ export class TableSource {
       redo.push({ sql: `UPDATE ${this.t} SET ${setSql} WHERE ${kw.sql}`, bind: [...ret.slice(nk), ...kw.bind] });
       undoStmts.unshift({ sql: `UPDATE ${this.t} SET ${setSql} WHERE ${nkw.sql}`, bind: [...p.cols.map((c) => p.rowObj.values[this.model.columns.indexOf(c)]), ...nkw.bind] });
     });
-    undo.push({ label: changes.length > 1 ? `${changes.length} セルの変更` : 'セルの変更', undo: undoStmts, redo });
+    // 未確定の印のための、変えたセル（後＝新しいキー、戻した後＝元のキー）と、主キーの変更
+    const t = this.model.name, done = plans.filter((p) => p.newKey);
+    const cells = {
+      after: done.flatMap((p) => p.cols.map((c) => ({ t, key: p.newKey, col: c.name }))),
+      before: done.flatMap((p) => p.cols.map((c) => ({ t, key: p.rowObj.key, col: c.name }))),
+      rekey: done.filter((p) => JSON.stringify(p.newKey) !== JSON.stringify(p.rowObj.key)).map((p) => ({ t, from: p.rowObj.key, to: p.newKey })),
+    };
+    undo.push({ label: changes.length > 1 ? `${changes.length} セルの変更` : 'セルの変更', undo: undoStmts, redo, cells });
     for (const p of plans) {
       const fresh = p.newKey && await this.fetchByKey(p.newKey);
       if (fresh) out.push({ row: p.row, rowObj: fresh });
@@ -382,6 +394,8 @@ export class TableSource {
       label: inserted.length > 1 ? `${inserted.length} 行の追加` : '行の追加',
       undo: inserted.map((r) => this.deleteStmt(r.key)).reverse(),
       redo: inserted.map((r) => this.restoreStmt(r)),
+      // 足した行（元に戻すと消えるので、戻した後の印はない）
+      cells: { after: inserted.map((r) => ({ t: this.model.name, key: r.key, col: null })), before: [] },
     });
   }
 
@@ -392,6 +406,8 @@ export class TableSource {
       label: rowObjs.length > 1 ? `${rowObjs.length} 行の削除` : '行の削除',
       undo: rowObjs.map((r) => this.restoreStmt(r)),
       redo: stmts,
+      // 消した行は見えないので印はない。開始前の削除を元に戻すと、戻ってきた行が確定前の変更になる
+      cells: { after: [], before: rowObjs.map((r) => ({ t: this.model.name, key: r.key, col: null })) },
     });
   }
 

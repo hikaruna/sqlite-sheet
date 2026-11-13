@@ -29,6 +29,19 @@ function markDirty() {
   self.postMessage({ event: 'dirty', dirty: true });
 }
 
+// トランザクション中か（GUI からでも SQL コンソールの BEGIN でも）。呼び出しのたびに確かめ、変わったら main に知らせる
+let lastTx = false;
+const inTx = () => !!db && !sqlite3.capi.sqlite3_get_autocommit(db.pointer);
+function notifyTx() {
+  const v = inTx();
+  if (v !== lastTx) { lastTx = v; self.postMessage({ event: 'tx', inTx: v }); }
+}
+const TX_BLOCK = 'トランザクション中です。先に確定か取り消しをしてください';
+
+function begin() { need().exec('BEGIN'); return true; }
+function commit() { if (inTx()) need().exec('COMMIT'); return true; }
+function rollback() { if (inTx()) need().exec('ROLLBACK'); return true; }
+
 function setDirty(v) {
   if (dirty === v) return;
   dirty = v;
@@ -48,6 +61,8 @@ async function checkFile() {
 // createWritable は一時ファイルに書いて close で差し替えるので、途中で落ちても元のファイルは壊れない
 async function save(force = false) {
   if (kind !== 'file') throw new Error('ファイルを開いていません');
+  // 確定していない変更をファイルに書かないように
+  if (inTx()) throw new Error(TX_BLOCK);
   if (!force && (await checkFile()).changed) throw new Error('CONFLICT');
   const bytes = sqlite3.capi.sqlite3_js_db_export(db);
   const w = await handle.createWritable();
@@ -166,6 +181,8 @@ function batch(stmts) {
 // テーブル再作成など、foreign_keys を一時的に切る必要がある処理
 function rebuild(stmts) {
   const d = need();
+  // 外部キーの検査を一時的に切る必要があり、それはトランザクション中にはできない
+  if (inTx()) throw new Error(TX_BLOCK);
   d.exec('PRAGMA foreign_keys = OFF; PRAGMA legacy_alter_table = ON');
   try {
     d.exec('BEGIN');
@@ -237,7 +254,7 @@ async function copy(from, to) {
   return true;
 }
 
-const api = { init, list, open, openFile, close, save, checkFile, run, exec, batch, rebuild, create, exportDb, importDb, remove, rename, copy };
+const api = { init, list, open, openFile, close, save, checkFile, begin, commit, rollback, run, exec, batch, rebuild, create, exportDb, importDb, remove, rename, copy };
 
 // 呼び出しは1つずつ順に処理する（ファイルの読み書きを待つ間に、次の呼び出しが割り込まないように）
 let queue = Promise.resolve();
@@ -248,8 +265,10 @@ async function dispatch(e) {
   try {
     const result = await api[method](...args);
     const transfer = result instanceof Uint8Array ? [result.buffer] : [];
+    notifyTx();
     self.postMessage({ id, result }, transfer);
   } catch (err) {
+    notifyTx();
     self.postMessage({ id, error: String(err?.message ?? err).replace(/^SQLITE_\w+: (sqlite3 result code \d+: )?/, '') });
   }
 }

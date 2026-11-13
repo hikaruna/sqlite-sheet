@@ -403,7 +403,7 @@ export class Grid {
       const row = isNew ? null : this.rowAt(r);
       const rowSel = r >= r0 && r <= r1;
       const draft = isNew ? this.draft : null;
-      const rowEl = el('div.gr', { class: isNew ? 'new draft' : '', style: { top: (r * RH) + 'px', width: this.totalW() + 'px' }, dataset: { r } });
+      const rowEl = el('div.gr', { class: isNew ? 'new draft' : (row && this.source.isPendingRow?.(row) ? 'pending' : ''), style: { top: (r * RH) + 'px', width: this.totalW() + 'px' }, dataset: { r } });
       rowEl.append(el('div.gr-head', {
         class: rowSel ? 'hl' : '',
         style: { width: RHW + 'px' },
@@ -426,6 +426,7 @@ export class Grid {
           cell.classList.add('loading');
         } else {
           this.fillCell(cell, row.values[c], col, row, r, c);
+          if (this.source.isPendingCell?.(row, c)) cell.classList.add('pending');
           if (this.source.protect?.(row.values, c).length) cell.classList.add('prot');
         }
         if (col.fk && this.source.editable && r === this.cur.r && c === this.cur.c && this.hooks.onFkPick) {

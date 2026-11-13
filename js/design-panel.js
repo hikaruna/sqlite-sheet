@@ -3,6 +3,7 @@ import { db, q } from './db-client.js';
 import { el, confirmDialog, toast, menu } from './ui.js';
 import { TYPES, FK_ACTIONS, createTableSql, migrationSql, columnDef, readTable, constantDefault } from './schema.js';
 import { friendlyError, defaultToForm, formToDefault } from './sources.js';
+import { txMarks } from './txmarks.js';
 
 const clone = (o) => JSON.parse(JSON.stringify(o));
 const COLLATES = ['', 'BINARY', 'NOCASE', 'RTRIM'];
@@ -456,6 +457,8 @@ export class DesignPanel {
   async apply() {
     const p = this.plan();
     if (p.error) { toast(p.error, 'error'); return; }
+    // 作り直しはトランザクション中にはできない。名前の変更だけ先に通ってしまわないよう、何もする前に止める
+    if (p.kind !== 'alter' && db.inTx()) { toast('この変更はテーブルを作り直すため、トランザクション中には適用できません。先に確定か取り消しをしてください', 'error'); return; }
     const ok = await confirmDialog({
       title: 'テーブルの変更を適用しますか？',
       body: p.kind === 'rebuild'
@@ -468,6 +471,9 @@ export class DesignPanel {
     try {
       if (p.kind === 'alter') {
         await db.batch(p.stmts.map((sql) => ({ sql })));
+        // トランザクション中の未確定の印を、表・列の名前の変更に追従させる
+        txMarks.renameTable(this.model.name, this.draft.name);
+        for (const c of this.draft.columns) if (c.from != null && c.from !== c.name) txMarks.renameColumn(this.draft.name, c.from, c.name);
       } else {
         if (p.renameStmt) await db.exec(p.renameStmt);
         await db.rebuild(p.rebuild.map((sql) => ({ sql })));

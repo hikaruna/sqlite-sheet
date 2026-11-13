@@ -356,6 +356,17 @@ select.input { padding-right: 4px; }
 .pend-tag { flex: none; padding: 0 5px; border: 1px solid var(--pending); border-radius: 4px; color: var(--pending); font-size: 10.5px; font-weight: 600; line-height: 16px; }
 .dp-col.deleted .dp-col-main { gap: 8px; padding-left: 12px; min-height: 36px; }
 .col-name-del { text-decoration: line-through; color: var(--text-3); }
+/* トランザクション中に変えたセル・足した行（設計パネルと同じ、左の帯＋薄い色） */
+.gc.pending { background: var(--pending-soft); box-shadow: inset 3px 0 0 var(--pending); }
+.gc.pending.sel { background: color-mix(in srgb, var(--pending-soft) 50%, var(--sel)); }
+.gr.pending .gc { background: var(--pending-soft); }
+.gr.pending .gr-head { box-shadow: inset 3px 0 0 var(--pending); color: var(--pending); }
+/* 上部バーの「トランザクション中」 */
+.tx-state {
+  flex: none; height: 26px; padding: 0 8px; border: 1px solid var(--pending); border-radius: 6px;
+  background: var(--pending-soft); color: var(--pending); font-size: 12px; font-weight: 600; white-space: nowrap;
+}
+.tx-state:hover { filter: brightness(0.97); }
 .dp-tab.has-pending::after { content: '●'; margin-left: 4px; color: var(--pending); font-size: 8px; vertical-align: 2px; }
 .dp-cols { display: grid; gap: 4px; }
 .dp-col { border: 1px solid var(--line); border-radius: 8px; background: var(--surface); }
