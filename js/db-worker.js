@@ -8,10 +8,11 @@ let stamp = null; // 最後に読み書きしたときのファイルの { lastM
 
 // sahpool はパスを URL のパス名として正規化（パーセントエンコード）して保存する
 const fileOf = (name) => new URL(`/${name}.sqlite3`, 'file://irrelevant').pathname;
+const VFS = 'sqlite-sheet';
 
 async function init() {
   sqlite3 = await sqlite3InitModule({ print: () => {}, printErr: () => {} });
-  pool = await sqlite3.installOpfsSAHPoolVfs({ name: 'sqlite-sheet', initialCapacity: 8 });
+  pool = await sqlite3.installOpfsSAHPoolVfs({ name: VFS, initialCapacity: 8 });
   return { version: sqlite3.version.libVersion };
 }
 
@@ -119,9 +120,43 @@ function need() {
   return db;
 }
 
+// ---------- ほかの DB の参照：SQL に「DB 名.」があれば、その DB を読み取り専用でつなぐ ----------
+// 字句を先頭から1つずつ読み、識別子（素の語・"…"・[…]・`…`）の直後が「.」なら DB 名の候補にする。
+// 文字列とコメントは丸ごと読み飛ばす。表の別名などを拾いすぎても、使わない DB がつながるだけで害はない
+const TOKEN_RE = /'(?:[^']|'')*'?|--[^\n]*|\/\*[\s\S]*?(?:\*\/|$)|("(?:[^"]|"")*"?|\[[^\]]*\]?|`(?:[^`]|``)*`?|[A-Za-z_\u0080-￿][\w$\u0080-￿]*)(\s*\.)?|[\s\S]/g;
+const unquote = (id) => /^["`]/.test(id) ? id.slice(1, -1).replaceAll(id[0] + id[0], id[0]) : id[0] === '[' ? id.slice(1, -1) : id;
+// SQLite の DB 名（スキーマ名）の比較は ASCII だけ大文字小文字を区別しない
+const foldCase = (s) => s.replace(/[A-Z]/g, (c) => c.toLowerCase());
+
+/** つないでいる DB 名（foldCase 済み） */
+const attachedSchemas = () => new Set(need().selectValues('SELECT name FROM pragma_database_list').map(foldCase));
+
+function ensureAttached(sql) {
+  if (!sql.includes('.')) return;
+  const dbs = new Set(list());
+  let have = null;
+  for (const [, id, dot] of sql.matchAll(TOKEN_RE)) {
+    if (!dot) continue;
+    const name = unquote(id);
+    if (name === currentName || !dbs.has(name)) continue;
+    have ??= new Set(['main', 'temp', ...attachedSchemas()]);
+    if (have.has(foldCase(name))) continue;
+    // URI の中では % が解釈されるので、ファイル名の % を %25 にして渡す
+    const uri = `file:${fileOf(name).replaceAll('%', '%25')}?vfs=${VFS}&mode=ro`;
+    need().exec({ sql: 'ATTACH ? AS ?', bind: [uri, name] });
+    have.add(foldCase(name));
+  }
+}
+
+/** DB のファイルを書き換える・消す前に、つないでいれば外す */
+function detach(name) {
+  if (db && name !== currentName && attachedSchemas().has(foldCase(name))) db.exec({ sql: 'DETACH ?', bind: [name] });
+}
+
 // 複数文を実行し、最後に行を返した文の結果を返す
 function run(sql, bind) {
   const d = need();
+  ensureAttached(sql);
   const before = sqlite3.capi.sqlite3_total_changes(d.pointer);
   let lastStmt = null, columns = [], rows = [];
   d.exec({
@@ -149,6 +184,7 @@ function run(sql, bind) {
 // セルに入れる式（SELECT (式) …）を、実行せずに用意だけして確かめる。
 // 1文だけ・読み取り専用・列が1つなら、式は自分の ( ) の中に収まっていて、UPDATE や INSERT に埋め込んでも外へ漏れない
 function checkExpr(sql) {
+  ensureAttached(sql);
   const st = need().prepare(sql);
   try {
     // prepare は最初の文だけを用意して残りを捨てるので、余りがあればエラーにする
@@ -382,6 +418,7 @@ function classify(codes, stmt) {
  */
 function consoleRun(sql, { from = 0, confirmAt = -1, confirmAll = false } = {}) {
   const { capi, wasm } = sqlite3, d = need();
+  ensureAttached(sql.slice(from));
   const before = capi.sqlite3_total_changes(d.pointer);
   const out = { columns: [], rows: [], changes: 0, schemaChanged: false };
   const tracked = withSession(() => {
@@ -500,6 +537,7 @@ function exportDb(name) {
 
 async function importDb(name, bytes) {
   if (name === currentName) await close();
+  detach(name);
   await pool.reserveMinimumCapacity(pool.getFileNames().length + 4);
   // 作ったばかりでまだ何も書いていない DB は 0 バイト。importDb は受け付けないので、空の DB として作る
   if (!bytes.length) { new pool.OpfsSAHPoolDb(fileOf(name)).close(); return true; }
@@ -509,6 +547,7 @@ async function importDb(name, bytes) {
 
 async function remove(name) {
   if (name === currentName) await close();
+  detach(name);
   pool.unlink(fileOf(name));
   return true;
 }
