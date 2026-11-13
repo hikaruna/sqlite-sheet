@@ -213,6 +213,55 @@ export class Grid {
     s.addEventListener('gesturestart', (e) => e.preventDefault());
   }
 
+  // ---------- スクロール位置と選択（シートを行き来しても続きから） ----------
+  getPos() { return { top: this.scroll.scrollTop, left: this.scroll.scrollLeft, cur: { ...this.cur }, ext: { ...this.ext } }; }
+  setPos(p) {
+    this.cur = { ...p.cur }; this.ext = { ...p.ext };
+    this.clampCursor();
+    this.scroll.scrollTop = p.top; this.scroll.scrollLeft = p.left;
+    this.render(); this.emitSelect();
+  }
+
+  // ---------- 元に戻した場所を見せる ----------
+  /**
+   * 元に戻す・やり直すで変わったセル・行・列を選び、見える所までスクロールして一瞬光らせる。
+   * cells: [{key, col}]（col が null なら行全体）、cols: 光らせる列名（見出し）。
+   * 絞り込みで見えない行があれば true を返す
+   */
+  async reveal({ cells = [], cols = [] } = {}) {
+    const colIdx = (name) => this.cols.findIndex((c) => c.name === name);
+    const spots = [];
+    let hidden = false;
+    const rowOf = new Map();
+    for (const { key, col } of cells) {
+      const id = JSON.stringify(key);
+      if (!rowOf.has(id)) rowOf.set(id, this.source.rowIndexOf ? await this.source.rowIndexOf(key) : null);
+      const r = rowOf.get(id);
+      if (r == null) { hidden = true; continue; }
+      spots.push({ r, c: col == null ? -1 : colIdx(col) });
+    }
+    const flashCols = cols.map(colIdx).filter((c) => c >= 0);
+    this.flash = { cells: new Set(spots.map((p) => `${p.r}|${p.c}`)), cols: new Set(flashCols), until: Date.now() + 1100 };
+    if (spots.length) {
+      // 戻したセルを囲む範囲を選ぶ（行全体なら先頭の列から最後の列まで）
+      const rs = spots.map((p) => p.r), cs = spots.flatMap((p) => (p.c < 0 ? [0, this.cols.length - 1] : [p.c]));
+      this.moveTo(Math.min(...rs), Math.max(0, Math.min(...cs)));
+      this.moveTo(Math.max(...rs), Math.max(0, Math.max(...cs)), true);
+      this.ensureVisible({ r: Math.min(...rs), c: Math.max(0, Math.min(...cs)) });
+    } else if (flashCols.length) {
+      this.ensureVisible({ r: this.cur.r, c: flashCols[0] });
+    }
+    this.renderHeader(); this.render();
+    clearTimeout(this.flashTimer);
+    this.flashTimer = setTimeout(() => { this.flash = null; this.renderHeader(); this.render(); }, 1100);
+    return hidden;
+  }
+
+  isFlash(r, c) {
+    const f = this.flash;
+    return !!f && Date.now() < f.until && (f.cells.has(`${r}|${c}`) || f.cells.has(`${r}|-1`));
+  }
+
   // ---------- 列幅 ----------
   loadWidths() {
     try { return JSON.parse(localStorage.getItem('w:' + this.source.widthKey) || '{}'); } catch { return {}; }
@@ -274,7 +323,7 @@ export class Grid {
     this.cols.forEach((col, c) => {
       const cell = el('div.gh-cell', {
         style: { width: this.colW(c) + 'px' },
-        class: col.readonly ? 'ro' : '',
+        class: [col.readonly ? 'ro' : '', this.flash?.cols.has(c) && Date.now() < this.flash.until ? 'flash' : ''].join(' ').trim(),
         title: col.title || '',
         on: {
           pointerdown: (e) => {
@@ -427,6 +476,7 @@ export class Grid {
         } else {
           this.fillCell(cell, row.values[c], col, row, r, c);
           if (this.source.isPendingCell?.(row, c)) cell.classList.add('pending');
+          if (this.isFlash(r, c)) cell.classList.add('flash');
           if (this.source.protect?.(row.values, c).length) cell.classList.add('prot');
         }
         if (col.fk && this.source.editable && r === this.cur.r && c === this.cur.c && this.hooks.onFkPick) {

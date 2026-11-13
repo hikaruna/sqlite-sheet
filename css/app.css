@@ -361,6 +361,9 @@ select.input { padding-right: 4px; }
 .gc.pending.sel { background: color-mix(in srgb, var(--pending-soft) 50%, var(--sel)); }
 .gr.pending .gc { background: var(--pending-soft); }
 .gr.pending .gr-head { box-shadow: inset 3px 0 0 var(--pending); color: var(--pending); }
+/* 元に戻す・やり直すで変わったところを一瞬光らせる（選択色を濃くして、ふわっと消す） */
+@keyframes flash-fade { from { background-color: color-mix(in srgb, var(--accent) 35%, transparent); } to { background-color: transparent; } }
+.gc.flash, .gh-cell.flash { animation: flash-fade 1.1s ease-out; }
 /* 上部バーの「トランザクション中」 */
 .tx-state {
   flex: none; height: 26px; padding: 0 8px; border: 1px solid var(--pending); border-radius: 6px;

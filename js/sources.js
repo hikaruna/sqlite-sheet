@@ -260,6 +260,16 @@ export class TableSource {
     return { sql: cols.map((c) => `${c === '_rowid_' ? '_rowid_' : q(c)} IS ?`).join(' AND '), bind: cols.map((c) => key[c]) };
   }
 
+  /** 今の並べ替え・絞り込みで、そのキーの行が何行目か（0 始まり）。絞り込みで見えなければ null */
+  async rowIndexOf(key) {
+    const w = this.where(), kw = this.keyWhere(key);
+    const keyCols = Object.keys(key).map((c) => (c === '_rowid_' ? '_rowid_' : q(c)));
+    const r = await db.query(
+      `SELECT rn FROM (SELECT ${keyCols.map((c) => `${this.t}.${c} AS ${c}`).join(', ')}, ROW_NUMBER() OVER (${this.orderBy().trim()}) - 1 AS rn FROM ${this.t}${w.sql}) WHERE ${kw.sql}`,
+      [...w.bind, ...kw.bind]);
+    return r.rows[0] ? Number(r.rows[0][0]) : null;
+  }
+
   async fetchByKey(key) {
     const kw = this.keyWhere(key);
     const r = await db.query(`SELECT ${this.selectList()} FROM ${this.t} WHERE ${kw.sql}`, kw.bind);
@@ -353,7 +363,7 @@ export class TableSource {
       before: done.flatMap((p) => p.cols.map((c) => ({ t, key: p.rowObj.key, col: c.name }))),
       rekey: done.filter((p) => JSON.stringify(p.newKey) !== JSON.stringify(p.rowObj.key)).map((p) => ({ t, from: p.rowObj.key, to: p.newKey })),
     };
-    undo.push({ label: changes.length > 1 ? `${changes.length} セルの変更` : 'セルの変更', undo: undoStmts, redo, cells });
+    undo.push({ label: `「${t}」の${changes.length > 1 ? `${changes.length} セルの変更` : 'セルの変更'}`, sheet: 't:' + t, undo: undoStmts, redo, cells });
     for (const p of plans) {
       const fresh = p.newKey && await this.fetchByKey(p.newKey);
       if (fresh) out.push({ row: p.row, rowObj: fresh });
@@ -391,7 +401,8 @@ export class TableSource {
       if (row) inserted.push(row);
     }
     undo.push({
-      label: inserted.length > 1 ? `${inserted.length} 行の追加` : '行の追加',
+      label: `「${this.model.name}」の${inserted.length > 1 ? `${inserted.length} 行の追加` : '行の追加'}`,
+      sheet: 't:' + this.model.name,
       undo: inserted.map((r) => this.deleteStmt(r.key)).reverse(),
       redo: inserted.map((r) => this.restoreStmt(r)),
       // 足した行（元に戻すと消えるので、戻した後の印はない）
@@ -403,7 +414,8 @@ export class TableSource {
     const stmts = rowObjs.map((r) => this.deleteStmt(r.key));
     await db.batch(stmts);
     undo.push({
-      label: rowObjs.length > 1 ? `${rowObjs.length} 行の削除` : '行の削除',
+      label: `「${this.model.name}」の${rowObjs.length > 1 ? `${rowObjs.length} 行の削除` : '行の削除'}`,
+      sheet: 't:' + this.model.name,
       undo: rowObjs.map((r) => this.restoreStmt(r)),
       redo: stmts,
       // 消した行は見えないので印はない。開始前の削除を元に戻すと、戻ってきた行が確定前の変更になる

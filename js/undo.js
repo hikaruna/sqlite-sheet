@@ -24,13 +24,14 @@ export const undo = {
   canRedo: () => future.length > 0,
   peekUndo: () => past.at(-1)?.label,
   peekRedo: () => future.at(-1)?.label,
+  /** 戻した記録を返す（どのシートのどこを戻したかを見せるため。entry.sheet / entry.cells / entry.col） */
   async undo() {
     const e = past.pop();
     if (!e) return null;
     try { await (e.undoFn ? e.undoFn() : db.batch(e.undo, 'undo')); } catch (err) { past.push(e); throw err; }
     txMarks.onUndo(e);
     future.push(e); emit();
-    return e.label;
+    return e;
   },
   async redo() {
     const e = future.pop();
@@ -38,7 +39,7 @@ export const undo = {
     try { await (e.redoFn ? e.redoFn() : db.batch(e.redo, 'redo')); } catch (err) { future.push(e); throw err; }
     txMarks.onDo(e);
     past.push(e); emit();
-    return e.label;
+    return e;
   },
   onChange: (f) => listeners.add(f),
 };

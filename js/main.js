@@ -261,15 +261,31 @@ function updateUndoButtons() {
 
 async function doUndo() {
   try {
-    const label = await undo.undo();
-    if (label) { toast(`元に戻しました：${label}`); await state.grid?.reload(); }
+    const e = await undo.undo();
+    if (e) toast(`元に戻しました：${e.label}${await showUndone(e, 'undo')}`);
   } catch (e) { toast('元に戻せませんでした：' + friendlyError(e.message), 'error'); }
 }
 async function doRedo() {
   try {
-    const label = await undo.redo();
-    if (label) { toast(`やり直しました：${label}`); await state.grid?.reload(); }
+    const e = await undo.redo();
+    if (e) toast(`やり直しました：${e.label}${await showUndone(e, 'redo')}`);
   } catch (e) { toast('やり直せませんでした：' + friendlyError(e.message), 'error'); }
+}
+
+/**
+ * 元に戻した・やり直した場所を見せる。その操作のシートへ切り替え、変わったセル・行・列を選んで光らせる。
+ * 記録は DB で1本なので、見えないシートのものが戻ることがある（Google スプレッドシートと同じ動き）。
+ * トーストに添える言葉を返す
+ */
+async function showUndone(e, dir) {
+  const sheet = (dir === 'undo' ? e.undoSheet : e.redoSheet) ?? e.sheet;
+  const cells = (dir === 'undo' ? e.cells?.before : e.cells?.after) ?? [];
+  const cols = (dir === 'undo' ? e.undoCols : e.redoCols) ?? (e.col ? [e.col] : []);
+  if (sheet && sheet !== state.key && allKeys().includes(sheet)) await showSheet(sheet);
+  else await state.grid?.reload();
+  if (!sheet || sheet !== state.key || !state.grid) return '';
+  const hidden = await state.grid.reveal({ cells, cols });
+  return hidden ? '（絞り込みで表示されていません）' : '';
 }
 
 function moreMenu(anchor) {
@@ -1063,7 +1079,8 @@ async function renameSheet(key, anchor) {
     await doRenameSheet(kind, name, to);
     // 名前の変更も元に戻せる（戻すときは、どのシートを開いていても名前だけを戻す）
     undo.push({
-      label: `${KIND_NAME[kind]}の名前の変更`,
+      label: `${KIND_NAME[kind]}「${name}」→「${to}」の名前の変更`,
+      undoSheet: kind + ':' + name, redoSheet: kind + ':' + to,
       undoFn: () => doRenameSheet(kind, to, name),
       redoFn: () => doRenameSheet(kind, name, to),
     });
@@ -1191,6 +1208,8 @@ async function showSheet(key, { keepView = true } = {}) {
     if (key !== state.key) { if (!(await state.grid.flushDraft())) { renderTabs(); return; } }
     else carryDraft = state.grid.draft;
   }
+  // 離れるシートのスクロール位置と選択を覚えておく（戻ってきたら、そこから再開する）
+  if (state.grid && state.key && state.views.has(state.key)) state.views.get(state.key).pos = state.grid.getPos();
   // 消えたシート（コンソールでの DROP/RENAME、古いハッシュ等）は近くのシートに切り替える
   const keys = allKeys();
   if (key && !keys.includes(key)) {
@@ -1242,6 +1261,7 @@ async function showSheet(key, { keepView = true } = {}) {
   state.grid = new Grid($('grid-host'), state.source, gridHooks(kind));
   if (carryDraft && carryDraft.values.length === state.source.columns.length) state.grid.draft = carryDraft;
   await state.grid.reload({ keepSelection: false });
+  if (view.pos) state.grid.setPos(view.pos);
   state.grid.focus();
   updatePanel();
 }
@@ -1461,7 +1481,8 @@ function gridHooks(kind) {
           localStorage.setItem('w:' + key, JSON.stringify(all));
         } catch { /* 無視 */ }
       };
-      undo.push({ label: '列幅の変更', undoFn: () => apply(before), redoFn: () => apply(after) });
+      const sheet = state.key;
+      undo.push({ label: `「${sheet.slice(2)}」の列幅の変更`, sheet, col: name, undoFn: () => apply(before), redoFn: () => apply(after) });
     },
     onAddColumn: isTable ? (anchor) => quickAddColumn(anchor) : null,
     onContextMenu: (pos, range) => cellMenu(pos, range),
@@ -1877,7 +1898,11 @@ function updatePanel(focusCol) {
       await renameSchema(r);
       const back = { fromTable: r.toTable, toTable: r.fromTable, cols: r.cols.map(([a, b]) => [b, a]) };
       undo.push({
-        label: r.cols.length ? '列名の変更' : 'テーブルの名前の変更',
+        label: r.cols.length
+          ? `「${r.toTable}」の列名の変更（${r.cols.map(([a, b]) => `${a}→${b}`).join('、')}）`
+          : `テーブル「${r.fromTable}」→「${r.toTable}」の名前の変更`,
+        undoSheet: 't:' + r.fromTable, redoSheet: 't:' + r.toTable,
+        undoCols: r.cols.map(([a]) => a), redoCols: r.cols.map(([, b]) => b),
         undoFn: () => renameSchema(back),
         redoFn: () => renameSchema(r),
       });
