@@ -64,6 +64,12 @@ export const db = {
   exec: (sql, bind, source = 'gui') => logged(() => call('exec', sql, bind), [{ sql, bind }], source),
   batch: (stmts, source = 'gui') => logged(() => call('batch', stmts), stmts, source),
   rebuild: (stmts, source = 'gui') => logged(() => call('rebuild', stmts), stmts, source),
+  /** batch と同じ。変わった行の記録（{bytes, tables, rows}）も返す：{results, changes, untrackable} */
+  batchTracked: (stmts, source = 'gui') => logged(() => call('batchTracked', stmts), stmts, source),
+  /** 記録（changeset の配列、実行した順）を当てる（dir: 'undo' | 'redo'） */
+  applyChangeset: (bytes, dir) => logged(() => call('applyChangeset', bytes, dir), [{ sql: dir === 'undo' ? '-- 元に戻す' : '-- やり直す' }], dir),
+  /** SQL コンソール：1文ずつ確かめながら実行。元に戻せない文の手前で止まる（paused） */
+  consoleRun: (sql, opts) => logged(() => call('consoleRun', sql, opts), [{ sql }], 'console'),
   onLog: (f) => logListeners.add(f),
   /** ファイル DB の未保存の変更の有無（true/false）の購読 */
   onDirty: (f) => dirtyListeners.add(f),

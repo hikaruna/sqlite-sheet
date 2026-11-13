@@ -7,7 +7,7 @@ import { TableSource, QuerySource, FILTER_OPS, friendlyError, convertInput, form
 import { txMarks } from './txmarks.js';
 import { DesignPanel } from './design-panel.js';
 import { SqlConsole } from './console.js';
-import { undo } from './undo.js';
+import { undo, tableSummary } from './undo.js';
 import { createSample, SAMPLE_QUERIES } from './sample.js';
 import * as store from './store.js';
 import * as files from './files.js';
@@ -209,6 +209,8 @@ function buildChrome() {
   sqlConsole = new SqlConsole($('console'), {
     onSchemaMaybeChanged: async () => { undo.clear(); await refreshObjects(); await showSheet(state.key, { keepView: true }); },
     onDataChanged: async () => { undo.clear(); await state.grid?.reload(); },
+    // データの変更を元に戻せる形で記録した（記録は消さない）
+    onDataRecorded: async () => { await state.grid?.reload(); },
   });
   undo.onChange(updateUndoButtons);
   // DB への書き込み（成功したもの）を最終更新として記録する。ローカルファイルは対象外
@@ -281,11 +283,15 @@ async function showUndone(e, dir) {
   const sheet = (dir === 'undo' ? e.undoSheet : e.redoSheet) ?? e.sheet;
   const cells = (dir === 'undo' ? e.cells?.before : e.cells?.after) ?? [];
   const cols = (dir === 'undo' ? e.undoCols : e.redoCols) ?? (e.col ? [e.col] : []);
+  // CASCADE などで複数の表が変わったときは、表ごとの件数も添える（コンソールの実行はラベルに入っている）
+  const many = e.tables && Object.keys(e.tables).length > 1 && !e.label.startsWith('SQL コンソール') ? `（${tableSummary(e.tables)}）` : '';
   if (sheet && sheet !== state.key && allKeys().includes(sheet)) await showSheet(sheet);
   else await state.grid?.reload();
-  if (!sheet || sheet !== state.key || !state.grid) return '';
-  const hidden = await state.grid.reveal({ cells, cols });
-  return hidden ? '（絞り込みで表示されていません）' : '';
+  if (!sheet || sheet !== state.key || !state.grid) return many;
+  // 光らせるのは、この表のセル・行だけ
+  const t = sheet.slice(2);
+  const hidden = await state.grid.reveal({ cells: cells.filter((c) => c.t === undefined || c.t === t), cols });
+  return many + (hidden ? '（絞り込みで表示されていません）' : '');
 }
 
 function moreMenu(anchor) {

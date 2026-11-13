@@ -178,6 +178,279 @@ function batch(stmts) {
   return results;
 }
 
+// ---------- 変更の記録（SQLite のセッション）と、記録の当て直し ----------
+// 元に戻すために、実行の前後でどの行がどう変わったかを記録する。トリガーや CASCADE で変わった行も入る。
+// 主キーのない表も記録できるよう、行の内部番号（rowid）を主キー代わりにする設定にする
+const OBJCONFIG_ROWID = 2;     // SQLITE_SESSION_OBJCONFIG_ROWID（capi に定数がない）
+const CHANGESET_ABORT = 2;     // 食い違いがあれば当てるのをやめる
+const OP = { 18: 'insert', 9: 'delete', 23: 'update' };
+const MAX_TRACKED_BYTES = 64 * 1024 * 1024; // これより大きい記録は持たない（元に戻せない扱い）
+
+function check(rc, what) { if (rc) throw new Error(`${what} に失敗しました（${sqlite3.capi.sqlite3_js_rc_str(rc) || rc}）`); }
+
+/** fn を実行し、その間に変わった行の記録（changeset）を一緒に返す。何も変わらなければ null */
+function withSession(fn) {
+  const { capi, wasm } = sqlite3, d = need();
+  const sp = wasm.pstack.pointer;
+  let ses = 0;
+  try {
+    const pp = wasm.pstack.allocPtr();
+    check(capi.sqlite3session_create(d.pointer, 'main', pp), '変更の記録');
+    ses = wasm.peekPtr(pp);
+    const on = wasm.pstack.alloc(4); wasm.poke32(on, 1);
+    capi.sqlite3session_object_config(ses, OBJCONFIG_ROWID, on);
+    check(capi.sqlite3session_attach(ses, null), '変更の記録');
+    const result = fn();
+    let bytes = null;
+    try {
+      const pn = wasm.pstack.alloc(4), pc = wasm.pstack.allocPtr();
+      check(capi.sqlite3session_changeset(ses, pn, pc), '変更の記録');
+      const n = wasm.peek32(pn), p = wasm.peekPtr(pc);
+      if (n && n <= MAX_TRACKED_BYTES) bytes = wasm.heap8u().slice(p, p + n);
+      if (p) capi.sqlite3_free(p);
+      if (n > MAX_TRACKED_BYTES) return { result, changeset: null, tooLarge: true };
+    } catch { return { result, changeset: null, failed: true }; } // 途中で表の形が変わったなど
+    return { result, changeset: bytes && summarize(bytes) };
+  } finally {
+    if (ses) capi.sqlite3session_delete(ses);
+    wasm.pstack.restore(sp);
+  }
+}
+
+/** 表の列名（changeset の列の順。生成列のうち保存しないものは入らない） */
+function storedColumns(t) {
+  const cols = [];
+  need().exec({ sql: 'SELECT name, pk, hidden FROM pragma_table_xinfo(?)', bind: [t], rowMode: 'array', callback: (r) => { if (r[2] !== 1 && r[2] !== 2) cols.push({ name: r[0], pk: r[1] }); } });
+  return cols;
+}
+
+/**
+ * 記録を読んで、表ごとの件数と、変わった行の一覧を作る。
+ * 行は主キー（主キーのない表は {_rowid_}）で表す。更新なら値が変わった列名も付ける
+ */
+function summarize(bytes) {
+  const { capi, wasm } = sqlite3;
+  const sp = wasm.pstack.pointer;
+  const p = wasm.allocFromTypedArray(bytes);
+  const tables = {}, rows = [], colCache = new Map();
+  let it = 0;
+  try {
+    const pIt = wasm.pstack.allocPtr();
+    check(capi.sqlite3changeset_start(pIt, bytes.length, p), '変更の記録の読み取り');
+    it = wasm.peekPtr(pIt);
+    const pTab = wasm.pstack.allocPtr(), pN = wasm.pstack.alloc(4), pOp = wasm.pstack.alloc(4), pInd = wasm.pstack.alloc(4);
+    const pPk = wasm.pstack.allocPtr(), pV = wasm.pstack.allocPtr();
+    const val = (getter, i) => { pV && wasm.pokePtr(pV, 0); getter(it, i, pV); const v = wasm.peekPtr(pV); return v ? { v: capi.sqlite3_value_to_js(v) } : null; };
+    while (capi.sqlite3changeset_next(it) === capi.SQLITE_ROW) {
+      capi.sqlite3changeset_op(it, pTab, pN, pOp, pInd);
+      const t = wasm.cstrToJs(wasm.peekPtr(pTab)), n = wasm.peek32(pN), op = OP[wasm.peek32(pOp)];
+      capi.sqlite3changeset_pk(it, pPk, pN);
+      const pkFlags = wasm.peekPtr(pPk);
+      if (!colCache.has(t)) colCache.set(t, storedColumns(t));
+      let names = colCache.get(t).map((c) => c.name);
+      // 主キーのない表は、先頭に rowid が主キーとして入る
+      if (n === names.length + 1) names = ['_rowid_', ...names];
+      const key = {}, cols = [];
+      for (let i = 0; i < n; i++) {
+        const name = names[i] ?? `#${i}`;
+        if (wasm.peek8(pkFlags + i)) {
+          const v = op === 'insert' ? val(capi.sqlite3changeset_new, i) : val(capi.sqlite3changeset_old, i);
+          key[name] = v?.v ?? null;
+        } else if (op === 'update' && val(capi.sqlite3changeset_new, i)) cols.push(name);
+      }
+      (tables[t] ??= { insert: 0, delete: 0, update: 0 })[op]++;
+      rows.push({ t, op, key, cols });
+    }
+  } finally {
+    if (it) capi.sqlite3changeset_finalize(it);
+    wasm.dealloc(p);
+    wasm.pstack.restore(sp);
+  }
+  return { bytes, tables, rows };
+}
+
+const CHANGESET_OMIT = 0;
+const CONFLICT_DATA = 1, CONFLICT_NOTFOUND = 2;
+
+/**
+ * 食い違いが「もう当たっている」だけかどうか。当てている途中で外部キーの CASCADE が先に動くと、
+ * 消すはずの子の行がもう無い（NOTFOUND）・直すはずの値がもう新しい値になっている（DATA）ことがある。
+ * それは狙いどおりの状態なので飛ばしてよい
+ */
+function alreadyApplied(type, it) {
+  const { capi, wasm } = sqlite3;
+  const sp = wasm.pstack.pointer;
+  try {
+    const pTab = wasm.pstack.allocPtr(), pN = wasm.pstack.alloc(4), pOp = wasm.pstack.alloc(4), pInd = wasm.pstack.alloc(4);
+    capi.sqlite3changeset_op(it, pTab, pN, pOp, pInd);
+    const op = OP[wasm.peek32(pOp)], n = wasm.peek32(pN);
+    if (type === CONFLICT_NOTFOUND) return op === 'delete';
+    if (type !== CONFLICT_DATA || op !== 'update') return false;
+    const pV = wasm.pstack.allocPtr();
+    for (let i = 0; i < n; i++) {
+      wasm.pokePtr(pV, 0); capi.sqlite3changeset_new(it, i, pV);
+      const nv = wasm.peekPtr(pV);
+      if (!nv) continue; // この列は変えない
+      wasm.pokePtr(pV, 0); capi.sqlite3changeset_conflict(it, i, pV);
+      const cv = wasm.peekPtr(pV);
+      if (!cv || !sameValue(capi.sqlite3_value_to_js(nv), capi.sqlite3_value_to_js(cv))) return false;
+    }
+    return true;
+  } finally { wasm.pstack.restore(sp); }
+}
+
+function sameValue(a, b) {
+  if (a instanceof Uint8Array && b instanceof Uint8Array) return a.length === b.length && a.every((x, i) => x === b[i]);
+  return a === b || (typeof a !== typeof b && a != null && b != null && String(a) === String(b));
+}
+
+/**
+ * 記録を当てる。list は changeset の配列（実行した順）。dir が 'undo' なら逆順に、それぞれ逆向きにして当てる。
+ * 全部を1つの SAVEPOINT で当て、食い違いがあれば何も変えずに失敗する
+ */
+function applyChangeset(list, dir) {
+  const d = need();
+  const items = dir === 'undo' ? [...list].reverse() : list;
+  // 記録にはトリガーが変えた行も入っているので、当てる間はトリガーを止める（動くと二重に変わる）
+  const setTriggers = (on) => sqlite3.capi.sqlite3_db_config(d.pointer, DBCONFIG_ENABLE_TRIGGER, on ? 1 : 0, 0);
+  setTriggers(false);
+  try {
+    d.exec('SAVEPOINT sheet_apply');
+    try {
+      for (const bytes of items) applyOne(bytes, dir);
+      d.exec('RELEASE sheet_apply');
+    } catch (e) {
+      d.exec('ROLLBACK TO sheet_apply; RELEASE sheet_apply');
+      throw e;
+    }
+  } finally { setTriggers(true); }
+  markDirty();
+  return true;
+}
+const DBCONFIG_ENABLE_TRIGGER = 1003;
+
+function applyOne(bytes, dir) {
+  const { capi, wasm } = sqlite3, d = need();
+  const sp = wasm.pstack.pointer;
+  const src = wasm.allocFromTypedArray(bytes);
+  let p = src, n = bytes.length, inv = 0;
+  try {
+    if (dir === 'undo') {
+      const pn = wasm.pstack.alloc(4), pp = wasm.pstack.allocPtr();
+      check(capi.sqlite3changeset_invert(bytes.length, src, pn, pp), '変更の記録の反転');
+      n = wasm.peek32(pn); p = inv = wasm.peekPtr(pp);
+    }
+    let conflict = false;
+    const rc = capi.sqlite3changeset_apply(d.pointer, n, p, 0, (_, type, it) => {
+      if (alreadyApplied(type, it)) return CHANGESET_OMIT;
+      conflict = true; return CHANGESET_ABORT;
+    }, 0);
+    if (conflict) throw new Error('データが変わっていて元に戻せません');
+    check(rc, '元に戻す');
+  } finally {
+    if (inv) capi.sqlite3_free(inv);
+    wasm.dealloc(src);
+    wasm.pstack.restore(sp);
+  }
+}
+
+/** GUI 用：batch を変更の記録つきで実行する */
+function batchTracked(stmts) {
+  const r = withSession(() => batch(stmts));
+  return { results: r.result, changes: r.changeset, untrackable: !!(r.tooLarge || r.failed) };
+}
+
+// ---------- SQL コンソール：1文ずつ用意して、何をする文かを確かめてから実行する ----------
+// 1 読み取り、2 データの変更（記録して元に戻せる）、3 表や列を変える・消すなど元に戻せない操作。
+// 3 の文に来たら、確認が済むまで実行せずに止めて返す
+const AUTH = { DELETE: 9, INSERT: 18, UPDATE: 23, PRAGMA: 19, TRANSACTION: 22, SAVEPOINT: 32 };
+const UNDOABLE_SCHEMA = new Set([1, 2, 3, 4, 5, 6, 7, 8, 10, 11, 12, 13, 14, 15, 16, 17, 24, 25, 26, 27, 28, 29, 30]);
+
+function classify(codes, stmt) {
+  const { capi } = sqlite3;
+  if (codes.some((c) => UNDOABLE_SCHEMA.has(c.code))) return 3;
+  if (codes.some((c) => c.code === AUTH.PRAGMA && c.arg != null)) return 3; // 値を書き換える PRAGMA
+  if (codes.some((c) => c.code === AUTH.INSERT || c.code === AUTH.UPDATE || c.code === AUTH.DELETE)) return 2;
+  if (codes.some((c) => c.code === AUTH.TRANSACTION || c.code === AUTH.SAVEPOINT)) return 0;
+  if (!capi.sqlite3_stmt_readonly(stmt)) return 3; // VACUUM など
+  return 1;
+}
+
+/**
+ * opts: { from: 何文字目から, confirmAt: 確認が済んだ文の位置, confirmAll: 残りも確認しない }
+ * 返り値: { columns, rows, changes, schemaChanged, changeset, untrackable, paused?, at?, text? }
+ */
+function consoleRun(sql, { from = 0, confirmAt = -1, confirmAll = false } = {}) {
+  const { capi, wasm } = sqlite3, d = need();
+  const before = capi.sqlite3_total_changes(d.pointer);
+  const out = { columns: [], rows: [], changes: 0, schemaChanged: false };
+  const tracked = withSession(() => {
+    const enc = new TextEncoder().encode(sql);
+    const dec = new TextDecoder();
+    const sp = wasm.pstack.pointer;
+    const base = wasm.allocFromTypedArray(new Uint8Array([...enc, 0]));
+    try {
+      const startByte = new TextEncoder().encode(sql.slice(0, from)).length;
+      let pos = base + startByte;
+      const end = base + enc.length;
+      const ppStmt = wasm.pstack.allocPtr(), ppTail = wasm.pstack.allocPtr();
+      // 途中の文で失敗しても、それより前に実行した文の記録は残す（out.error に入れて返す）
+      try {
+      while (pos < end) {
+        const codes = [];
+        capi.sqlite3_set_authorizer(d.pointer, (_, code, a, b) => {
+          const s = (x) => (typeof x === 'number' ? (x ? wasm.cstrToJs(x) : null) : x);
+          codes.push({ code, name: s(a), arg: s(b) }); return 0;
+        }, 0);
+        let rc;
+        try { rc = capi.sqlite3_prepare_v3(d.pointer, pos, end - pos, 0, ppStmt, ppTail); }
+        finally { capi.sqlite3_set_authorizer(d.pointer, 0, 0); }
+        if (rc) throw new Error(capi.sqlite3_errmsg(d.pointer));
+        const stmt = wasm.peekPtr(ppStmt), tail = wasm.peekPtr(ppTail);
+        const at = dec.decode(enc.subarray(0, pos - base)).length;
+        if (!stmt) { pos = tail; continue; } // 空白やコメントだけ
+        try {
+          const cat = classify(codes, stmt);
+          if (cat === 3 && !confirmAll && at !== confirmAt) {
+            out.paused = true; out.at = at; out.text = capi.sqlite3_sql(stmt).trim();
+            return;
+          }
+          if (cat === 3) out.schemaChanged = true;
+          const nCol = capi.sqlite3_column_count(stmt);
+          const rows = [];
+          for (;;) {
+            const s = capi.sqlite3_step(stmt);
+            if (s === capi.SQLITE_ROW) {
+              const row = [];
+              for (let i = 0; i < nCol; i++) row.push(capi.sqlite3_column_js(stmt, i));
+              rows.push(row);
+            } else if (s === capi.SQLITE_DONE) break;
+            else throw new Error(capi.sqlite3_errmsg(d.pointer));
+          }
+          if (nCol > 0) {
+            out.columns = Array.from({ length: nCol }, (_, i) => capi.sqlite3_column_name(stmt, i));
+            out.rows = rows;
+          }
+          out.changes = capi.sqlite3_changes(d.pointer);
+        } finally { capi.sqlite3_finalize(stmt); }
+        pos = tail;
+      }
+      } catch (e) {
+        out.error = String(e?.message ?? e).replace(/^SQLITE_\w+: (sqlite3 result code \d+: )?/, '');
+      }
+    } finally {
+      wasm.dealloc(base);
+      wasm.pstack.restore(sp);
+    }
+  });
+  const changed = capi.sqlite3_total_changes(d.pointer) !== before;
+  if (changed || out.schemaChanged) markDirty();
+  out.changeset = out.schemaChanged ? null : tracked.changeset;
+  // 行は変わったのに記録できなかった（大きすぎる・仮想表など）なら、元に戻せない
+  out.untrackable = !out.schemaChanged && changed && !tracked.changeset;
+  return out;
+}
+
 // テーブル再作成など、foreign_keys を一時的に切る必要がある処理
 function rebuild(stmts) {
   const d = need();
@@ -254,7 +527,7 @@ async function copy(from, to) {
   return true;
 }
 
-const api = { init, list, open, openFile, close, save, checkFile, begin, commit, rollback, run, exec, batch, rebuild, create, exportDb, importDb, remove, rename, copy };
+const api = { init, list, open, openFile, close, save, checkFile, begin, commit, rollback, run, exec, batch, batchTracked, applyChangeset, consoleRun, rebuild, create, exportDb, importDb, remove, rename, copy };
 
 // 呼び出しは1つずつ順に処理する（ファイルの読み書きを待つ間に、次の呼び出しが割り込まないように）
 let queue = Promise.resolve();

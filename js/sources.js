@@ -1,7 +1,7 @@
 // グリッドのデータ元：テーブル（編集可）と、ビュー/クエリ（読み取り専用）
 import { db, q, inline, lit } from './db-client.js';
 import { affinity } from './schema.js';
-import { undo } from './undo.js';
+import { pushChanges } from './undo.js';
 import { txMarks } from './txmarks.js';
 
 export const FILTER_OPS = [
@@ -260,7 +260,7 @@ export class TableSource {
     return { sql: cols.map((c) => `${c === '_rowid_' ? '_rowid_' : q(c)} IS ?`).join(' AND '), bind: cols.map((c) => key[c]) };
   }
 
-  /** 今の並べ替え・絞り込みで、そのキーの行が何行目か（0 始まり）。絞り込みで見えなければ null */
+  /** 今の並べ替え・絞り込みで、その行（キーか、identOf の見分け方）が何行目か（0 始まり）。絞り込みで見えなければ null */
   async rowIndexOf(key) {
     const w = this.where(), kw = this.keyWhere(key);
     const keyCols = Object.keys(key).map((c) => (c === '_rowid_' ? '_rowid_' : q(c)));
@@ -277,15 +277,6 @@ export class TableSource {
   }
 
   insertableCols() { return this.model.columns.filter((c) => !c.generated); }
-
-  /** 行の全値を復元する INSERT */
-  restoreStmt(row) {
-    const cols = this.insertableCols();
-    const names = cols.map((c) => q(c.name));
-    const vals = cols.map((c) => row.values[this.model.columns.indexOf(c)]);
-    if (this.hasRowid) { names.unshift('_rowid_'); vals.unshift(row.key._rowid_); }
-    return { sql: `INSERT INTO ${this.t} (${names.join(', ')}) VALUES (${vals.map(() => '?').join(', ')})`, bind: vals };
-  }
 
   deleteStmt(key) {
     const kw = this.keyWhere(key);
@@ -320,8 +311,17 @@ export class TableSource {
   returningKey() { return this.keyCols().map((k) => (k === '_rowid_' ? '_rowid_' : q(k))); }
 
   /** トランザクション中に変えたセル・足した行か（未確定の印のため） */
-  isPendingCell(rowObj, c) { return txMarks.has(this.model.name, rowObj?.key, this.model.columns[c]?.name); }
-  isPendingRow(rowObj) { return txMarks.has(this.model.name, rowObj?.key, null); }
+  isPendingCell(rowObj, c) { return !!rowObj && txMarks.has(this.model.name, this.identOf(rowObj), this.model.columns[c]?.name); }
+  isPendingRow(rowObj) { return !!rowObj && txMarks.has(this.model.name, this.identOf(rowObj), null); }
+
+  /**
+   * 行の「見分け方」。変更の記録（セッション）と同じく主キーの値で、主キーのない表は rowid。
+   * rowid は元に戻すと変わることがあるので、未確定の印や戻した場所はこれで覚える
+   */
+  identOf(rowObj) {
+    if (!this.model.pk.length) return { _rowid_: rowObj.key._rowid_ };
+    return Object.fromEntries(this.model.pk.map((p) => [p, rowObj.values[this.model.columns.findIndex((c) => c.name === p)]]));
+  }
 
   async update(changes) {
     const byRow = new Map();
@@ -342,28 +342,14 @@ export class TableSource {
         checks: parts.filter((p) => p.check).map((p) => p.check),
       };
     });
-    let results;
-    try { results = await db.batch(stmts); } catch (e) { throw this.exprFailure(e, allParts, false); }
-    // Undo / Redo は計算結果の値で作る（Redo で式を計算し直さない）
-    const redo = [], undoStmts = [], out = [];
-    const nk = this.keyCols().length;
+    let r;
+    try { r = await db.batchTracked(stmts); } catch (e) { throw this.exprFailure(e, allParts, false); }
+    const out = [];
     plans.forEach((p, i) => {
-      const ret = results[i].rows[0];
-      if (!ret) return;
-      p.newKey = Object.fromEntries(this.keyCols().map((k, j) => [k, ret[j]]));
-      const setSql = p.cols.map((c) => `${q(c.name)} = ?`).join(', ');
-      const kw = this.keyWhere(p.rowObj.key), nkw = this.keyWhere(p.newKey);
-      redo.push({ sql: `UPDATE ${this.t} SET ${setSql} WHERE ${kw.sql}`, bind: [...ret.slice(nk), ...kw.bind] });
-      undoStmts.unshift({ sql: `UPDATE ${this.t} SET ${setSql} WHERE ${nkw.sql}`, bind: [...p.cols.map((c) => p.rowObj.values[this.model.columns.indexOf(c)]), ...nkw.bind] });
+      const ret = r.results[i].rows[0];
+      if (ret) p.newKey = Object.fromEntries(this.keyCols().map((k, j) => [k, ret[j]]));
     });
-    // 未確定の印のための、変えたセル（後＝新しいキー、戻した後＝元のキー）と、主キーの変更
-    const t = this.model.name, done = plans.filter((p) => p.newKey);
-    const cells = {
-      after: done.flatMap((p) => p.cols.map((c) => ({ t, key: p.newKey, col: c.name }))),
-      before: done.flatMap((p) => p.cols.map((c) => ({ t, key: p.rowObj.key, col: c.name }))),
-      rekey: done.filter((p) => JSON.stringify(p.newKey) !== JSON.stringify(p.rowObj.key)).map((p) => ({ t, from: p.rowObj.key, to: p.newKey })),
-    };
-    undo.push({ label: `「${t}」の${changes.length > 1 ? `${changes.length} セルの変更` : 'セルの変更'}`, sheet: 't:' + t, undo: undoStmts, redo, cells });
+    pushChanges(`「${this.model.name}」の${changes.length > 1 ? `${changes.length} セルの変更` : 'セルの変更'}`, 't:' + this.model.name, r);
     for (const p of plans) {
       const fresh = p.newKey && await this.fetchByKey(p.newKey);
       if (fresh) out.push({ row: p.row, rowObj: fresh });
@@ -390,37 +376,15 @@ export class TableSource {
         checks: parts.filter((p) => p.check).map((p) => p.check),
       };
     });
-    let results;
-    try { results = await db.batch(stmts); } catch (e) { throw this.exprFailure(e, allParts, true); }
-    // Undo/Redo 用に、挿入された行を丸ごと取得（キーは RETURNING で受け取る）
-    const inserted = [];
-    for (const r of results) {
-      const ret = r.rows[0];
-      if (!ret) continue;
-      const row = await this.fetchByKey(Object.fromEntries(this.keyCols().map((k, j) => [k, ret[j]])));
-      if (row) inserted.push(row);
-    }
-    undo.push({
-      label: `「${this.model.name}」の${inserted.length > 1 ? `${inserted.length} 行の追加` : '行の追加'}`,
-      sheet: 't:' + this.model.name,
-      undo: inserted.map((r) => this.deleteStmt(r.key)).reverse(),
-      redo: inserted.map((r) => this.restoreStmt(r)),
-      // 足した行（元に戻すと消えるので、戻した後の印はない）
-      cells: { after: inserted.map((r) => ({ t: this.model.name, key: r.key, col: null })), before: [] },
-    });
+    let r;
+    try { r = await db.batchTracked(stmts); } catch (e) { throw this.exprFailure(e, allParts, true); }
+    const n = r.results.filter((x) => x.rows[0]).length;
+    pushChanges(`「${this.model.name}」の${n > 1 ? `${n} 行の追加` : '行の追加'}`, 't:' + this.model.name, r);
   }
 
   async deleteRows(rowObjs) {
-    const stmts = rowObjs.map((r) => this.deleteStmt(r.key));
-    await db.batch(stmts);
-    undo.push({
-      label: `「${this.model.name}」の${rowObjs.length > 1 ? `${rowObjs.length} 行の削除` : '行の削除'}`,
-      sheet: 't:' + this.model.name,
-      undo: rowObjs.map((r) => this.restoreStmt(r)),
-      redo: stmts,
-      // 消した行は見えないので印はない。開始前の削除を元に戻すと、戻ってきた行が確定前の変更になる
-      cells: { after: [], before: rowObjs.map((r) => ({ t: this.model.name, key: r.key, col: null })) },
-    });
+    const r = await db.batchTracked(rowObjs.map((x) => this.deleteStmt(x.key)));
+    pushChanges(`「${this.model.name}」の${rowObjs.length > 1 ? `${rowObjs.length} 行の削除` : '行の削除'}`, 't:' + this.model.name, r);
   }
 
   async duplicateRows(rowObjs) {

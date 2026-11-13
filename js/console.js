@@ -1,13 +1,14 @@
 // SQL コンソール：任意の SQL を実行。GUI が発行した SQL も履歴に流れる
 import { db, inline } from './db-client.js';
-import { el, modKey, toast } from './ui.js';
+import { el, modKey, toast, choiceDialog } from './ui.js';
+import { pushChanges, tableSummary } from './undo.js';
 import { Grid } from './grid.js';
 import { friendlyError } from './sources.js';
 
 export class SqlConsole {
-  constructor(host, { onSchemaMaybeChanged, onDataChanged }) {
+  constructor(host, { onSchemaMaybeChanged, onDataChanged, onDataRecorded }) {
     this.host = host;
-    this.cb = { onSchemaMaybeChanged, onDataChanged };
+    this.cb = { onSchemaMaybeChanged, onDataChanged, onDataRecorded };
     this.history = loadHistory();
     this.hIdx = -1;
     this.log = [];
@@ -98,29 +99,63 @@ export class SqlConsole {
     this.hIdx = -1;
     const t0 = performance.now();
     this.tab = 'result'; this.renderTabs();
+    // 1文ずつ確かめながら実行する。表や列を変えるなど元に戻せない文の手前で止まるので、確認してから続ける
+    let opts = { from: 0, confirmAt: -1, confirmAll: false };
+    let last = null, error = null, schema = false, untrackable = false, cancelled = false;
+    const changes = [];
     try {
-      const r = await db.exec(sql, undefined, 'console');
-      const ms = (performance.now() - t0).toFixed(1);
-      this.log.push({ sql, source: 'console', at: new Date() });
-      this.lastResult = r;
-      this.status.textContent = r.columns.length
-        ? `${r.rows.length} 行（${ms} ms）`
-        : `完了：${r.changes} 行に影響（${ms} ms）`;
-      this.status.className = 'console-status ok';
-      this.renderOut();
-      const isRead = /^\s*(select|with|pragma\s+\w+\s*;?\s*$|explain|values)/i.test(sql) && !/;\s*\S/.test(sql.replace(/;\s*$/, ''))
-        && !(/^\s*with\b/i.test(sql) && /\b(insert|update|delete|replace)\b/i.test(sql));
-      if (!isRead) {
-        if (/\b(create|drop|alter)\b/i.test(sql)) this.cb.onSchemaMaybeChanged();
-        else this.cb.onDataChanged();
+      for (;;) {
+        const r = await db.consoleRun(sql, opts);
+        if (r.columns.length || !last) last = r;
+        else last = { ...last, changes: r.changes };
+        schema ||= r.schemaChanged; untrackable ||= r.untrackable;
+        if (r.changeset) changes.push(r.changeset);
+        if (r.error) { error = r.error; break; }
+        if (!r.paused) break;
+        const c = await choiceDialog({
+          title: '元に戻せない操作です',
+          body: '次の文は表や列を変える・消すなどの操作で、元に戻せません。実行すると、これまでの「元に戻す」の記録も消えます。',
+          code: r.text,
+          choices: [
+            { label: 'キャンセル', value: null },
+            { label: '残りも確認せずに実行', value: 'all' },
+            { label: '実行する', value: 'one', danger: true },
+          ],
+        });
+        if (!c) { cancelled = true; break; }
+        opts = { from: r.at, confirmAt: r.at, confirmAll: c === 'all' };
       }
-    } catch (e) {
-      this.log.push({ sql, source: 'console', error: e.message, at: new Date() });
+    } catch (e) { error = e.message; }
+    const ms = (performance.now() - t0).toFixed(1);
+    const item = { sql, source: 'console', at: new Date(), error: error ?? undefined };
+    this.log.push(item);
+    // 実行した分の後始末：元に戻せない文を実行したら記録を消し、データの変更だけなら1操作として積む
+    if (schema) this.cb.onSchemaMaybeChanged();
+    else if (untrackable) this.cb.onDataChanged();
+    else if (changes.length) {
+      const short = sql.replace(/\s+/g, ' ').slice(0, 40) + (sql.length > 40 ? '…' : '');
+      const entry = pushChanges(`SQL コンソールの実行（${short}、${tableSummary(changes.length === 1 ? changes[0].tables : mergeTables(changes))}）`, null, { changes }, {
+        onUndo: () => { item.undone = true; this.refreshLog(); },
+        onRedo: () => { item.undone = false; this.refreshLog(); },
+      });
+      if (entry) this.cb.onDataRecorded?.();
+    }
+    if (error) {
       this.lastResult = null;
       this.status.textContent = '';
-      this.out.replaceChildren(el('div.console-error', friendlyError(e.message), e.message !== friendlyError(e.message) ? el('div.muted.mono', e.message) : null));
+      this.out.replaceChildren(el('div.console-error', friendlyError(error), error !== friendlyError(error) ? el('div.muted.mono', error) : null));
+      return;
     }
+    this.lastResult = last;
+    this.status.textContent = cancelled
+      ? `途中で止めました（${ms} ms）`
+      : last.columns.length ? `${last.rows.length} 行（${ms} ms）` : `完了：${last.changes} 行に影響（${ms} ms）`;
+    this.status.className = 'console-status ok';
+    this.renderOut();
   }
+
+  /** 実行履歴を開いていれば描き直す（「元に戻しました」の印のため） */
+  refreshLog() { if (this.tab === 'log' && !this.host.hidden) this.renderOut(); }
 
   renderOut() {
     if (this.tab === 'log') {
@@ -152,13 +187,14 @@ export class SqlConsole {
 
   logItem(it) {
     return el('div.log-item', {
-      class: it.error ? 'err' : '',
+      class: [it.error ? 'err' : '', it.undone ? 'undone' : ''].join(' ').trim(),
       title: 'クリックで入力欄にコピー',
       on: { click: () => { this.input.value = inline(it.sql, it.bind); this.input.focus(); } },
     },
     el('span.log-src', { gui: 'GUI', console: 'SQL', undo: '元に戻す', redo: 'やり直し' }[it.source] || it.source),
     el('span.log-time', it.at.toLocaleTimeString()),
     el('code.log-sql', inline(it.sql, it.bind)),
+    it.undone ? el('span.log-undone', '元に戻しました') : null,
     it.error ? el('div.log-err', friendlyError(it.error)) : null);
   }
 
@@ -193,3 +229,13 @@ const LOG_LIMIT = 500;
 
 function loadHistory() { try { return JSON.parse(localStorage.getItem('sql-history') || '[]'); } catch { return []; } }
 function saveHistory(h) { try { localStorage.setItem('sql-history', JSON.stringify(h)); } catch { /* 無視 */ } }
+
+/** 複数の記録の、表ごとの件数を足し合わせる */
+function mergeTables(list) {
+  const out = {};
+  for (const c of list) for (const [t, n] of Object.entries(c.tables)) {
+    const m = (out[t] ??= { insert: 0, delete: 0, update: 0 });
+    m.insert += n.insert; m.delete += n.delete; m.update += n.update;
+  }
+  return out;
+}

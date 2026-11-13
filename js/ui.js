@@ -176,13 +176,15 @@ export function confirmDialog({ title, body, okLabel = 'OK', danger = false, cod
  * 3つ以上の選択肢があるダイアログ。choices: [{label, value, hint?, primary?, danger?}]。
  * 選んだ value（Esc は null）を返す
  */
-export function choiceDialog({ title, body, choices }) {
+export function choiceDialog({ title, body, code, note, choices }) {
   return new Promise((resolve) => {
     const dlg = el('dialog.modal');
     const close = (v) => { dlg.close(); dlg.remove(); resolve(v); };
     dlg.append(...[
       el('h2', title),
       body ? el('p', body) : null,
+      code ? el('pre.code', code) : null,
+      note ? el('p.muted', note) : null,
       el('div.modal-actions.choice-actions', choices.map((c) => el('button.btn', {
         class: c.danger ? 'danger' : c.primary ? 'primary' : '', autofocus: !!c.primary,
         title: c.hint || '', on: { click: () => close(c.value ?? null) },

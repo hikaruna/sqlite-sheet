@@ -4,12 +4,13 @@
 // 印は「元に戻す」の1操作ごとに付け外しする（undo.js から呼ぶ）。各操作は cells を持つ：
 //   cells.after  … その操作をした後に、変わった状態で存在するセル・行
 //   cells.before … その操作を元に戻した後に、変わった状態で存在するセル・行
-//   cells.rekey  … 主キーを変えた行の [{t, from, to}]（印を新しいキーへ移す）
+// 行は主キーの値（主キーのない表は rowid）で見分ける。主キーを変える更新は、記録では「消して足した」になる。
 // トランザクション中に操作すると after の印を付け、それを元に戻すと外す。開始前の操作を
 // トランザクション中に元に戻した場合は、それ自体が確定前の変更なので before の印を付ける。
 // 同じセルを何度も変えたときは数で持つので、1回元に戻しても残りの変更の印は消えない。
 
-const k = (key) => JSON.stringify(key);
+// 行の見分け方（主キーの値、主キーのない表は rowid）を、列の並びによらない文字列にする
+const k = (key) => JSON.stringify(Object.entries(key).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)));
 const cellId = (key, col) => k(key) + '|' + (col ?? '');
 
 export const txMarks = {
@@ -34,23 +35,6 @@ export const txMarks = {
       if (!m?.has(id)) continue;
       const n = m.get(id) - 1;
       if (n > 0) m.set(id, n); else m.delete(id);
-    }
-  },
-
-  /** 主キーが変わった行の印を、新しいキーへ移す（reverse なら戻す） */
-  rekey(list, reverse = false) {
-    const items = reverse ? [...(list ?? [])].reverse() : (list ?? []);
-    for (const { t, from, to } of items) {
-      const [a, b] = reverse ? [to, from] : [from, to];
-      const m = this.map.get(t);
-      if (!m) continue;
-      const prefix = k(a) + '|';
-      for (const [id, n] of [...m]) {
-        if (!id.startsWith(prefix)) continue;
-        m.delete(id);
-        const nid = k(b) + '|' + id.slice(prefix.length);
-        m.set(nid, (m.get(nid) ?? 0) + n);
-      }
     }
   },
 
@@ -79,13 +63,13 @@ export const txMarks = {
   /** 操作をした・やり直した */
   onDo(e) {
     if (!this.on || !e.cells) return;
-    if (e.tx === 'before') { this.remove(e.cells.before); this.rekey(e.cells.rekey); e.tx = null; return; }
-    this.rekey(e.cells.rekey); this.add(e.cells.after); e.tx = 'after';
+    if (e.tx === 'before') { this.remove(e.cells.before); e.tx = null; return; }
+    this.add(e.cells.after); e.tx = 'after';
   },
   /** 操作を元に戻した */
   onUndo(e) {
     if (!this.on || !e.cells) return;
-    if (e.tx === 'after') { this.remove(e.cells.after); this.rekey(e.cells.rekey, true); e.tx = null; return; }
-    this.rekey(e.cells.rekey, true); this.add(e.cells.before); e.tx = 'before';
+    if (e.tx === 'after') { this.remove(e.cells.after); e.tx = null; return; }
+    this.add(e.cells.before); e.tx = 'before';
   },
 };
