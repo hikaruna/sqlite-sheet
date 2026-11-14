@@ -2197,4 +2197,9 @@ function palette() {
   popover({ x: innerWidth / 2 - 260, y: 72 }, el('div.palette', input, list), { className: 'palette-pop', onClose: () => state.grid?.focus() });
 }
 
+// PWA：アプリのファイルを端末に保存して電波なしでも起動できるようにする（sw.js）。
+// あわせて、ブラウザが容量を空けるときに DB（OPFS）を消さないよう頼んでおく
+if ('serviceWorker' in navigator) navigator.serviceWorker.register(new URL('../sw.js', import.meta.url)).catch(() => {});
+navigator.storage?.persist?.().catch(() => {});
+
 boot();
