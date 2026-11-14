@@ -1,5 +1,6 @@
 // スプレッドシート風グリッド：仮想スクロール、セル選択、編集、コピー＆ペースト
 import { el, modKey, fmtBytes } from './ui.js';
+import { sniff } from './blob.js';
 import { convertInput, formText, form, defaultToForm } from './sources.js';
 
 // タッチ端末（指で操作する）か。行を高くし、タップ・長押し・つまみで操作する
@@ -439,6 +440,7 @@ export class Grid {
     const { r0, r1, c0, c1 } = this.range();
     const frag = document.createDocumentFragment();
     const widths = this.cols.map((_, c) => this.colW(c));
+    this.blobUsed = new Set();
     for (let r = first; r <= last; r++) {
       const isNew = r === this.newRowIndex;
       if (isNew && !this.draft) {
@@ -490,6 +492,8 @@ export class Grid {
       frag.append(rowEl);
     }
     this.body.replaceChildren(frag);
+    this.releaseBlobUrls();
+    this.blobUsed = null;
     this.placeSink();
     this.renderEmpty();
   }
@@ -506,7 +510,14 @@ export class Grid {
     const err = row.errors?.[c];
     if (err) { cell.classList.add('err'); cell.title = err; }
     if (v === null || v === undefined) { cell.classList.add('null'); cell.textContent = NULL_LABEL; return; }
-    if (v instanceof Uint8Array) { cell.classList.add('blob'); cell.textContent = `BLOB ${fmtBytes(v.length)}`; return; }
+    if (v instanceof Uint8Array) {
+      const k = sniff(v);
+      cell.classList.add('blob');
+      // 大きさは CSS でセルの高さに合わせる（行の高さが変わっても追従する）
+      if (k.image && v.length) cell.append(el('img.blob-thumb', { src: this.blobUrl(v, k.mime), alt: '', draggable: false }));
+      cell.append(`${v.length ? k.label : 'BLOB'} ${fmtBytes(v.length)}`);
+      return;
+    }
     if (typeof v === 'number' || typeof v === 'bigint') { cell.classList.add('num'); }
     const s = String(v);
     if (s === '') { cell.classList.add('emptystr'); return; }
@@ -517,6 +528,20 @@ export class Grid {
       if (label != null) cell.append(el('span.fk-label', String(label)));
     }
     void r;
+  }
+
+  /** 画像の BLOB の Object URL。描画中に使ったものだけを残し、ほかは render() の終わりで解放する */
+  blobUrl(v, mime) {
+    this.blobUrls ??= new Map();
+    let url = this.blobUrls.get(v);
+    if (!url) { url = URL.createObjectURL(new Blob([v], { type: mime })); this.blobUrls.set(v, url); }
+    this.blobUsed?.add(v);
+    return url;
+  }
+
+  releaseBlobUrls() {
+    if (!this.blobUrls) return;
+    for (const [v, url] of this.blobUrls) if (!this.blobUsed?.has(v)) { URL.revokeObjectURL(url); this.blobUrls.delete(v); }
   }
 
   placeSink() {
