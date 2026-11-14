@@ -756,7 +756,7 @@ function validDbName(v) {
 async function newDb(anchor) {
   if (!(await leaveCurrent())) return;
   const name = await ask(anchor instanceof Element ? anchor : $('file-btn'), {
-    title: '新しいデータベース', placeholder: '名前', okLabel: '作成',
+    title: '新しいデータベース', value: uniqueName('データベース', state.dbs), placeholder: '名前', okLabel: '作成',
     validate: (v) => validDbName(v) || (state.dbs.includes(v) ? `「${v}」は既にあります` : null),
   });
   if (!name) return;
