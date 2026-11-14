@@ -161,8 +161,10 @@ export class Grid {
       e.preventDefault();
       const dt = e.clipboardData;
       const image = [...dt.files].find((f) => f.type.startsWith('image/')) || null;
-      this.pasteClipboard({ image, text: dt.getData('text/plain') });
+      this.pasteClipboard({ image, text: dt.getData('text/plain'), html: dt.getData('text/html') });
     });
+    // ほかのアプリへ移ったら、そこでコピーしたかもしれないので「同じ文字なら自分のコピー」とはみなさない
+    window.addEventListener('blur', () => { if (this.lastCopy) this.lastCopy.left = true; });
     this.renderHeader();
   }
 
@@ -1028,15 +1030,40 @@ export class Grid {
     const last = Math.min(r1, this.rowCount - 1);
     if (last < r0) return;
     const rows = await this.rowsBetween(r0, last);
-    const tsv = rows.map((row) => {
-      const vals = [];
-      for (let c = c0; c <= c1; c++) vals.push(toTsvCell(row?.values[c]));
-      return vals.join('\t');
-    }).join('\n');
+    const values = rows.map((row) => { const vals = []; for (let c = c0; c <= c1; c++) vals.push(row?.values[c] ?? null); return vals; });
+    const tsv = values.map((vals) => vals.map(toTsvCell).join('\t')).join('\n');
+    // BLOB は文字にできないので、アプリ内で貼るときのために元の値を覚えておく（目印を HTML に入れる）
+    const hasBlob = values.some((vals) => vals.some((v) => v instanceof Uint8Array));
+    const id = hasBlob ? `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}` : null;
+    this.lastCopy = hasBlob ? { id, tsv, values, left: false } : null;
+    const n = (last - r0 + 1) * (c1 - c0 + 1);
+    const single = n === 1 && values[0][0] instanceof Uint8Array ? values[0][0] : null;
+    const image = single && single.length && sniff(single).image ? single : null;
     try {
-      await navigator.clipboard.writeText(tsv);
-      this.hooks.onInfo?.(`${(last - r0 + 1) * (c1 - c0 + 1)} セルをコピーしました`);
+      if (hasBlob && window.ClipboardItem && navigator.clipboard.write) {
+        const items = {
+          'text/plain': new Blob([tsv], { type: 'text/plain' }),
+          'text/html': new Blob([toHtmlTable(values, id)], { type: 'text/html' }),
+        };
+        // 画像のセル1つなら、ほかのアプリにも画像として貼れるよう PNG も載せる（Safari のため Promise のまま渡す）
+        if (image) items['image/png'] = toPng(image, sniff(image).mime);
+        await navigator.clipboard.write([new ClipboardItem(items)]);
+      } else {
+        await navigator.clipboard.writeText(tsv);
+      }
+      this.hooks.onInfo?.(image ? '画像をコピーしました' : `${n} セルをコピーしました`);
     } catch { this.hooks.onError?.(new Error('クリップボードに書き込めませんでした')); }
+  }
+
+  /** 貼ろうとしている中身が、直前にこのアプリでコピーしたものか（そうなら BLOB を含む元の値を返す） */
+  ownCopy({ text, html }) {
+    const lc = this.lastCopy;
+    if (!lc) return null;
+    if (html && html.includes(`data-sqlite-sheet="${lc.id}"`)) return lc.values;
+    // 目印が届かない環境（HTML が消毒される・HTML を読めない）向け：
+    // 文字が同じで、そのあとほかのアプリへ移っていなければ同じコピーとみなす
+    if (!lc.left && (text ?? '') === lc.tsv) return lc.values;
+    return null;
   }
 
   /** 画像（BLOB）を入れられる列か：BLOB 型か型なし */
@@ -1052,7 +1079,9 @@ export class Grid {
    * 選択中の列が BLOB を受け付けるなら画像を、そうでなければ文字を貼る
    * （Excel などはセルのコピーに画像も付けるので、BLOB でない列では文字を優先する）
    */
-  async pasteClipboard({ image, text }) {
+  async pasteClipboard({ image, text, html }) {
+    const own = this.ownCopy({ text, html });
+    if (own) return this.paste(null, own);
     const { c0, c1 } = this.range();
     const blobCols = [];
     for (let c = c0; c <= c1; c++) if (this.acceptsBlob(c)) blobCols.push(c);
@@ -1071,9 +1100,10 @@ export class Grid {
     if (ok) this.hooks.onInfo?.(changes.length > 1 ? `${changes.length} セルに画像を貼り付けました` : `画像を貼り付けました（${fmtBytes(bytes.length)}）`);
   }
 
-  async paste(text) {
+  /** 文字（TSV）を貼る。values（行×列の値）を渡したときはそれをそのまま貼る */
+  async paste(text, values) {
     if (!this.source.editable) { this.hooks.onReadonlyEdit?.(); return; }
-    const data = parseTsv(text);
+    const data = values ?? parseTsv(text);
     if (!data.length) return;
     let { r0, c0, r1, c1 } = this.range();
     // 1セルのコピーを範囲に貼ると全体に繰り返す
@@ -1217,6 +1247,28 @@ function autoWidth(col) {
 }
 
 function isMacCtrl() { return /Mac/.test(navigator.platform); }
+
+/** コピーした範囲の HTML（ほかの表計算ソフトにも表として貼れる。data-sqlite-sheet は自分のコピーの目印） */
+function toHtmlTable(values, id) {
+  const esc = (s) => s.replace(/[&<>"]/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[ch]);
+  const td = (v) => `<td>${v == null || v instanceof Uint8Array ? '' : esc(String(v))}</td>`;
+  return `<table data-sqlite-sheet="${id}">${values.map((vals) => `<tr>${vals.map(td).join('')}</tr>`).join('')}</table>`;
+}
+
+/** 画像のバイト列を PNG の Blob に（PNG 以外は canvas に描いて変換する） */
+async function toPng(bytes, mime) {
+  if (mime === 'image/png') return new Blob([bytes], { type: 'image/png' });
+  const url = URL.createObjectURL(new Blob([bytes], { type: mime }));
+  try {
+    const img = new Image();
+    img.src = url;
+    await img.decode();
+    const c = document.createElement('canvas');
+    c.width = img.naturalWidth || 300; c.height = img.naturalHeight || 150;
+    c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+    return await new Promise((resolve, reject) => c.toBlob((b) => (b ? resolve(b) : reject(new Error('PNG に変換できませんでした'))), 'image/png'));
+  } finally { URL.revokeObjectURL(url); }
+}
 
 function toTsvCell(v) {
   if (v === null || v === undefined) return '';

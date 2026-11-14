@@ -1894,13 +1894,14 @@ function fkPicker(r, c, anchor) {
 async function pasteFromMenu(g) {
   if (navigator.clipboard?.read) {
     try {
-      let image = null, text = '';
+      let image = null, text = '', html = '';
       for (const item of await navigator.clipboard.read()) {
         const it = item.types.find((t) => t.startsWith('image/'));
         if (it && !image) image = await item.getType(it);
         if (item.types.includes('text/plain') && !text) text = await (await item.getType('text/plain')).text();
+        if (item.types.includes('text/html') && !html) html = await (await item.getType('text/html')).text();
       }
-      if (image || text) return g.pasteClipboard({ image, text });
+      if (image || text || html) return g.pasteClipboard({ image, text, html });
     } catch { /* 下の readText() に任せる */ }
   }
   try { g.paste(await navigator.clipboard.readText()); } catch { toast(`${MOD}V で貼り付けてください`); }
