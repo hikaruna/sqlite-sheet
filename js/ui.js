@@ -211,8 +211,12 @@ export function modal(children, { className = '' } = {}) {
 /** ファイル選択 */
 export function pickFile(accept) {
   return new Promise((resolve) => {
-    const i = el('input', { type: 'file', accept });
-    i.addEventListener('change', () => resolve(i.files[0] || null));
+    // iOS はページに置いていない input から change を送らないことがあるので、見えないまま置いて終わったら外す
+    const i = el('input', { type: 'file', accept, hidden: true });
+    const done = (f) => { i.remove(); resolve(f); };
+    i.addEventListener('change', () => done(i.files[0] || null));
+    i.addEventListener('cancel', () => done(null));
+    document.body.append(i);
     i.click();
   });
 }
@@ -222,6 +226,30 @@ export function download(bytes, filename, type = 'application/octet-stream') {
   const a = el('a', { href: url, download: filename });
   document.body.append(a); a.click(); a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+/** スマホ・タブレットなど、指で操作する端末 */
+export const isTouch = matchMedia('(pointer: coarse)').matches;
+
+/**
+ * ファイルの書き出し。指で操作する端末では共有シート（「ファイルに保存」「ドライブ」など）、
+ * それ以外や共有できないときはダウンロード
+ */
+export async function exportFile(bytes, filename, type = 'application/octet-stream') {
+  // 共有できる種類は端末ごとに違う。指定の種類がだめなら汎用の種類で試す
+  const file = isTouch && [type, 'application/octet-stream']
+    .map((t) => new File([bytes], filename, { type: t })).find((f) => navigator.canShare?.({ files: [f] }));
+  if (file) {
+    try {
+      try { await navigator.share({ files: [file] }); } catch (e) {
+        // iOS は、書き出しに時間がかかるとユーザー操作の有効期限が切れる。ボタンを押してもらってやり直す
+        if (e.name !== 'NotAllowedError') throw e;
+        if (await confirmDialog({ title: '書き出しの準備ができました', body: filename, okLabel: '共有…' })) await navigator.share({ files: [file] });
+      }
+      return;
+    } catch (e) { if (e.name === 'AbortError') return; }
+  }
+  download(bytes, filename, type);
 }
 
 export const isMac = /Mac|iPhone|iPad/.test(navigator.platform);
