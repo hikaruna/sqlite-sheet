@@ -1,6 +1,7 @@
 // スプレッドシート風グリッド：仮想スクロール、セル選択、編集、コピー＆ペースト
 import { el, modKey, fmtBytes } from './ui.js';
 import { sniff } from './blob.js';
+import { affinity } from './schema.js';
 import { convertInput, formText, form, defaultToForm } from './sources.js';
 
 // タッチ端末（指で操作する）か。行を高くし、タップ・長押し・つまみで操作する
@@ -155,7 +156,13 @@ export class Grid {
     this.sink.addEventListener('blur', () => { if (this.editing && !this.sinkFocusKeep) this.commitEdit({ move: null }); });
     this.sink.addEventListener('copy', (e) => { if (!this.editing) { e.preventDefault(); this.copy(); } });
     this.sink.addEventListener('cut', (e) => { if (!this.editing) { e.preventDefault(); this.copy().then(() => this.clearSelection()); } });
-    this.sink.addEventListener('paste', (e) => { if (!this.editing) { e.preventDefault(); this.paste(e.clipboardData.getData('text/plain')); } });
+    this.sink.addEventListener('paste', (e) => {
+      if (this.editing) return;
+      e.preventDefault();
+      const dt = e.clipboardData;
+      const image = [...dt.files].find((f) => f.type.startsWith('image/')) || null;
+      this.pasteClipboard({ image, text: dt.getData('text/plain') });
+    });
     this.renderHeader();
   }
 
@@ -1030,6 +1037,38 @@ export class Grid {
       await navigator.clipboard.writeText(tsv);
       this.hooks.onInfo?.(`${(last - r0 + 1) * (c1 - c0 + 1)} セルをコピーしました`);
     } catch { this.hooks.onError?.(new Error('クリップボードに書き込めませんでした')); }
+  }
+
+  /** 画像（BLOB）を入れられる列か：BLOB 型か型なし */
+  acceptsBlob(c) {
+    const col = this.cols[c];
+    if (!col || col.readonly) return false;
+    const a = affinity(col.type);
+    return a === 'BLOB' || a === 'ANY';
+  }
+
+  /**
+   * クリップボードの中身を貼る。image は画像の Blob（なければ null）。
+   * 選択中の列が BLOB を受け付けるなら画像を、そうでなければ文字を貼る
+   * （Excel などはセルのコピーに画像も付けるので、BLOB でない列では文字を優先する）
+   */
+  async pasteClipboard({ image, text }) {
+    const { c0, c1 } = this.range();
+    const blobCols = [];
+    for (let c = c0; c <= c1; c++) if (this.acceptsBlob(c)) blobCols.push(c);
+    if (image && blobCols.length) return this.pasteBlob(new Uint8Array(await image.arrayBuffer()), blobCols);
+    if (text) return this.paste(text);
+    if (image) this.hooks.onError?.(new Error('画像は BLOB の列（または型のない列）にだけ貼り付けられます'));
+  }
+
+  /** 選択範囲のうち cols の列に、同じバイト列を入れる */
+  async pasteBlob(bytes, cols) {
+    if (!this.source.editable) { this.hooks.onReadonlyEdit?.(); return; }
+    const { r0, r1 } = this.range();
+    const changes = [];
+    for (let r = r0; r <= r1; r++) for (const c of cols) changes.push({ r, c, value: bytes });
+    const ok = await this.write(changes);
+    if (ok) this.hooks.onInfo?.(changes.length > 1 ? `${changes.length} セルに画像を貼り付けました` : `画像を貼り付けました（${fmtBytes(bytes.length)}）`);
   }
 
   async paste(text) {

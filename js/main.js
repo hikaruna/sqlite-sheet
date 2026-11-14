@@ -1887,6 +1887,25 @@ function fkPicker(r, c, anchor) {
   search();
 }
 
+/**
+ * メニューの「貼り付け」。画像も読めるよう clipboard.read() を先に試し、
+ * 使えない・許可されないときは readText() に戻す（Safari は read() に制限がある）
+ */
+async function pasteFromMenu(g) {
+  if (navigator.clipboard?.read) {
+    try {
+      let image = null, text = '';
+      for (const item of await navigator.clipboard.read()) {
+        const it = item.types.find((t) => t.startsWith('image/'));
+        if (it && !image) image = await item.getType(it);
+        if (item.types.includes('text/plain') && !text) text = await (await item.getType('text/plain')).text();
+      }
+      if (image || text) return g.pasteClipboard({ image, text });
+    } catch { /* 下の readText() に任せる */ }
+  }
+  try { g.paste(await navigator.clipboard.readText()); } catch { toast(`${MOD}V で貼り付けてください`); }
+}
+
 async function cellMenu(pos, range) {
   const g = state.grid;
   const isTable = state.key[0] === 't';
@@ -1898,7 +1917,7 @@ async function cellMenu(pos, range) {
   if (g.rowAt(r)?.values[c] instanceof Uint8Array) items.unshift({ label: 'BLOB を表示', icon: '🔍', action: () => viewBlob(r, c) }, '-');
   if (isTable) {
     items.push(
-      { label: '貼り付け', icon: '📋', kbd: `${MOD}V`, action: async () => { try { g.paste(await navigator.clipboard.readText()); } catch { toast(`${MOD}V で貼り付けてください`); } } },
+      { label: '貼り付け', icon: '📋', kbd: `${MOD}V`, action: () => pasteFromMenu(g) },
       { label: '値をクリア（NULL）', icon: '⌫', kbd: 'Delete', action: () => g.clearSelection() },
       { label: '下へコピー', icon: '⇣', kbd: `${MOD}D`, disabled: range.r1 <= range.r0, action: () => g.fillDown() },
       '-',
