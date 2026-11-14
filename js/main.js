@@ -3,6 +3,7 @@ import { db, q } from './db-client.js';
 import { el, toast, menu, popover, closePopover, ask, confirmDialog, choiceDialog, modal, pickFile, download, exportFile, isTouch, modKey, isMac, touchHold, icon } from './ui.js';
 import { listObjects, readTable, createTableSql, migrationSql, constantDefault, TYPES, affinity } from './schema.js';
 import { Grid } from './grid.js';
+import { sniff } from './blob.js';
 import { TableSource, QuerySource, FILTER_OPS, friendlyError, convertInput, formText, formToDefault } from './sources.js';
 import { txMarks } from './txmarks.js';
 import { DesignPanel } from './design-panel.js';
@@ -2035,7 +2036,7 @@ function blobMenu(r, c) {
       if (!f) return;
       try { const res = await state.source.update([{ row: r, col: c, value: new Uint8Array(await f.arrayBuffer()), rowObj: row }]); if (res[0]) g.pages.get(Math.floor(r / 200))[r % 200] = res[0].rowObj; g.render(); } catch (e) { toast(friendlyError(e.message), 'error'); }
     } },
-    { label: 'ダウンロード', icon: '⤓', disabled: !(v instanceof Uint8Array), action: () => download(v, `${state.source.columns[c].name}.bin`) },
+    { label: 'ダウンロード', icon: '⤓', disabled: !(v instanceof Uint8Array), action: () => { const k = sniff(v); download(v, `${state.source.columns[c].name}.${k.ext}`, k.mime); } },
     { label: 'NULL にする', icon: '⌫', action: () => g.write([{ r, c, value: null }]) },
   ]);
 }
