@@ -1,6 +1,6 @@
 // アプリ本体：DB・シートの管理、画面の組み立て
 import { db, q } from './db-client.js';
-import { el, toast, menu, popover, closePopover, ask, confirmDialog, choiceDialog, modal, pickFile, download, modKey, isMac, touchHold, icon } from './ui.js';
+import { el, toast, menu, popover, closePopover, ask, confirmDialog, choiceDialog, modal, pickFile, download, exportFile, isTouch, modKey, isMac, touchHold, icon } from './ui.js';
 import { listObjects, readTable, createTableSql, migrationSql, constantDefault, TYPES, affinity } from './schema.js';
 import { Grid } from './grid.js';
 import { TableSource, QuerySource, FILTER_OPS, friendlyError, convertInput, formText, formToDefault } from './sources.js';
@@ -331,7 +331,6 @@ function showWelcome() {
   $('sheet-head').replaceChildren();
   $('panel').hidden = true;
   setUrl();
-  const pickImport = async () => { const f = await pickFile('.sqlite,.sqlite3,.db,application/x-sqlite3'); if (f) importFile(f); };
   // 操作はすべて一覧より上に置く（一覧が長くなっても埋もれない）
   $('db-search').value = ''; hideSearch();
   store.ensureCreated(state.dbs);
@@ -341,7 +340,7 @@ function showWelcome() {
         el('p.lead', 'スプレッドシートの手軽さで、SQLite データベースを。')),
       el('div.home-tools',
         el('button.btn.primary', { title: '空のデータベースを作る', on: { click: newDb } }, '＋ 新規作成'),
-        el('button.btn', { title: '.sqlite ファイルをデータベースとして取り込む（ドラッグ＆ドロップでも可）', on: { click: pickImport } }, '⤒ 取り込む'),
+        el('button.btn', { title: '.sqlite ファイルをデータベースとして取り込む（ドラッグ＆ドロップでも可）', on: { click: pickSqlite } }, '⤒ 取り込む'),
         el('button.btn', { title: 'サンプルのデータベースを作る', on: { click: makeSample } }, '✨ サンプル'),
         files.supported ? el('button.btn', { title: 'パソコンの .sqlite ファイルをそのまま開いて編集する', on: { click: fileModeDialog } }, '📂 ローカルファイルを直接編集…') : null),
       el('section.home-section',
@@ -385,10 +384,9 @@ function sortMenu(anchor) {
 
 // スマホのホーム：左から出るメニュー。ホームの操作を一通りここから選べる
 function homeDrawer() {
-  const pickImport = async () => { const f = await pickFile('.sqlite,.sqlite3,.db,application/x-sqlite3'); if (f) importFile(f); };
   const items = [
     { label: '新規作成', icon: '＋', run: newDb },
-    { label: '取り込む', icon: '⤒', run: pickImport },
+    { label: '取り込む', icon: '⤒', run: pickSqlite },
     { label: 'サンプル', icon: '✨', run: makeSample },
     files.supported ? { label: 'ローカルファイルを直接編集…', icon: '📂', run: fileModeDialog } : null,
   ].filter(Boolean);
@@ -790,6 +788,12 @@ async function makeSample() {
   } catch (e) { toast(friendlyError(e.message), 'error'); }
 }
 
+// スマホのファイル選択は、知らない拡張子（.sqlite など）を選べなくすることがあるので絞らない。中身は importFile が確かめる
+async function pickSqlite() {
+  const f = await pickFile(isTouch ? '' : '.sqlite,.sqlite3,.db,application/x-sqlite3');
+  if (f) importFile(f);
+}
+
 async function importFile(file) {
   const bytes = new Uint8Array(await file.arrayBuffer());
   const header = new TextDecoder().decode(bytes.slice(0, 15));
@@ -817,7 +821,7 @@ async function exportCurrent(name = state.dbName) {
   try {
     if (name === state.dbName && state.grid && !(await state.grid.flushDraft())) return;
     if (typeof window.showSaveFilePicker !== 'function') {
-      download(await db.exportDb(name), filename, 'application/x-sqlite3');
+      await exportFile(await db.exportDb(name), filename, 'application/x-sqlite3');
       return;
     }
     let handle;
@@ -860,7 +864,7 @@ function dbMenu(anchor, { list = false } = {}) {
   items.push({ header: 'データベース' });
   for (const n of state.dbs) items.push({ label: n, icon: n === state.dbName ? '✓' : '◆', action: () => { if (n !== state.dbName) openDb(n); } });
   items.push({ label: '新規作成…', icon: '＋', action: () => newDb(anchor) },
-    { label: '.sqlite ファイルを取り込む…', icon: '⤒', action: async () => { const f = await pickFile('.sqlite,.sqlite3,.db'); if (f) importFile(f); } },
+    { label: '.sqlite ファイルを取り込む…', icon: '⤒', action: pickSqlite },
     { label: 'サンプルを作成', icon: '✨', action: makeSample });
   if (files.supported) items.push('-', { label: 'ローカルファイルを直接編集…', icon: '📂', action: fileModeDialog });
   if (list) return items;
@@ -2002,7 +2006,7 @@ async function exportCsv(key) {
     const r = await db.query(sql);
     const esc = (v) => { if (v == null) return ''; const s = v instanceof Uint8Array ? '' : String(v); return /[",\n\r]/.test(s) ? `"${s.replaceAll('"', '""')}"` : s; };
     const csv = '﻿' + [r.columns.map(esc).join(','), ...r.rows.map((row) => row.map(esc).join(','))].join('\r\n');
-    download(new TextEncoder().encode(csv), `${name}.csv`, 'text/csv');
+    await exportFile(new TextEncoder().encode(csv), `${name}.csv`, 'text/csv');
   } catch (e) { toast(friendlyError(e.message), 'error'); }
 }
 
