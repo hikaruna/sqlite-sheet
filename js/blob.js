@@ -50,6 +50,19 @@ function detect(b) {
   return BIN;
 }
 
+/** 16 進ダンプ（位置・16 進・ASCII）。width は 1 行のバイト数 */
+export function hexDump(b, { max = 4096, width = 16 } = {}) {
+  const n = Math.min(b.length, max);
+  const lines = [];
+  for (let i = 0; i < n; i += width) {
+    const row = b.subarray(i, Math.min(i + width, n));
+    const hex = [...row].map((x) => x.toString(16).padStart(2, '0')).join(' ').padEnd(width * 3 - 1);
+    const chars = [...row].map((x) => (x >= 0x20 && x < 0x7f ? String.fromCharCode(x) : '.')).join('');
+    lines.push(`${i.toString(16).padStart(6, '0')}  ${hex}  ${chars}`);
+  }
+  return lines.join('\n');
+}
+
 /** UTF-8 として読めて制御文字（タブ・改行以外）がなければ文字列を返す */
 export function asText(b, max = 65536) {
   if (b.length === 0) return null;

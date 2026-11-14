@@ -46,7 +46,7 @@ COOP/COEP ヘッダーは不要です（SharedArrayBuffer を使わない `opfs-
 | `js/files.js` | ファイルの直接編集の補助：最近開いたファイル（ファイルハンドルだけを IndexedDB に保存）と読み書きの許可 |
 | `js/schema.js` | スキーマの読み取り、CREATE TABLE の生成、テーブル再作成 SQL |
 | `js/grid.js` | 仮想スクロールのグリッド（選択・編集・コピペ） |
-| `js/blob.js` | BLOB の中身の種類の判定（先頭のバイトで画像・PDF・テキストなどを見分ける） |
+| `js/blob.js` | BLOB の中身の種類の判定（先頭のバイトで画像・PDF・テキストなどを見分ける）と 16 進ダンプ |
 | `js/sources.js` | テーブル／クエリをグリッドにつなぐ（UPDATE/INSERT/DELETE と Undo 記録） |
 | `js/design-panel.js` | 設計パネル |
 | `js/console.js` | SQL コンソール |

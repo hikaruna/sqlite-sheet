@@ -1,9 +1,9 @@
 // アプリ本体：DB・シートの管理、画面の組み立て
 import { db, q } from './db-client.js';
-import { el, toast, menu, popover, closePopover, ask, confirmDialog, choiceDialog, modal, pickFile, download, exportFile, isTouch, modKey, isMac, touchHold, icon } from './ui.js';
+import { el, toast, menu, popover, closePopover, ask, confirmDialog, choiceDialog, modal, pickFile, download, exportFile, fmtBytes, isTouch, modKey, isMac, touchHold, icon } from './ui.js';
 import { listObjects, readTable, createTableSql, migrationSql, constantDefault, TYPES, affinity } from './schema.js';
 import { Grid } from './grid.js';
-import { sniff } from './blob.js';
+import { sniff, asText, hexDump } from './blob.js';
 import { TableSource, QuerySource, FILTER_OPS, friendlyError, convertInput, formText, formToDefault } from './sources.js';
 import { txMarks } from './txmarks.js';
 import { DesignPanel } from './design-panel.js';
@@ -1547,6 +1547,7 @@ function gridHooks(kind) {
     onContextMenu: (pos, range) => cellMenu(pos, range),
     onReadonlyEdit: (col) => toast(isTable ? (col ? `「${col.name}」は生成列のため編集できません` : '編集できません') : `${KIND_NAME[kind]}の結果は編集できません。元のテーブルで編集してください`),
     onBlobEdit: (r, c) => blobMenu(r, c),
+    onBlobView: (r, c) => viewBlob(r, c),
     onProtectedEdit: (prots) => toast(`🔒 ${prots[0].note || '保護されています'}（${describe(state.model, prots[0])}）`),
     onCellCtrlClick: isTable ? (r, c, row) => {
       const col = state.source.columns[c];
@@ -1893,6 +1894,8 @@ async function cellMenu(pos, range) {
   const items = [
     { label: 'コピー', icon: '⧉', kbd: `${MOD}C`, action: () => g.copy() },
   ];
+  const { r, c } = g.cur;
+  if (g.rowAt(r)?.values[c] instanceof Uint8Array) items.unshift({ label: 'BLOB を表示', icon: '🔍', action: () => viewBlob(r, c) }, '-');
   if (isTable) {
     items.push(
       { label: '貼り付け', icon: '📋', kbd: `${MOD}V`, action: async () => { try { g.paste(await navigator.clipboard.readText()); } catch { toast(`${MOD}V で貼り付けてください`); } } },
@@ -2025,20 +2028,95 @@ async function deleteSelectedRows() {
   } catch (e) { toast(friendlyError(e.message), 'error'); }
 }
 
-function blobMenu(r, c) {
+/** BLOB のセルの操作（ファイルから読み込む・ダウンロード・NULL にする） */
+function blobActions(r, c) {
   const g = state.grid;
   const row = g.rowAt(r);
   const v = row?.values[c];
-  const cellEl = g.body.querySelector(`.gr[data-r="${r}"] .gc[data-c="${c}"]`) || g.sink;
-  menu(cellEl, [
-    { label: 'ファイルから読み込む…', icon: '⤒', action: async () => {
+  return {
+    v,
+    load: async () => {
       const f = await pickFile('');
       if (!f) return;
       try { const res = await state.source.update([{ row: r, col: c, value: new Uint8Array(await f.arrayBuffer()), rowObj: row }]); if (res[0]) g.pages.get(Math.floor(r / 200))[r % 200] = res[0].rowObj; g.render(); } catch (e) { toast(friendlyError(e.message), 'error'); }
-    } },
-    { label: 'ダウンロード', icon: '⤓', disabled: !(v instanceof Uint8Array), action: () => { const k = sniff(v); download(v, `${state.source.columns[c].name}.${k.ext}`, k.mime); } },
-    { label: 'NULL にする', icon: '⌫', action: () => g.write([{ r, c, value: null }]) },
+    },
+    download: () => { const k = sniff(v); download(v, `${state.source.columns[c].name}.${k.ext}`, k.mime); },
+    clear: () => g.write([{ r, c, value: null }]),
+  };
+}
+
+function blobMenu(r, c) {
+  const g = state.grid;
+  const a = blobActions(r, c);
+  const cellEl = g.body.querySelector(`.gr[data-r="${r}"] .gc[data-c="${c}"]`) || g.sink;
+  menu(cellEl, [
+    { label: '表示', icon: '🔍', disabled: !(a.v instanceof Uint8Array), action: () => viewBlob(r, c) },
+    { label: 'ファイルから読み込む…', icon: '⤒', action: a.load },
+    { label: 'ダウンロード', icon: '⤓', disabled: !(a.v instanceof Uint8Array), action: a.download },
+    { label: 'NULL にする', icon: '⌫', action: a.clear },
   ]);
+}
+
+/** BLOB の中身を大きく見る（画像・動画・音声・PDF・テキスト・JSONB・16 進ダンプ） */
+function viewBlob(r, c) {
+  const g = state.grid;
+  const a = blobActions(r, c);
+  const v = a.v;
+  if (!(v instanceof Uint8Array)) return;
+  const k = sniff(v);
+  const editable = g.canEdit(r, c);
+  const meta = el('span.muted', `${v.length ? k.label : 'BLOB'} · ${fmtBytes(v.length)}`);
+  let url;
+  const body = el('div.blob-view-body');
+  const objectUrl = () => (url ??= URL.createObjectURL(new Blob([v], { type: k.mime })));
+  const showHex = () => body.replaceChildren(
+    el('pre.blob-view-hex', hexDump(v, { max: 4096, width: innerWidth < 600 ? 8 : 16 })),
+    v.length > 4096 ? el('p.muted', '先頭 4096 バイトだけを表示しています') : '');
+  const kind = k.mime.split('/')[0];
+  if (!v.length) {
+    body.append(el('p.muted', '空の BLOB です（0 バイト）'));
+  } else if (k.image) {
+    // SVG も <img> で見せる（<img> の中ではスクリプトも外部の読み込みも動かない）
+    const img = el('img.blob-view-img', { src: objectUrl(), alt: '', title: 'クリックで原寸 ↔ 画面に収める' });
+    img.addEventListener('load', () => meta.textContent = `${k.label} · ${img.naturalWidth}×${img.naturalHeight} · ${fmtBytes(v.length)}`, { once: true });
+    body.append(img);
+    img.addEventListener('click', () => body.classList.toggle('actual'));
+  } else if (kind === 'video' || kind === 'audio') {
+    const media = el(`${kind}.blob-view-media`, { src: objectUrl(), controls: true, preload: 'metadata' });
+    // ブラウザが再生できない形式なら 16 進ダンプに切り替える
+    media.addEventListener('error', () => { showHex(); meta.textContent += '（このブラウザでは再生できません）'; }, { once: true });
+    body.append(media);
+  } else if (k.mime === 'application/pdf') {
+    // Chrome の PDF ビューアは sandbox 付きの iframe では動かないので付けない（中身は PDF で、ページのスクリプトには触れない）
+    body.classList.add('pdf');
+    body.append(el('iframe.blob-view-pdf', { src: objectUrl(), title: 'PDF' }),
+      el('p.muted', '表示されないときは「ダウンロード」で保存して開いてください'));
+  } else if (k.text) {
+    const text = asText(v) ?? '';
+    const max = 16384;
+    body.append(el('pre.blob-view-text', text.length > max ? text.slice(0, max) + '\n…' : text));
+  } else {
+    showHex();
+    // JSONB には目印のバイトがないので、SQLite に読ませてみる（object / array のときだけ JSONB とみなす）
+    if (k.ext === 'bin') {
+      db.query('SELECT json_type(?1), json_pretty(?1)', [v]).then(({ rows: [[type, pretty]] }) => {
+        if ((type !== 'object' && type !== 'array') || !body.isConnected) return;
+        meta.textContent = `JSONB · ${fmtBytes(v.length)}`;
+        body.replaceChildren(el('pre.blob-view-text', pretty));
+      }).catch(() => { /* JSONB ではない */ });
+    }
+  }
+  let dlg;
+  const done = (fn) => () => { dlg.close(); fn(); };
+  dlg = modal([
+    el('div.blob-view-head', el('h2', state.source.columns[c].name), meta),
+    body,
+    el('div.modal-actions',
+      editable ? el('button.btn', { on: { click: done(a.load) } }, '⤒ 読み込む…') : null,
+      el('button.btn', { on: { click: a.download } }, '⤓ ダウンロード'),
+      editable ? el('button.btn', { on: { click: done(a.clear) } }, '⌫ NULL') : null,
+      el('button.btn.primary', { autofocus: true, on: { click: () => dlg.close() } }, '閉じる')),
+  ], { className: 'blob-view', onClose: () => { if (url) URL.revokeObjectURL(url); g.focus(); } });
 }
 
 // ---------- 設計パネル ----------

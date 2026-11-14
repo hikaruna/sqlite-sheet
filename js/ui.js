@@ -197,9 +197,9 @@ export function choiceDialog({ title, body, code, note, choices }) {
 }
 
 /** 中身を自由に組むモーダル。{close} を返す（Esc・外側のクリックでも閉じる） */
-export function modal(children, { className = '' } = {}) {
+export function modal(children, { className = '', onClose } = {}) {
   const dlg = el('dialog.modal' + (className ? '.' + className : ''));
-  const close = () => { if (dlg.open) dlg.close(); dlg.remove(); };
+  const close = () => { if (!dlg.isConnected) return; if (dlg.open) dlg.close(); dlg.remove(); onClose?.(); };
   dlg.append(...children.filter(Boolean));
   dlg.addEventListener('cancel', (e) => { e.preventDefault(); close(); });
   dlg.addEventListener('click', (e) => { if (e.target === dlg) close(); }); // 外側（::backdrop）のクリック

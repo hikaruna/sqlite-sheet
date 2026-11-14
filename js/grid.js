@@ -846,6 +846,10 @@ export class Grid {
 
   beginEdit(mode, initial) {
     const { r, c } = this.cur;
+    // BLOB のダブルクリック・もう一度のタップ・Enter・F2 は、中身を表示する（読み取り専用でも見られる）
+    if (mode === 'edit' && this.rowAt(r)?.values[c] instanceof Uint8Array && this.hooks.onBlobView) {
+      this.sink.value = ''; this.hooks.onBlobView(r, c); return false;
+    }
     if (!this.canEdit(r, c)) {
       this.sink.value = '';
       // 「＋」の上で打った文字は捨てる（行を作るのはクリックか Enter）
