@@ -209,6 +209,8 @@ function buildChrome() {
     // 数式バー（値のエリア）：名前ボックス ＋ fx ＋ 入力欄
     el('div.fxbar',
       el('span#fx-ref.fx-ref', ''),
+      // 式の入口：押すと列・関数・定数を選んで =式 を入れられる（スプレッドシートの「関数を挿入」）
+      el('button#fx-btn.fx-btn', { title: '式を入力（= で始めると SQL の式として計算）', on: { mousedown: (e) => e.preventDefault(), click: (e) => exprPicker(e.currentTarget) } }, 'fx'),
       el('input#fx-input.fx-input', { spellcheck: false, placeholder: '', on: { keydown: onFxKey, focus: (e) => e.target.select() } })),
     el('main.workspace',
       el('section#sheet.sheet',
@@ -1587,6 +1589,104 @@ function updateStatus(range) {
     }
   }
   st.textContent = text;
+}
+
+// ---------- 式ピッカー（数式バーの fx） ----------
+// よく使う組み込み関数の説明。一覧そのものは PRAGMA function_list から取る（この DB で使えるものだけを出す）
+const FN_HELP = {
+  abs: ['abs(X)', '絶対値'], coalesce: ['coalesce(X, Y, …)', '最初の NULL でない値'], ifnull: ['ifnull(X, Y)', 'X が NULL なら Y'],
+  iif: ['iif(条件, 真, 偽)', '条件で値を選ぶ'], nullif: ['nullif(X, Y)', 'X と Y が同じなら NULL'],
+  length: ['length(X)', '文字数'], lower: ['lower(X)', '小文字にする'], upper: ['upper(X)', '大文字にする'],
+  trim: ['trim(X)', '前後の空白を取る'], ltrim: ['ltrim(X)', '先頭の空白を取る'], rtrim: ['rtrim(X)', '末尾の空白を取る'],
+  substr: ['substr(X, 開始, 長さ)', '部分文字列（1 始まり）'], replace: ['replace(X, 探す, 置換)', '文字列を置き換える'],
+  instr: ['instr(X, 探す)', '見つかった位置（なければ 0）'], printf: ['printf(書式, …)', '書式を指定して文字列に'], format: ['format(書式, …)', '書式を指定して文字列に'],
+  round: ['round(X, 桁)', '四捨五入'], max: ['max(X, Y, …)', '最大値'], min: ['min(X, Y, …)', '最小値'],
+  random: ['random()', '乱数（整数）'], typeof: ['typeof(X)', '値の型の名前'], hex: ['hex(X)', '16 進の文字列'],
+  date: ["date('now')", '日付（YYYY-MM-DD）'], time: ["time('now')", '時刻（HH:MM:SS）'], datetime: ["datetime('now')", '日時'],
+  julianday: ["julianday('now')", 'ユリウス日（日数の差の計算に）'], strftime: ["strftime('%Y/%m', X)", '書式を指定して日時を文字列に'],
+  unixepoch: ["unixepoch('now')", 'UNIX 時刻（秒）'], json_extract: ["json_extract(X, '$.key')", 'JSON から値を取り出す'],
+  json_object: ["json_object('key', X, …)", 'JSON オブジェクトを作る'], json_array: ['json_array(X, …)', 'JSON 配列を作る'],
+  concat: ['concat(X, Y, …)', '文字列をつなぐ'], concat_ws: ['concat_ws(区切り, X, …)', '区切り文字でつなぐ'],
+};
+const EXPR_CONSTS = [
+  ['NULL', '値なし'], ['CURRENT_TIMESTAMP', '今の日時（UTC）'], ['CURRENT_DATE', '今日の日付（UTC）'], ['CURRENT_TIME', '今の時刻（UTC）'],
+  ['TRUE', '1'], ['FALSE', '0'], ['CASE WHEN  THEN  ELSE  END', '条件で値を分ける'], [' || ', '文字列をつなぐ'],
+];
+let fnListCache = null;
+async function scalarFunctions() {
+  if (fnListCache) return fnListCache;
+  try {
+    const rows = (await db.query(`SELECT DISTINCT name FROM pragma_function_list WHERE builtin = 1 AND type = 's' ORDER BY name`)).rows.map(([n]) => n);
+    // 内部向けのもの（sqlite_ や全文検索の補助など）は出さない
+    fnListCache = rows.filter((n) => !/^(sqlite_|fts|rtree|geopoly|likelihood|likely|unlikely|load_extension)/.test(n));
+  } catch { fnListCache = Object.keys(FN_HELP).sort(); }
+  return fnListCache;
+}
+
+/** fx：列・関数・定数を選んで、数式バーに =式 を組み立てる */
+async function exprPicker(anchor) {
+  const fx = $('fx-input');
+  if (!state.source) return;
+  if (fx.readOnly) { toast('このセルは編集できません'); return; }
+  const fns = await scalarFunctions();
+  const g = state.grid;
+  const onNew = g && g.cur.r === g.newRowIndex;
+  const groups = {
+    '関数': [...fns.filter((n) => FN_HELP[n]), ...fns.filter((n) => !FN_HELP[n])].map((n) => ({
+      // スプレッドシートと同じく関数名は大文字で見せる（SQLite は大文字小文字を区別しない）
+      key: n, label: n.toUpperCase(), insert: `${n.toUpperCase()}()`, caret: -1,
+      sig: (FN_HELP[n]?.[0] ?? `${n}(…)`).replace(/^\w+/, (m) => m.toUpperCase()), hint: FN_HELP[n]?.[1] ?? 'SQLite の組み込み関数' })),
+    '列': state.source.columns.map((c) => ({ key: c.name, label: c.name, insert: q(c.name), sig: q(c.name), hint: `同じ行の「${c.name}」の値${c.type ? `（${c.type}）` : ''}` })),
+    '定数・構文': EXPR_CONSTS.map(([v, h]) => ({ key: v, label: v.trim(), insert: v, sig: v.trim(), hint: h, caret: v.startsWith('CASE') ? -'  THEN  ELSE  END'.length + 1 : 0 })),
+  };
+  let tab = '関数', active = 0, items = [];
+  const search = el('input.expr-search', { placeholder: '関数や列を検索', spellcheck: false });
+  const tabs = el('div.expr-tabs');
+  const list = el('div.expr-list');
+  // 右側：選んでいる項目の説明（スプレッドシートの関数ヘルプのカード）
+  const help = el('div.expr-help');
+  const note = el('div.expr-note', onNew ? '新しい行の式では列は使えません。' : '選ぶと数式バーに入ります。数式バーで Enter を押すと確定します。');
+  const insert = (it) => {
+    closePopover();
+    let v = fx.value, a = fx.selectionStart ?? v.length, b = fx.selectionEnd ?? v.length;
+    // 式でなければ = から始める（全体が選ばれていたら置き換え、そうでなければ今の値は残さない）
+    if (!v.startsWith('=')) { v = '='; a = b = 1; }
+    fx.value = v.slice(0, a) + it.insert + v.slice(b);
+    const pos = a + it.insert.length + (it.caret || 0);
+    fx.focus();
+    fx.setSelectionRange(pos, pos);
+  };
+  const render = () => {
+    const s = search.value.trim().toLowerCase();
+    items = s ? Object.values(groups).flat().filter((it) => it.key.toLowerCase().includes(s) || it.hint.toLowerCase().includes(s)) : groups[tab];
+    active = Math.min(active, Math.max(0, items.length - 1));
+    tabs.replaceChildren(...Object.keys(groups).map((t) => el('button.expr-tab', {
+      class: !s && t === tab ? 'on' : '', type: 'button',
+      on: { mousedown: (e) => e.preventDefault(), click: () => { tab = t; search.value = ''; active = 0; render(); } },
+    }, t)));
+    list.replaceChildren(...items.map((it, i) => el('button.expr-item', {
+      class: i === active ? 'on' : '', type: 'button',
+      on: { mousedown: (e) => { e.preventDefault(); insert(it); }, mouseenter: () => { if (active !== i) { active = i; mark(); } } },
+    }, el('span.mono.expr-label', it.label))));
+    if (!items.length) list.append(el('div.expr-empty', '見つかりません'));
+    mark();
+  };
+  // 選択の印と説明だけ更新する（一覧は作り直さない）
+  const mark = () => {
+    [...list.children].forEach((b, i) => b.classList.toggle('on', i === active));
+    list.children[active]?.scrollIntoView({ block: 'nearest' });
+    const it = items[active];
+    help.replaceChildren(...(it ? [el('div.expr-sig.mono', it.sig), el('div.expr-desc', it.hint)] : []));
+  };
+  search.addEventListener('input', () => { active = 0; render(); });
+  search.addEventListener('keydown', (e) => {
+    if (e.key === 'ArrowDown') { e.preventDefault(); active = Math.min(items.length - 1, active + 1); mark(); }
+    if (e.key === 'ArrowUp') { e.preventDefault(); active = Math.max(0, active - 1); mark(); }
+    if (e.key === 'Enter' && !e.isComposing && items[active]) { e.preventDefault(); insert(items[active]); }
+  });
+  render();
+  popover(anchor, el('div.expr-picker', search, tabs, el('div.expr-body', list, help), note), { className: 'expr-pop' });
+  search.focus();
 }
 
 function onFxKey(e) {

@@ -192,6 +192,30 @@ select.input { padding-right: 4px; }
 .tx-rollback { color: var(--text-2); }
 .prot-empty { color: var(--text-3); font-size: 12.5px; padding: 6px 2px; }
 .prot-actions { display: flex; gap: 6px; flex-wrap: wrap; padding-top: 8px; }
+.fx-btn { flex: none; height: 100%; padding: 0 12px; border: 0; border-right: 1px solid var(--line); background: none; color: var(--text-2); font: italic 600 13px Georgia, 'Times New Roman', serif; cursor: pointer; }
+.fx-btn:hover { background: var(--surface-2); color: var(--accent); }
+/* 式ピッカー：スプレッドシートの関数の候補とヘルプカードに寄せる（左に名前、右に使い方） */
+.popover.expr-pop { width: 540px; max-width: calc(100vw - 16px); padding: 0; overflow: hidden; }
+.expr-search { width: 100%; height: 40px; padding: 0 14px; border: 0; border-bottom: 1px solid var(--line); background: none; color: var(--text); font-size: 13.5px; outline: none; }
+.expr-tabs { display: flex; gap: 4px; padding: 0 10px; border-bottom: 1px solid var(--line); }
+.expr-tab { height: 32px; padding: 0 8px; border: 0; border-bottom: 2px solid transparent; background: none; color: var(--text-2); font-size: 12.5px; }
+.expr-tab.on { color: var(--accent); border-bottom-color: var(--accent); font-weight: 600; }
+.expr-body { display: grid; grid-template-columns: 190px 1fr; height: 280px; }
+.expr-list { overflow: auto; padding: 4px 0; border-right: 1px solid var(--line); }
+.expr-item { display: block; width: 100%; height: 30px; padding: 0 14px; border: 0; background: none; text-align: left; color: var(--text); }
+.expr-item.on { background: var(--sel); box-shadow: inset 3px 0 0 var(--accent); }
+.expr-label { font-size: 12.5px; font-weight: 600; letter-spacing: .02em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: block; }
+.expr-empty { padding: 10px 14px; color: var(--text-3); font-size: 12px; }
+.expr-help { padding: 14px 16px; overflow: auto; }
+.expr-sig { font-size: 13px; font-weight: 600; color: var(--text); word-break: break-all; }
+.expr-desc { margin-top: 8px; color: var(--text-2); font-size: 12.5px; line-height: 1.6; }
+.expr-note { padding: 7px 14px; color: var(--text-3); font-size: 11.5px; border-top: 1px solid var(--line); background: var(--surface-2); }
+@media (max-width: 760px) {
+  .expr-pop.as-sheet { width: 100%; }
+  .expr-body { grid-template-columns: 1fr; grid-template-rows: 1fr auto; height: 50vh; }
+  .expr-list { border-right: 0; }
+  .expr-help { border-top: 1px solid var(--line); padding: 10px 14px; }
+}
 .fx-input { flex: 1; min-width: 0; height: 100%; border: 0; background: none; padding: 0 10px; outline: none; color: var(--text); }
 .fxbar:focus-within { box-shadow: inset 0 -2px 0 var(--accent); }
 .fx-input.null::placeholder { font-style: italic; }
