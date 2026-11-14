@@ -1286,7 +1286,7 @@ async function showSheet(key, { keepView = true } = {}) {
     $('grid-host').replaceChildren(el('div.empty-db',
       el('h2', 'まだシートがありません'),
       el('p.muted', 'テーブルを作るか、SQL コンソールから CREATE TABLE を実行してください。'),
-      el('div.row-gap', el('button.btn.primary', { on: { click: (e) => newTable(e.currentTarget) } }, '＋ 新しいテーブル'),
+      el('div.row-gap', el('button.btn.primary', { on: { click: (e) => addSheetMenu(e.currentTarget) } }, '＋ 追加'),
         el('button.btn', { on: { click: () => toggleConsole(true) } }, '⌨ SQL を書く'))));
     updatePanel();
     return;
