@@ -620,8 +620,18 @@ export class Grid {
         on: {
           pointerdown: (e) => {
             if (e.pointerType === 'mouse' || e.target.closest('.gh-btn, .gh-resize')) return;
-            // タッチ：タップで列を選び、列メニューを出す（スクロールのために指を動かしたら何もしない）
-            this.tap(e, () => { this.selectCol(c, false); this.hooks.onHeaderMenu?.(c, cell); });
+            // タッチ（スプレッドシートと同じ）：タップで列を選ぶ。選んでいる列をもう一度タップするか、長押しで列メニュー
+            // スクロールのために指を動かしたら何もしない
+            this.tap(e, () => {
+              const again = this.colSelect && !this.rowSelect && this.cur.c === c && this.ext.c === c;
+              if (again) this.hooks.onHeaderMenu?.(c, cell);
+              else this.selectCol(c, false);
+            }, () => {
+              const { c0, c1 } = this.range();
+              if (!this.colSelect || this.rowSelect || c < c0 || c > c1) this.selectCol(c, false);
+              navigator.vibrate?.(10);
+              this.hooks.onHeaderMenu?.(c, cell);
+            });
           },
           mousedown: (e) => {
             if (e.button !== 0 || e.target.closest('.gh-btn, .gh-resize')) return;
