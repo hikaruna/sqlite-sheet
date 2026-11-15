@@ -769,6 +769,8 @@ body.dropping::after {
   background: var(--surface-3); color: var(--text-2); border: 1px solid var(--line-strong);
   font-size: 9px; letter-spacing: -1px; box-shadow: 0 1px 3px rgb(0 0 0 / .3);
 }
+/* 行ごと選んでいるときの、行番号の欄の右下の境目に出す高さを変えるつまみ */
+.gr-knob::after { content: '▴▾'; writing-mode: vertical-lr; letter-spacing: -2px; }
 @media (hover: none) {
   .gh-btn { opacity: 1; }
 }
@@ -786,7 +788,7 @@ body.dropping::after {
   .gc.wrap { padding-top: 6px; padding-bottom: 7px; }
   /* 境目の帯はタップを受け取らず、下の見出し・行番号に通す（幅・高さはつまみで、ダブルタップは grid.js が位置で見分ける） */
   .gh-resize { pointer-events: none; }
-  .gr-resize { height: 12px; touch-action: none; }
+  .gr-resize { pointer-events: none; }
   .gh-btn { width: 28px; height: 28px; }
   .icon-btn { width: 36px; height: 36px; }
   .tool-btn, .btn { height: 36px; }

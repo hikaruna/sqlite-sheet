@@ -153,6 +153,11 @@ export class Grid {
     this.colHandles = TOUCH ? ['left', 'right'].map((side) => el('div.grid-handle', { hidden: true, on: { pointerdown: (e) => this.startColHandleDrag(e, side) } })) : [];
     // 行ごと選んでいるときに上下の境目に出す、選ぶ行を広げるつまみ
     this.rowHandles = TOUCH ? ['top', 'bottom'].map((side) => el('div.grid-handle', { hidden: true, on: { pointerdown: (e) => this.startRowHandleDrag(e, side) } })) : [];
+    // 行ごと選んでいるときに、行番号の欄の右下の境目に出す高さを変えるつまみ
+    this.heightKnob = TOUCH ? el('div.gh-knob.gr-knob', { hidden: true, title: tr('ドラッグで高さを変更・ダブルクリックで中身に合わせる'), on: {
+      pointerdown: (e) => { this.lastTouch = Date.now(); this.startRowResize(e, this.range().r1, 'pointer'); },
+    } }) : null;
+    this.inner.append(this.body, this.sink, this.handle, ...this.colHandles, ...this.rowHandles, ...(this.heightKnob ? [this.heightKnob] : []));
     this.scroll.append(this.header, this.inner);
     this.host.append(this.scroll);
     this.empty = null;
@@ -477,16 +482,7 @@ export class Grid {
     return el('div.gr-resize', { title: tr('ドラッグで高さを変更・ダブルクリックで中身に合わせる'), on: {
       mousedown: (e) => { e.stopPropagation(); if (!this.touchRecent()) this.startRowResize(e, r, 'mouse'); },
       dblclick: (e) => { e.preventDefault(); e.stopPropagation(); if (!this.touchRecent()) this.autoFitRows(r); },
-      pointerdown: (e) => {
-        if (e.pointerType === 'mouse') return;
-        e.stopPropagation();
-        this.lastTouch = Date.now();
-        // ダブルタップで中身に合わせる
-        const t = this.lastRowResizeTap;
-        this.lastRowResizeTap = { r, at: Date.now() };
-        if (t && t.r === r && Date.now() - t.at < 350) { e.preventDefault(); this.lastRowResizeTap = null; this.autoFitRows(r); return; }
-        this.startRowResize(e, r, 'pointer');
-      },
+      // タッチ端末ではこの帯はタップを受け取らない（CSS）。高さは「▴▾」のつまみ、ダブルタップは borderDoubleTap で扱う
     } });
   }
 
@@ -904,6 +900,7 @@ export class Grid {
     this.handle.hidden = !show || head || rowHead;
     this.colHandles.forEach((h) => { h.hidden = !head; });
     this.rowHandles.forEach((h) => { h.hidden = !rowHead; });
+    if (this.heightKnob) this.heightKnob.hidden = !rowHead;
     if (rowHead) {
       const sl = this.scroll.scrollLeft / this.z, vw = this.scroll.clientWidth / this.z, right = this.colX(this.cols.length);
       // 列が画面の右端まで届かなければ、データのある所だけの真ん中
@@ -912,6 +909,8 @@ export class Grid {
       const [t, b] = this.rowHandles;
       Object.assign(t.style, { left, top: this.rowY(r0) + 'px' });
       Object.assign(b.style, { left, top: this.rowY(r1 + 1) + 'px' });
+      // 行番号の欄は横にスクロールしても左に残るので、つまみもそれに合わせる
+      if (this.heightKnob) Object.assign(this.heightKnob.style, { left: (sl + RHW) + 'px', top: this.rowY(r1 + 1) + 'px' });
       return;
     }
     if (this.widthKnob) this.widthKnob.hidden = !head;
@@ -1096,6 +1095,12 @@ export class Grid {
     const hit = this.cellFromEvent(e);
     if (!hit || e.target.closest('.fk-drop')) { this.lastTouch = Date.now(); return; }
     const x = e.clientX, y = e.clientY;
+    if (hit.head) {
+      // 行番号の境目の近くを続けて2回タップしたら、その行の高さを中身に合わせる（上の境目は1つ上の行のもの）
+      const b = e.target.closest('.gr')?.getBoundingClientRect();
+      const near = !b ? -1 : Math.abs(b.bottom - y) <= 6 ? hit.r : Math.abs(y - b.top) <= 6 ? hit.r - 1 : -1;
+      if (this.borderDoubleTap('row', near >= 0 && near < this.rowCount ? near : -1, e)) return;
+    }
     this.tap(e, () => this.onTap(hit, { x, y }), () => {
       // 長押し：右クリックと同じ。範囲の外なら選択を移してからメニュー
       if (this.editing) this.commitEdit({ move: null });
