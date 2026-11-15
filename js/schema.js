@@ -1,4 +1,5 @@
 // スキーマの読み取りと、テーブル定義（モデル）から CREATE TABLE を生成する処理
+import { t as tr } from './i18n.js';
 import { db, q } from './db-client.js';
 
 export const APP_PREFIX = '_sqlite_sheet_';
@@ -143,7 +144,7 @@ export async function readTable(name) {
     db.query(`SELECT id,seq,"table","from","to",on_update,on_delete FROM pragma_foreign_key_list(?) ORDER BY id,seq`, [name]),
     db.query(`SELECT name,"unique",origin,partial FROM pragma_index_list(?)`, [name]),
   ]);
-  if (!found.length) throw new Error(`テーブル「${name}」がありません`);
+  if (!found.length) throw new Error(tr('テーブル「{0}」がありません', [name]));
   const sql = found[0][0];
   const parsed = parseCreateTable(sql);
   const columns = xinfo.rows.map(([cid, cname, type, notnull, dflt, pk, hidden]) => {

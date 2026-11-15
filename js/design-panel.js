@@ -1,4 +1,5 @@
 // 右側の設計パネル：テーブルの列・キー・制約・インデックスを編集する
+import { t as tr } from './i18n.js';
 import { db, q } from './db-client.js';
 import { el, confirmDialog, toast, menu } from './ui.js';
 import { TYPES, FK_ACTIONS, createTableSql, migrationSql, columnDef, readTable, constantDefault } from './schema.js';
@@ -89,7 +90,7 @@ export class DesignPanel {
       const { state, keys } = this.diffCol(c);
       row.classList.toggle('pending', !!state);
       const tag = row.querySelector('.pend-tag');
-      if (tag) { tag.textContent = '新規'; tag.hidden = state !== 'new'; }
+      if (tag) { tag.textContent = tr('新規'); tag.hidden = state !== 'new'; }
       for (const f of row.querySelectorAll('[data-k]')) f.classList.toggle('pend-field', state === 'changed' && !!keys[f.dataset.k]);
     }
     for (const c of d.columns) if (this.diffCol(c).state) { count++; colsChanged = true; }
@@ -117,16 +118,16 @@ export class DesignPanel {
   // ---------- 描画 ----------
   render() {
     const d = this.draft;
-    const tabs = [['columns', '列'], ['keys', 'キーと制約'], ['indexes', 'インデックス'], ['sql', 'SQL']];
+    const tabs = [['columns', tr('列')], ['keys', tr('キーと制約')], ['indexes', tr('インデックス')], ['sql', 'SQL']];
     const prevScroll = this.host.querySelector('.dp-body')?.scrollTop ?? 0;
     const prevTab = this.renderedTab;
     this.renderedTab = this.tab;
     const body = { columns: () => this.renderColumns(), keys: () => this.renderKeys(), indexes: () => this.renderIndexes(), sql: () => this.renderSql() }[this.tab]();
     this.host.replaceChildren(
       el('div.dp-head',
-        el('div.dp-title', 'テーブルの設計'),
-        el('button.icon-btn', { title: '閉じる', on: { click: () => this.ctx.onClose() } }, '×')),
-      el('label.dp-name', el('span', 'テーブル名'),
+        el('div.dp-title', tr('テーブルの設計')),
+        el('button.icon-btn', { title: tr('閉じる'), on: { click: () => this.ctx.onClose() } }, '×')),
+      el('label.dp-name', el('span', tr('テーブル名')),
         el('input.input', { value: d.name, spellcheck: false, on: { input: (e) => { d.name = e.target.value; this.updateFooter(); } } })),
       el('div.dp-tabs', tabs.map(([id, label]) => el('button.dp-tab', {
         class: this.tab === id ? 'on' : '', dataset: { tab: id },
@@ -143,13 +144,13 @@ export class DesignPanel {
     const f = this.footer;
     f.replaceChildren();
     const count = this.refreshMarks();
-    if (!this.dirty) { f.append(el('span.muted', '変更はありません')); f.classList.remove('dirty'); return; }
+    if (!this.dirty) { f.append(el('span.muted', tr('変更はありません'))); f.classList.remove('dirty'); return; }
     f.classList.add('dirty');
     f.append(
-      el('span', count ? `未確定の変更 ${count} 件` : '未確定の変更があります'),
+      el('span', count ? tr('未確定の変更 {0} 件', [count]) : tr('未確定の変更があります')),
       el('span.grow'),
-      el('button.btn', { on: { click: () => { this.removedKeys = new Map(); this.setModel(this.model); this.render(); } } }, '破棄'),
-      el('button.btn.primary', { on: { click: () => this.apply() } }, '確認して適用…'),
+      el('button.btn', { on: { click: () => { this.removedKeys = new Map(); this.setModel(this.model); this.render(); } } }, tr('破棄')),
+      el('button.btn.primary', { on: { click: () => this.apply() } }, tr('確認して適用…')),
     );
   }
 
@@ -168,12 +169,12 @@ export class DesignPanel {
         dataset: { k: 'type' },
         on: { change: (e) => { c.type = e.target.value; if (c.dfltForm !== undefined) c.defaultSql = formToDefault(c.dfltForm, c.type); this.changed(); } },
       }, [...new Set([...(d.strict ? strictTypes : ['', ...strictTypes, 'NUMERIC']), ...(c.type ? [c.type] : [])])]
-        .map((t) => el('option', { value: t, selected: (c.type || '') === t }, t || '（型なし）')));
+        .map((t) => el('option', { value: t, selected: (c.type || '') === t }, t || tr('（型なし）'))));
       const row = el('div.dp-col', { class: open ? 'open' : '', dataset: { col: c.from ?? '', i } },
         el('div.dp-col-main',
-          el('button.icon-btn.sm', { title: '詳細', on: { click: () => { const k = c.from ?? (c._id ??= Math.random()); open ? this.expanded.delete(k) : this.expanded.add(k); this.render(); } } }, open ? '▾' : '▸'),
+          el('button.icon-btn.sm', { title: tr('詳細'), on: { click: () => { const k = c.from ?? (c._id ??= Math.random()); open ? this.expanded.delete(k) : this.expanded.add(k); this.render(); } } }, open ? '▾' : '▸'),
           el('input.input.col-name', {
-            value: c.name, spellcheck: false, placeholder: '列名', dataset: { k: 'name' },
+            value: c.name, spellcheck: false, placeholder: tr('列名'), dataset: { k: 'name' },
             on: {
               input: (e) => {
                 const old = c.name; c.name = e.target.value;
@@ -186,39 +187,39 @@ export class DesignPanel {
           }),
           typeSel,
           el('span.pend-tag', { hidden: true }),
-          el('label.chk', { title: '主キー（複数選ぶと複合主キー）', dataset: { k: 'pk' } },
+          el('label.chk', { title: tr('主キー（複数選ぶと複合主キー）'), dataset: { k: 'pk' } },
             el('input', { type: 'checkbox', checked: isPk, on: { change: (e) => { e.target.checked ? d.pk.push(c.name) : d.pk = d.pk.filter((n) => n !== c.name); this.render(); } } }), '🔑'),
-          el('label.chk', { title: 'NOT NULL（必須）', dataset: { k: 'notnull' } },
-            el('input', { type: 'checkbox', checked: c.notnull, on: { change: (e) => { c.notnull = e.target.checked; this.changed(); } } }), '必須'),
+          el('label.chk', { title: tr('NOT NULL（必須）'), dataset: { k: 'notnull' } },
+            el('input', { type: 'checkbox', checked: c.notnull, on: { change: (e) => { c.notnull = e.target.checked; this.changed(); } } }), tr('必須')),
           el('button.icon-btn.sm', {
-            title: 'その他', on: {
+            title: tr('その他'), on: {
               click: (e) => menu(e.currentTarget, [
-                { label: '上へ移動', icon: '↑', disabled: i === 0, action: () => { d.columns.splice(i - 1, 0, d.columns.splice(i, 1)[0]); this.render(); } },
-                { label: '下へ移動', icon: '↓', disabled: i === d.columns.length - 1, action: () => { d.columns.splice(i + 1, 0, d.columns.splice(i, 1)[0]); this.render(); } },
+                { label: tr('上へ移動'), icon: '↑', disabled: i === 0, action: () => { d.columns.splice(i - 1, 0, d.columns.splice(i, 1)[0]); this.render(); } },
+                { label: tr('下へ移動'), icon: '↓', disabled: i === d.columns.length - 1, action: () => { d.columns.splice(i + 1, 0, d.columns.splice(i, 1)[0]); this.render(); } },
                 '-',
-                { label: '列を削除', icon: '🗑', danger: true, disabled: d.columns.length <= 1, action: () => this.removeColumn(i) },
+                { label: tr('列を削除'), icon: '🗑', danger: true, disabled: d.columns.length <= 1, action: () => this.removeColumn(i) },
               ], { align: 'end' }),
             },
           }, '⋯')),
         open ? el('div.dp-col-detail',
           // セルのフォームと同じ書き方。触っていなければ元の DEFAULT 句をそのまま保つ
-          field('既定値（DEFAULT）', el('input.input.mono', {
-            value: c.dfltForm ?? defaultToForm(c.defaultSql), placeholder: '例: 0 / 文字列 / =CURRENT_TIMESTAMP', spellcheck: false, disabled: !!c.generated, dataset: { k: 'defaultSql' },
+          field(tr('既定値（DEFAULT）'), el('input.input.mono', {
+            value: c.dfltForm ?? defaultToForm(c.defaultSql), placeholder: tr('例: 0 / 文字列 / =CURRENT_TIMESTAMP'), spellcheck: false, disabled: !!c.generated, dataset: { k: 'defaultSql' },
             on: { input: (e) => { c.dfltForm = e.target.value; c.defaultSql = formToDefault(c.dfltForm, c.type); this.changed(); } },
-          }), '普通に書けば値、= で始めると式（=CURRENT_TIMESTAMP、=\'\' など）。空なら既定値なし'),
-          field('CHECK 制約', el('input.input.mono', {
-            value: c.check ?? '', placeholder: `例: ${q(c.name)} > 0`, spellcheck: false, dataset: { k: 'check' },
+          }), tr('普通に書けば値、= で始めると式（=CURRENT_TIMESTAMP、=\'\' など）。空なら既定値なし')),
+          field(tr('CHECK 制約'), el('input.input.mono', {
+            value: c.check ?? '', placeholder: tr('例: {0} > 0', [q(c.name)]), spellcheck: false, dataset: { k: 'check' },
             on: { input: (e) => { c.check = e.target.value || null; this.changed(); } },
           })),
-          field('照合順序（COLLATE）', el('select.input', { dataset: { k: 'collate' }, on: { change: (e) => { c.collate = e.target.value || null; this.changed(); } } },
-            COLLATES.map((x) => el('option', { value: x, selected: (c.collate || '') === x }, x || '既定')))),
-          field('生成列（式から自動計算）', el('div.row-gap',
+          field(tr('照合順序（COLLATE）'), el('select.input', { dataset: { k: 'collate' }, on: { change: (e) => { c.collate = e.target.value || null; this.changed(); } } },
+            COLLATES.map((x) => el('option', { value: x, selected: (c.collate || '') === x }, x || tr('既定'))))),
+          field(tr('生成列（式から自動計算）'), el('div.row-gap',
             el('input.input.mono', {
-              value: c.generated?.expr ?? '', placeholder: '例: price * qty', spellcheck: false, dataset: { k: 'generated' },
+              value: c.generated?.expr ?? '', placeholder: tr('例: price * qty'), spellcheck: false, dataset: { k: 'generated' },
               on: { input: (e) => { const v = e.target.value; c.generated = v ? { expr: v, stored: c.generated?.stored ?? false } : null; this.changed(); } },
             }),
-            el('label.chk', el('input', { type: 'checkbox', checked: !!c.generated?.stored, on: { change: (e) => { if (c.generated) { c.generated.stored = e.target.checked; this.changed(); } } } }), '保存する')),
-          '空なら通常の列'),
+            el('label.chk', el('input', { type: 'checkbox', checked: !!c.generated?.stored, on: { change: (e) => { if (c.generated) { c.generated.stored = e.target.checked; this.changed(); } } } }), tr('保存する'))),
+          tr('空なら通常の列')),
         ) : null);
       list.append(row);
     });
@@ -228,21 +229,21 @@ export class DesignPanel {
         el('div.dp-col-main',
           el('span.col-name-del', o.name),
           el('span.muted.mono.sm', o.type || ''),
-          el('span.pend-tag', '削除'),
+          el('span.pend-tag', tr('削除')),
           el('span.grow'),
-          el('button.btn.sm', { title: '削除を取り消す', on: { click: () => this.restoreColumn(o) } }, '↶ 戻す'))));
+          el('button.btn.sm', { title: tr('削除を取り消す'), on: { click: () => this.restoreColumn(o) } }, tr('↶ 戻す')))));
     }
     return [
       list,
-      el('button.btn.add-row', { on: { click: () => this.addColumn() } }, '＋ 列を追加'),
-      el('p.hint', '名前の変更や末尾への列追加は ALTER TABLE で、それ以外（型・キー・順序の変更など）はデータを保ったままテーブルを作り直して反映します。'),
+      el('button.btn.add-row', { on: { click: () => this.addColumn() } }, tr('＋ 列を追加')),
+      el('p.hint', tr('名前の変更や末尾への列追加は ALTER TABLE で、それ以外（型・キー・順序の変更など）はデータを保ったままテーブルを作り直して反映します。')),
     ];
   }
 
   addColumn() {
     const d = this.draft;
     let n = d.columns.length + 1, name;
-    do { name = `列${n++}`; } while (d.columns.some((c) => c.name === name));
+    do { name = tr('列{0}', [n++]); } while (d.columns.some((c) => c.name === name));
     const col = { name, type: 'TEXT', notnull: false, defaultSql: null, check: null, collate: null, generated: null, from: null, _id: Math.random() };
     d.columns.push(col);
     this.expanded.add(col._id);
@@ -287,30 +288,30 @@ export class DesignPanel {
     const names = d.columns.map((c) => c.name);
     const pkIsInt = d.pk.length === 1 && (d.columns.find((c) => c.name === d.pk[0])?.type || '').toUpperCase() === 'INTEGER';
     return [
-      section({ title: 'テーブルのオプション', sec: 'options' },
+      section({ title: tr('テーブルのオプション'), sec: 'options' },
         el('label.opt', el('input', { type: 'checkbox', checked: d.strict, on: { change: (e) => { d.strict = e.target.checked; this.render(); } } }),
-          el('div', el('b', 'STRICT'), el('span.muted', '型の違う値を拒否します（INTEGER 列に文字列を入れない等）'))),
+          el('div', el('b', 'STRICT'), el('span.muted', tr('型の違う値を拒否します（INTEGER 列に文字列を入れない等）')))),
         el('label.opt', el('input', { type: 'checkbox', checked: d.withoutRowid, disabled: !d.pk.length && !d.withoutRowid, on: { change: (e) => { d.withoutRowid = e.target.checked; this.render(); } } }),
-          el('div', el('b', 'WITHOUT ROWID'), el('span.muted', '主キーで行を格納します（主キー必須）'))),
+          el('div', el('b', 'WITHOUT ROWID'), el('span.muted', tr('主キーで行を格納します（主キー必須）')))),
         el('label.opt', el('input', { type: 'checkbox', checked: d.autoincrement, disabled: !pkIsInt || d.withoutRowid, on: { change: (e) => { d.autoincrement = e.target.checked; this.changed(); } } }),
-          el('div', el('b', 'AUTOINCREMENT'), el('span.muted', '削除した番号を再利用しません（INTEGER の単一主キーのみ）')))),
-      section({ title: '主キー（PRIMARY KEY）', sec: 'pk' },
-        colsPicker(names, d.pk, (v) => { d.pk = v; this.render(); }, '主キーなし（rowid で識別）'),
-        el('p.hint', '複数の列を選ぶと複合主キーになります。順序も意味を持ちます。')),
-      section({ title: '一意制約（UNIQUE）', sec: 'uniques' },
+          el('div', el('b', 'AUTOINCREMENT'), el('span.muted', tr('削除した番号を再利用しません（INTEGER の単一主キーのみ）'))))),
+      section({ title: tr('主キー（PRIMARY KEY）'), sec: 'pk' },
+        colsPicker(names, d.pk, (v) => { d.pk = v; this.render(); }, tr('主キーなし（rowid で識別）')),
+        el('p.hint', tr('複数の列を選ぶと複合主キーになります。順序も意味を持ちます。'))),
+      section({ title: tr('一意制約（UNIQUE）'), sec: 'uniques' },
         d.uniques.map((u, i) => el('div.con-row',
           colsPicker(names, u, (v) => { d.uniques[i] = v; this.changed(); this.render(); }),
-          el('button.icon-btn.sm', { title: '削除', on: { click: () => { d.uniques.splice(i, 1); this.render(); } } }, '×'))),
-        el('button.btn.add-row', { on: { click: () => { d.uniques.push([]); this.render(); } } }, '＋ 一意制約を追加')),
-      section({ title: '外部キー（FOREIGN KEY）', sec: 'fks' },
+          el('button.icon-btn.sm', { title: tr('削除'), on: { click: () => { d.uniques.splice(i, 1); this.render(); } } }, '×'))),
+        el('button.btn.add-row', { on: { click: () => { d.uniques.push([]); this.render(); } } }, tr('＋ 一意制約を追加'))),
+      section({ title: tr('外部キー（FOREIGN KEY）'), sec: 'fks' },
         d.fks.map((f, i) => this.renderFk(f, i, names)),
-        el('button.btn.add-row', { on: { click: () => { d.fks.push({ cols: [], table: '', refCols: [], onDelete: 'NO ACTION', onUpdate: 'NO ACTION' }); this.render(); } } }, '＋ 外部キーを追加'),
-        el('p.hint', '外部キー制約は常に有効（PRAGMA foreign_keys = ON）です。')),
-      section({ title: 'CHECK 制約（表全体）', sec: 'checks' },
+        el('button.btn.add-row', { on: { click: () => { d.fks.push({ cols: [], table: '', refCols: [], onDelete: 'NO ACTION', onUpdate: 'NO ACTION' }); this.render(); } } }, tr('＋ 外部キーを追加')),
+        el('p.hint', tr('外部キー制約は常に有効（PRAGMA foreign_keys = ON）です。'))),
+      section({ title: tr('CHECK 制約（表全体）'), sec: 'checks' },
         d.checks.map((ch, i) => el('div.con-row',
-          el('input.input.mono', { value: ch, spellcheck: false, placeholder: '例: start_at <= end_at', on: { input: (e) => { d.checks[i] = e.target.value; this.changed(); } } }),
-          el('button.icon-btn.sm', { title: '削除', on: { click: () => { d.checks.splice(i, 1); this.render(); } } }, '×'))),
-        el('button.btn.add-row', { on: { click: () => { d.checks.push(''); this.render(); } } }, '＋ CHECK を追加')),
+          el('input.input.mono', { value: ch, spellcheck: false, placeholder: tr('例: start_at <= end_at'), on: { input: (e) => { d.checks[i] = e.target.value; this.changed(); } } }),
+          el('button.icon-btn.sm', { title: tr('削除'), on: { click: () => { d.checks.splice(i, 1); this.render(); } } }, '×'))),
+        el('button.btn.add-row', { on: { click: () => { d.checks.push(''); this.render(); } } }, tr('＋ CHECK を追加'))),
     ];
   }
 
@@ -321,19 +322,19 @@ export class DesignPanel {
       readTable(f.table).then((m) => { this.refCache.set(f.table, m.columns.map((c) => c.name)); this.render(); }).catch(() => {});
     }
     const box = el('div.fk-box',
-      el('div.fk-line', el('span.lbl', 'この表の列'), colsPicker(names, f.cols, (v) => { f.cols = v; this.render(); })),
-      el('div.fk-line', el('span.lbl', '参照先の表'),
+      el('div.fk-line', el('span.lbl', tr('この表の列')), colsPicker(names, f.cols, (v) => { f.cols = v; this.render(); })),
+      el('div.fk-line', el('span.lbl', tr('参照先の表')),
         el('select.input', { on: { change: (e) => { f.table = e.target.value; f.refCols = []; this.render(); } } },
-          el('option', { value: '' }, '選択…'),
+          el('option', { value: '' }, tr('選択…')),
           tables.map((t) => el('option', { value: t, selected: t === f.table }, t)))),
-      f.table ? el('div.fk-line', el('span.lbl', '参照先の列'),
-        colsPicker(refCols || [], f.refCols, (v) => { f.refCols = v; this.render(); }, '（参照先の主キー）')) : null,
-      el('div.fk-line', el('span.lbl', '削除時'),
+      f.table ? el('div.fk-line', el('span.lbl', tr('参照先の列')),
+        colsPicker(refCols || [], f.refCols, (v) => { f.refCols = v; this.render(); }, tr('（参照先の主キー）'))) : null,
+      el('div.fk-line', el('span.lbl', tr('削除時')),
         el('select.input', { on: { change: (e) => { f.onDelete = e.target.value; this.changed(); } } }, FK_ACTIONS.map((a) => el('option', { selected: a === f.onDelete }, a))),
-        el('span.lbl', '更新時'),
+        el('span.lbl', tr('更新時')),
         el('select.input', { on: { change: (e) => { f.onUpdate = e.target.value; this.changed(); } } }, FK_ACTIONS.map((a) => el('option', { selected: a === f.onUpdate }, a)))),
-      f.refCols.length && f.refCols.length !== f.cols.length ? el('div.field-error', '列の数を参照先と揃えてください') : null,
-      el('button.icon-btn.sm.fk-del', { title: '外部キーを削除', on: { click: () => { this.draft.fks.splice(i, 1); this.render(); } } }, '×'));
+      f.refCols.length && f.refCols.length !== f.cols.length ? el('div.field-error', tr('列の数を参照先と揃えてください')) : null,
+      el('button.icon-btn.sm.fk-del', { title: tr('外部キーを削除'), on: { click: () => { this.draft.fks.splice(i, 1); this.render(); } } }, '×'));
     return box;
   }
 
@@ -343,17 +344,17 @@ export class DesignPanel {
     const names = m.columns.map((c) => c.name);
     const draft = this.newIndex ??= { cols: [], unique: false };
     return [
-      section('インデックス',
+      section(tr('インデックス'),
         m.indexes.length ? m.indexes.map((ix) => el('div.idx-row',
           el('div', el('b', ix.name), ix.unique ? el('span.tag', 'UNIQUE') : null, el('div.muted.mono', ix.cols.join(', ') || ix.sql)),
-          el('button.btn.sm.danger-text', { on: { click: () => this.dropIndex(ix) } }, '削除'))) : el('p.muted', 'インデックスはありません'),
-        el('p.hint', '主キー・一意制約が作る自動インデックスはここには出ません。')),
-      section('インデックスを作成',
+          el('button.btn.sm.danger-text', { on: { click: () => this.dropIndex(ix) } }, tr('削除')))) : el('p.muted', tr('インデックスはありません')),
+        el('p.hint', tr('主キー・一意制約が作る自動インデックスはここには出ません。'))),
+      section(tr('インデックスを作成'),
         colsPicker(names, draft.cols, (v) => { draft.cols = v; this.render(); }),
         el('label.chk', el('input', { type: 'checkbox', checked: draft.unique, on: { change: (e) => { draft.unique = e.target.checked; } } }), 'UNIQUE'),
-        el('button.btn.primary', { disabled: !draft.cols.length, on: { click: () => this.createIndex() } }, '作成'),
-        el('p.hint', 'インデックスはすぐに作成されます（テーブルの作り直しは不要）。')),
-      m.triggers.length ? section('トリガー', m.triggers.map((t) => el('div.idx-row', el('div', el('b', t.name)), el('span.muted', 'SQL タブで確認')))) : null,
+        el('button.btn.primary', { disabled: !draft.cols.length, on: { click: () => this.createIndex() } }, tr('作成')),
+        el('p.hint', tr('インデックスはすぐに作成されます（テーブルの作り直しは不要）。'))),
+      m.triggers.length ? section(tr('トリガー'), m.triggers.map((t) => el('div.idx-row', el('div', el('b', t.name)), el('span.muted', tr('SQL タブで確認'))))) : null,
     ];
   }
 
@@ -363,13 +364,13 @@ export class DesignPanel {
     try {
       await db.exec(`CREATE ${unique ? 'UNIQUE ' : ''}INDEX ${q(name)} ON ${q(this.model.name)} (${cols.map(q).join(', ')})`);
       this.newIndex = null;
-      toast(`インデックス ${name} を作成しました`);
+      toast(tr('インデックス {0} を作成しました', [name]));
       await this.reloadModel();
     } catch (e) { toast(friendlyError(e.message), 'error'); }
   }
 
   async dropIndex(ix) {
-    if (!await confirmDialog({ title: `インデックス ${ix.name} を削除しますか？`, okLabel: '削除', danger: true })) return;
+    if (!await confirmDialog({ title: tr('インデックス {0} を削除しますか？', [ix.name]), okLabel: tr('削除'), danger: true })) return;
     try { await db.exec(`DROP INDEX ${q(ix.name)}`); await this.reloadModel(); } catch (e) { toast(friendlyError(e.message), 'error'); }
   }
 
@@ -383,10 +384,10 @@ export class DesignPanel {
   renderSql() {
     const m = this.model;
     const all = [m.sql, ...m.indexes.map((i) => i.sql), ...m.triggers.map((t) => t.sql)].filter(Boolean).join(';\n\n') + ';';
-    const out = [section('現在の定義', el('pre.code', all))];
+    const out = [section(tr('現在の定義'), el('pre.code', all))];
     if (this.dirty) {
       const plan = this.plan();
-      out.push(section('適用される SQL', plan.error ? el('div.field-error', plan.error) : el('pre.code', plan.stmts.join(';\n') + ';')));
+      out.push(section(tr('適用される SQL'), plan.error ? el('div.field-error', plan.error) : el('pre.code', plan.stmts.join(';\n') + ';')));
     }
     return out;
   }
@@ -394,18 +395,18 @@ export class DesignPanel {
   // ---------- 適用 ----------
   validate() {
     const d = this.draft;
-    if (!d.name.trim()) return 'テーブル名を入力してください';
-    if (d.name !== this.model.name && this.ctx.tables.includes(d.name)) return `「${d.name}」は既にあります`;
+    if (!d.name.trim()) return tr('テーブル名を入力してください');
+    if (d.name !== this.model.name && this.ctx.tables.includes(d.name)) return tr('「{0}」は既にあります', [d.name]);
     const names = d.columns.map((c) => c.name.trim());
-    if (names.some((n) => !n)) return '名前のない列があります';
+    if (names.some((n) => !n)) return tr('名前のない列があります');
     const dup = names.find((n, i) => names.indexOf(n) !== i);
-    if (dup) return `列名「${dup}」が重複しています`;
-    if (d.withoutRowid && !d.pk.length) return 'WITHOUT ROWID には主キーが必要です';
+    if (dup) return tr('列名「{0}」が重複しています', [dup]);
+    if (d.withoutRowid && !d.pk.length) return tr('WITHOUT ROWID には主キーが必要です');
     for (const f of d.fks) {
-      if (!f.cols.length || !f.table) return '外部キーの列と参照先を指定してください';
-      if (f.refCols.length && f.refCols.length !== f.cols.length) return '外部キーの列数が参照先と一致しません';
+      if (!f.cols.length || !f.table) return tr('外部キーの列と参照先を指定してください');
+      if (f.refCols.length && f.refCols.length !== f.cols.length) return tr('外部キーの列数が参照先と一致しません');
     }
-    if (d.uniques.some((u) => !u.length)) return '列が空の一意制約があります';
+    if (d.uniques.some((u) => !u.length)) return tr('列が空の一意制約があります');
     return null;
   }
 
@@ -458,14 +459,14 @@ export class DesignPanel {
     const p = this.plan();
     if (p.error) { toast(p.error, 'error'); return; }
     // 作り直しはトランザクション中にはできない。名前の変更だけ先に通ってしまわないよう、何もする前に止める
-    if (p.kind !== 'alter' && db.inTx()) { toast('この変更はテーブルを作り直すため、トランザクション中には適用できません。先に確定か取り消しをしてください', 'error'); return; }
+    if (p.kind !== 'alter' && db.inTx()) { toast(tr('この変更はテーブルを作り直すため、トランザクション中には適用できません。先に確定か取り消しをしてください'), 'error'); return; }
     const ok = await confirmDialog({
-      title: 'テーブルの変更を適用しますか？',
+      title: tr('テーブルの変更を適用しますか？'),
       body: p.kind === 'rebuild'
-        ? 'この変更は ALTER TABLE では行えないため、新しい定義でテーブルを作り直し、データをコピーします。外部キー違反があれば元に戻します。'
-        : '次の SQL を実行します。',
+        ? tr('この変更は ALTER TABLE では行えないため、新しい定義でテーブルを作り直し、データをコピーします。外部キー違反があれば元に戻します。')
+        : tr('次の SQL を実行します。'),
       code: p.stmts.join(';\n') + ';',
-      okLabel: '適用',
+      okLabel: tr('適用'),
     });
     if (!ok) return;
     try {
@@ -476,7 +477,7 @@ export class DesignPanel {
       if (renameOnly && this.ctx.onRename) {
         const name = this.draft.name;
         await this.ctx.onRename({ fromTable: this.model.name, toTable: name, cols: renames });
-        toast('テーブルを変更しました', 'success');
+        toast(tr('テーブルを変更しました'), 'success');
         // 表の名前が変わると、main が新しいパネルに差し替える。差し替えられていなければ（列名だけ）自分で描き直す
         if (this.footer.isConnected) { this.setModel(await readTable(name)); this.render(); }
         return;
@@ -490,7 +491,7 @@ export class DesignPanel {
         if (p.renameStmt) await db.exec(p.renameStmt);
         await db.rebuild(p.rebuild.map((sql) => ({ sql })));
       }
-      toast('テーブルを変更しました', 'success');
+      toast(tr('テーブルを変更しました'), 'success');
       this.setModel(await readTable(this.draft.name));
       this.render();
       this.ctx.onApplied(this.model.name);
@@ -512,17 +513,17 @@ function field(label, control, hint) {
 }
 
 /** 順序付きの複数列選択（チップ） */
-function colsPicker(all, selected, onChange, emptyText = '列を選択') {
+function colsPicker(all, selected, onChange, emptyText = tr('列を選択')) {
   const box = el('div.cols-picker');
   if (!selected.length) box.append(el('span.muted.sm', emptyText));
   selected.forEach((n, i) => box.append(el('span.chip',
     selected.length > 1 ? el('span.chip-n', String(i + 1)) : null, n,
-    el('button.chip-x', { title: '外す', on: { click: () => onChange(selected.filter((_, j) => j !== i)) } }, '×'))));
+    el('button.chip-x', { title: tr('外す'), on: { click: () => onChange(selected.filter((_, j) => j !== i)) } }, '×'))));
   const rest = all.filter((n) => !selected.includes(n));
   if (rest.length) {
     box.append(el('button.chip-add', {
       on: { click: (e) => menu(e.currentTarget, rest.map((n) => ({ label: n, action: () => onChange([...selected, n]) }))) },
-    }, '＋'));
+    }, tr('＋')));
   }
   return box;
 }

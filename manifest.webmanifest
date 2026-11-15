@@ -1,8 +1,8 @@
 {
-  "name": "SQLiteシート",
-  "short_name": "SQLiteシート",
-  "description": "スプレッドシート感覚で SQLite を扱える、ブラウザだけで動くクライアント",
-  "lang": "ja",
+  "name": "SQLite Sheet",
+  "short_name": "SQLite Sheet",
+  "description": "A browser-only SQLite client that feels like a spreadsheet",
+  "lang": "en",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",

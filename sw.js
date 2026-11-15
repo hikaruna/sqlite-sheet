@@ -7,7 +7,7 @@ const CDN = 'cdn-v1';           // jsDelivr の sqlite-wasm（URL に版が入�
 const SHELL = [
   './', 'index.html', 'css/app.css', 'manifest.webmanifest',
   'icons/icon.svg', 'icons/icon-192.png', 'icons/icon-512.png',
-  ...['blob', 'console', 'db-client', 'db-worker', 'design-panel', 'files', 'grid', 'main', 'protect',
+  ...['blob', 'console', 'db-client', 'db-worker', 'design-panel', 'files', 'grid', 'i18n', 'locales/en', 'main', 'protect',
     'sample', 'schema', 'sources', 'store', 'txmarks', 'ui', 'undo'].map((f) => `js/${f}.js`),
 ];
 

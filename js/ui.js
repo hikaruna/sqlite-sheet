@@ -1,3 +1,4 @@
+import { t as tr } from './i18n.js';
 // 小さな UI 部品：要素生成、トースト、メニュー、ポップオーバー、確認ダイアログ
 
 /** el('div.cls#id', {attrs, on:{click}}, ...children) */
@@ -146,7 +147,7 @@ export function ask(anchor, { title, value = '', placeholder = '', okLabel = 'OK
     });
     popover(anchor, el('form.ask', { on: { submit: (e) => { e.preventDefault(); submit(); } } },
       title ? el('div.ask-title', title) : null, input, err,
-      el('div.ask-actions', el('button.btn', { type: 'button', on: { click: () => finish(null) } }, 'キャンセル'),
+      el('div.ask-actions', el('button.btn', { type: 'button', on: { click: () => finish(null) } }, tr('キャンセル')),
         el('button.btn.primary', { type: 'submit' }, okLabel))),
     { onClose: () => { if (!done) { done = true; resolve(null); } } });
     setTimeout(() => input.select(), 0);
@@ -163,7 +164,7 @@ export function confirmDialog({ title, body, okLabel = 'OK', danger = false, cod
       body ? el('p', body) : null,
       code ? el('pre.code', code) : null,
       el('div.modal-actions',
-        el('button.btn', { on: { click: () => close(false) } }, 'キャンセル'),
+        el('button.btn', { on: { click: () => close(false) } }, tr('キャンセル')),
         el('button.btn', { class: danger ? 'danger' : 'primary', autofocus: true, on: { click: () => close(true) } }, okLabel)),
     ].filter(Boolean));
     dlg.addEventListener('cancel', (e) => { e.preventDefault(); close(false); });
@@ -248,7 +249,7 @@ export async function exportFile(bytes, filename, type = 'application/octet-stre
       try { await navigator.share({ files: [file] }); } catch (e) {
         // iOS は、書き出しに時間がかかるとユーザー操作の有効期限が切れる。ボタンを押してもらってやり直す
         if (e.name !== 'NotAllowedError') throw e;
-        if (await confirmDialog({ title: '書き出しの準備ができました', body: filename, okLabel: '共有…' })) await navigator.share({ files: [file] });
+        if (await confirmDialog({ title: tr('書き出しの準備ができました'), body: filename, okLabel: tr('共有…') })) await navigator.share({ files: [file] });
       }
       return;
     } catch (e) { if (e.name === 'AbortError') return; }

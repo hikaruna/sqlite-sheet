@@ -655,7 +655,12 @@ audio.blob-view-media { margin: 24px auto; width: calc(100% - 24px); }
 .home-more { flex: none; margin-right: 6px; color: var(--text-3); opacity: .55; }
 .home-item:hover .home-more, .home-more:focus-visible { opacity: 1; }
 @media (hover: none) { .home-more { opacity: 1; } }
-.home-foot { margin-top: 24px; color: var(--text-3); font-size: 11px; }
+.home-foot { margin-top: 24px; color: var(--text-3); font-size: 11px; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+/* 言語の切り替え（日本語 | English） */
+.home-lang { display: inline-flex; gap: 2px; margin-left: auto; }
+.lang-btn { border: 0; background: none; color: var(--text-3); font: inherit; font-size: 12px; padding: 4px 8px; border-radius: 6px; cursor: pointer; }
+.lang-btn:hover { background: var(--surface-2); color: var(--text); }
+.lang-btn.on { color: var(--accent); font-weight: 600; }
 /* ホームではシート用の上下のバーを出さない */
 /* 上部バー：ホームではアプリ名と検索窓だけ。シートの道具と下のバーは隠す */
 body:not(.at-home) .home-only { display: none; }
@@ -720,7 +725,7 @@ body.at-home .topbar > :not(.home-btn, .home-only), body.at-home .bottombar { di
 .gc.drop { box-shadow: inset 0 0 0 2px var(--accent); background: var(--accent-soft); }
 body.dropping::after {
   pointer-events: none; /* 下のセルにドラッグのイベントが届くように（BLOB のセルへのドロップ） */
-  content: '.sqlite ファイルをドロップして読み込む'; position: fixed; inset: 12px; z-index: 300;
+  content: var(--drop-label, '.sqlite'); position: fixed; inset: 12px; z-index: 300;
   display: grid; place-items: center; border: 3px dashed var(--accent); border-radius: 16px;
   background: color-mix(in srgb, var(--surface) 85%, transparent); color: var(--accent); font-size: 18px; font-weight: 700;
 }

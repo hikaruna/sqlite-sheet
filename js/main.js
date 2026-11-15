@@ -1,4 +1,5 @@
 // アプリ本体：DB・シートの管理、画面の組み立て
+import { t as tr, lang, LANGS, setLang, locale } from './i18n.js';
 import { db, q } from './db-client.js';
 import { el, toast, menu, popover, closePopover, ask, confirmDialog, choiceDialog, modal, pickFile, download, exportFile, fmtBytes, isTouch, modKey, isMac, touchHold, icon, appIcon } from './ui.js';
 import { listObjects, readTable, createTableSql, migrationSql, constantDefault, TYPES, affinity } from './schema.js';
@@ -43,7 +44,7 @@ let sqlConsole;
 async function boot() {
   buildChrome();
   try {
-    if (!navigator.storage?.getDirectory) throw new Error('このブラウザは OPFS（Origin Private File System）に対応していません。');
+    if (!navigator.storage?.getDirectory) throw new Error(tr('このブラウザは OPFS（Origin Private File System）に対応していません。'));
     const info = await db.init();
     $('version').textContent = `SQLite ${info.version}`;
   } catch (e) {
@@ -61,12 +62,12 @@ function showFatal(e) {
   const msg = String(e?.message || e);
   const busy = /access handle|NoModificationAllowed|locked|InvalidState/i.test(msg);
   $('app').replaceChildren(el('div.fatal',
-    el('h1', busy ? '別のタブで開かれています' : '起動できませんでした'),
+    el('h1', busy ? tr('別のタブで開かれています') : tr('起動できませんでした')),
     el('p', busy
-      ? 'SQLiteシートは同時に1つのタブでしか使えません。他のタブを閉じてから再試行してください。'
+      ? tr('SQLiteシートは同時に1つのタブでしか使えません。他のタブを閉じてから再試行してください。')
       : msg),
-    busy ? null : el('p.muted', 'http(s) で配信されたページを、最近の Chrome / Edge / Firefox / Safari で開いてください。'),
-    el('button.btn.primary', { on: { click: () => location.reload() } }, '再試行')));
+    busy ? null : el('p.muted', tr('http(s) で配信されたページを、最近の Chrome / Edge / Firefox / Safari で開いてください。')),
+    el('button.btn.primary', { on: { click: () => location.reload() } }, tr('再試行'))));
 }
 
 // URL は「/<DB 名>?sheet=<シート>」。DB はパス（移動は履歴に積む）、シートはクエリ文字列（切り替えは置き換える）。
@@ -110,7 +111,7 @@ function setUrl() {
     if (parseUrl().dbName !== (state.file ? null : state.dbName)) history.pushState(null, '', u);
     else history.replaceState(null, '', u);
   }
-  document.title = (state.dirty ? '● ' : '') + [state.key?.slice(2), dbLabel(), 'SQLiteシート'].filter(Boolean).join(' · ');
+  document.title = (state.dirty ? '● ' : '') + [state.key?.slice(2), dbLabel(), tr('SQLiteシート')].filter(Boolean).join(' · ');
 }
 
 // 起動時：404.html から来た元の URL と、旧形式「#/DB/t:名前」を今の形に直す
@@ -136,7 +137,7 @@ async function route() {
   }
   // / は最初の画面。前回の DB を勝手には開かない
   if (!dbName || !state.dbs.includes(dbName)) {
-    if (dbName) toast(`DB「${dbName}」は見つかりません`, 'error');
+    if (dbName) toast(tr('DB「{0}」は見つかりません', [dbName]), 'error');
     if (state.grid && !(await state.grid.flushDraft())) return setUrl();
     return showWelcome();
   }
@@ -155,20 +156,20 @@ function buildChrome() {
   $('app').replaceChildren(
     el('header.topbar',
       // 左上：アイコン＝ホーム（DB の一覧）、DB 名＝その場で名前を変更、ファイル＝DB の操作メニュー
-      el('button#home-btn.home-btn', { title: 'ホーム（データベースの一覧）', on: { click: goHome } }, appIcon()),
+      el('button#home-btn.home-btn', { title: tr('ホーム（データベースの一覧）'), on: { click: goHome } }, appIcon()),
       // ホームでだけ出す：アプリ名と、DB を名前で探して開く検索窓
-      el('span.app-title.home-only', 'SQLiteシート'),
+      el('span.app-title.home-only', tr('SQLiteシート')),
       el('div.db-search.home-only',
         // スマホだけ：検索窓の内側の左に、操作をまとめたメニュー（左から出る）を開くボタン
-        el('button.icon-btn.home-menu-btn', { title: 'メニュー', 'aria-label': 'メニュー', on: { click: homeDrawer } }, '☰'),
+        el('button.icon-btn.home-menu-btn', { title: tr('メニュー'), 'aria-label': tr('メニュー'), on: { click: homeDrawer } }, '☰'),
         el('input#db-search.db-search-input', {
-          type: 'search', placeholder: 'データベースを検索', spellcheck: false, autocomplete: 'off',
-          'aria-label': 'データベースを検索', role: 'combobox', 'aria-expanded': 'false', 'aria-controls': 'db-search-list',
+          type: 'search', placeholder: tr('データベースを検索'), spellcheck: false, autocomplete: 'off',
+          'aria-label': tr('データベースを検索'), role: 'combobox', 'aria-expanded': 'false', 'aria-controls': 'db-search-list',
           on: { input: renderSearch, focus: renderSearch, keydown: onSearchKey, blur: () => setTimeout(hideSearch, 150) },
         }),
         el('div#db-search-list.db-search-list', { role: 'listbox', hidden: true })),
       el('input#db-name.db-name', {
-        hidden: true, spellcheck: false, title: 'クリックして名前を変更',
+        hidden: true, spellcheck: false, title: tr('クリックして名前を変更'),
         on: {
           keydown: (e) => {
             if (e.key === 'Enter') { e.preventDefault(); e.target.blur(); }
@@ -179,43 +180,43 @@ function buildChrome() {
       }),
       // 今のシート（パンくず）。押すとシートのメニュー（タブの右クリックと同じ）
       el('span#crumb-sep.crumb-sep', { hidden: true }, '›'),
-      el('button#sheet-crumb.sheet-crumb', { hidden: true, title: 'シートの操作', on: { click: (e) => state.key && tabMenu(state.key, e.currentTarget) } }),
+      el('button#sheet-crumb.sheet-crumb', { hidden: true, title: tr('シートの操作'), on: { click: (e) => state.key && tabMenu(state.key, e.currentTarget) } }),
       // ファイルを直接編集しているときだけ出す。未保存ならクリックで保存
       el('button#save-state.save-state', { hidden: true, on: { click: () => saveFile() } }),
       // メニューバー：機能の正式な入口（ツールバーはその近道）。狭い画面では ☰ 1つにまとめる
       el('nav.menubar',
-        el('button#file-btn.menubar-btn', { on: { click: (e) => dbMenu(e.currentTarget) } }, 'ファイル'),
-        el('button.menubar-btn', { on: { click: (e) => menu(e.currentTarget, editItems()) } }, '編集'),
-        el('button.menubar-btn', { on: { click: (e) => menu(e.currentTarget, formatItems()) } }, '表示形式'),
-        el('button.menubar-btn', { on: { click: (e) => menu(e.currentTarget, dataItems()) } }, 'データ'),
-        el('button.menubar-btn', { on: { click: (e) => menu(e.currentTarget, toolItems()) } }, 'ツール')),
-      el('button.icon-btn.menubar-all', { title: 'メニュー', 'aria-label': 'メニュー', on: { click: (e) => allMenu(e.currentTarget) } }, '☰')),
+        el('button#file-btn.menubar-btn', { on: { click: (e) => dbMenu(e.currentTarget) } }, tr('ファイル')),
+        el('button.menubar-btn', { on: { click: (e) => menu(e.currentTarget, editItems()) } }, tr('編集')),
+        el('button.menubar-btn', { on: { click: (e) => menu(e.currentTarget, formatItems()) } }, tr('表示形式')),
+        el('button.menubar-btn', { on: { click: (e) => menu(e.currentTarget, dataItems()) } }, tr('データ')),
+        el('button.menubar-btn', { on: { click: (e) => menu(e.currentTarget, toolItems()) } }, tr('ツール'))),
+      el('button.icon-btn.menubar-all', { title: tr('メニュー'), 'aria-label': tr('メニュー'), on: { click: (e) => allMenu(e.currentTarget) } }, '☰')),
     // ツールバー（シート画面だけ）：編集の取り消し・表示の操作・パネル
     el('div.toolbar',
-      el('button#undo-btn.tb-btn', { title: '元に戻す', disabled: true, on: { click: doUndo } }, icon('undo')),
-      el('button#redo-btn.tb-btn', { title: 'やり直す', disabled: true, on: { click: doRedo } }, icon('redo')),
+      el('button#undo-btn.tb-btn', { title: tr('元に戻す'), disabled: true, on: { click: doUndo } }, icon('undo')),
+      el('button#redo-btn.tb-btn', { title: tr('やり直す'), disabled: true, on: { click: doRedo } }, icon('redo')),
       el('span.vsep'),
       // トランザクション：ふだんは「開始」、実行中は確定・取り消しをその場で
-      el('button#tx-begin.tb-btn', { title: 'トランザクションを開始（確定するまで変更を保存しない）', on: { click: beginTx } }, icon('tx'), el('span.tb-label', 'トランザクション')),
+      el('button#tx-begin.tb-btn', { title: tr('トランザクションを開始（確定するまで変更を保存しない）'), on: { click: beginTx } }, icon('tx'), el('span.tb-label', tr('トランザクション'))),
       el('span#tx-box.tx-box', { hidden: true },
-        el('span.tx-label', { title: '確定するまで変更は保存されません' }, '● トランザクション中'),
-        el('button.tb-btn.tx-commit', { title: '確定（COMMIT）', on: { click: commitTx } }, '確定'),
-        el('button.tb-btn.tx-rollback', { title: '取り消し（ROLLBACK）', on: { click: rollbackTx } }, '取り消し')),
+        el('span.tx-label', { title: tr('確定するまで変更は保存されません') }, tr('● トランザクション中')),
+        el('button.tb-btn.tx-commit', { title: tr('確定（COMMIT）'), on: { click: commitTx } }, tr('確定')),
+        el('button.tb-btn.tx-rollback', { title: tr('取り消し（ROLLBACK）'), on: { click: rollbackTx } }, tr('取り消し'))),
       el('span.vsep'),
       // 保護：テーブルなら常に出す（保護がなくても、ここから新しく保護できる）
-      el('button#prot-btn.tb-btn', { title: 'シートと範囲の保護', on: { click: (e) => protPanel(e.currentTarget) } }, icon('lock'), el('span.tb-label', '保護'), el('span#prot-n.tb-count', { hidden: true })),
+      el('button#prot-btn.tb-btn', { title: tr('シートと範囲の保護'), on: { click: (e) => protPanel(e.currentTarget) } }, icon('lock'), el('span.tb-label', tr('保護')), el('span#prot-n.tb-count', { hidden: true })),
       el('span.vsep'),
       // テキストの折り返し（スプレッドシートのツールバーと同じく、押すと選べる）
-      el('button#wrap-btn.tb-btn', { title: 'テキストの折り返し', on: { click: (e) => { if (state.grid) menu(e.currentTarget, wrapItems()); } } }, icon('wrap')),
+      el('button#wrap-btn.tb-btn', { title: tr('テキストの折り返し'), on: { click: (e) => { if (state.grid) menu(e.currentTarget, wrapItems()); } } }, icon('wrap')),
       el('span.grow'),
-      el('button#panel-btn.tb-btn', { title: 'テーブルの設計（列・キー・制約）', on: { click: () => togglePanel() } }, icon('design'), el('span.tb-label', '設計')),
-      el('button#console-btn.tb-btn', { title: `SQL コンソール（${MOD}\`）`, on: { click: () => toggleConsole() } }, icon('terminal'), el('span.tb-label', 'SQL')),
-      el('button.tb-btn.cmd-btn', { title: `コマンド（${MOD}K）`, on: { click: () => palette() } }, el('kbd.tb-kbd', `${MOD}K`))),
+      el('button#panel-btn.tb-btn', { title: tr('テーブルの設計（列・キー・制約）'), on: { click: () => togglePanel() } }, icon('design'), el('span.tb-label', tr('設計'))),
+      el('button#console-btn.tb-btn', { title: tr('SQL コンソール（{0}`）', [MOD]), on: { click: () => toggleConsole() } }, icon('terminal'), el('span.tb-label', 'SQL')),
+      el('button.tb-btn.cmd-btn', { title: tr('コマンド（{0}K）', [MOD]), on: { click: () => palette() } }, el('kbd.tb-kbd', `${MOD}K`))),
     // 数式バー（値のエリア）：名前ボックス ＋ fx ＋ 入力欄
     el('div.fxbar',
       el('span#fx-ref.fx-ref', ''),
       // 式の入口：押すと列・関数・定数を選んで =式 を入れられる（スプレッドシートの「関数を挿入」）
-      el('button#fx-btn.fx-btn', { title: '式を入力（= で始めると SQL の式として計算）', on: { mousedown: (e) => e.preventDefault(), click: (e) => exprPicker(e.currentTarget) } }, 'fx'),
+      el('button#fx-btn.fx-btn', { title: tr('式を入力（= で始めると SQL の式として計算）'), on: { mousedown: (e) => e.preventDefault(), click: (e) => exprPicker(e.currentTarget) } }, 'fx'),
       el('input#fx-input.fx-input', { spellcheck: false, placeholder: '', on: { keydown: onFxKey, focus: (e) => e.target.select() } })),
     el('main.workspace',
       el('section#sheet.sheet',
@@ -225,7 +226,7 @@ function buildChrome() {
     el('section#console.console', { hidden: true }),
     el('footer.bottombar',
       el('div#tabs.tabs'),
-      el('button.tab-add', { title: 'シートを追加', on: { click: (e) => addSheetMenu(e.currentTarget) } }, '＋'),
+      el('button.tab-add', { title: tr('シートを追加'), on: { click: (e) => addSheetMenu(e.currentTarget) } }, tr('＋')),
       el('span.grow'),
       el('span#status.status'),
       el('span#version.version')),
@@ -253,6 +254,7 @@ function buildChrome() {
   // ファイルに保存していない変更があるときも確認
   addEventListener('beforeunload', (e) => { if (state.grid?.hasDraft || state.inTx || (state.file && state.dirty)) { e.preventDefault(); e.returnValue = ''; } });
   // .sqlite ファイルのドラッグ＆ドロップ
+  document.documentElement.style.setProperty('--drop-label', JSON.stringify(tr('.sqlite ファイルをドロップして読み込む')));
   addEventListener('dragover', (e) => { if (e.dataTransfer?.types.includes('Files')) { e.preventDefault(); document.body.classList.add('dropping'); } });
   addEventListener('dragleave', (e) => { if (!e.relatedTarget) document.body.classList.remove('dropping'); });
   addEventListener('drop', (e) => {
@@ -266,7 +268,7 @@ function onGlobalKey(e) {
   if (modKey(e) && e.key.toLowerCase() === 's') {
     e.preventDefault(); // ブラウザの「ページを保存」は出さない
     if (state.file) saveFile();
-    else if (state.dbName) toast('データベースは、変更のたびに自動で保存されています');
+    else if (state.dbName) toast(tr('データベースは、変更のたびに自動で保存されています'));
     return;
   }
   if (modKey(e) && e.key === '`') { e.preventDefault(); if (state.dbName) toggleConsole(); return; }
@@ -281,21 +283,21 @@ function updateUndoButtons() {
   const u = $('undo-btn'), r = $('redo-btn');
   if (!u) return;
   u.disabled = !undo.canUndo(); r.disabled = !undo.canRedo();
-  u.title = undo.canUndo() ? `元に戻す: ${undo.peekUndo()}（${MOD}Z）` : '元に戻す';
-  r.title = undo.canRedo() ? `やり直す: ${undo.peekRedo()}（${MOD}Y）` : 'やり直す';
+  u.title = undo.canUndo() ? tr('元に戻す: {0}（{1}Z）', [undo.peekUndo(), MOD]) : tr('元に戻す');
+  r.title = undo.canRedo() ? tr('やり直す: {0}（{1}Y）', [undo.peekRedo(), MOD]) : tr('やり直す');
 }
 
 async function doUndo() {
   try {
     const e = await undo.undo();
-    if (e) toast(`元に戻しました：${e.label}${await showUndone(e, 'undo')}`);
-  } catch (e) { toast('元に戻せませんでした：' + friendlyError(e.message), 'error'); }
+    if (e) toast(tr('元に戻しました：{0}{1}', [e.label, await showUndone(e, 'undo')]));
+  } catch (e) { toast(tr('元に戻せませんでした：') + friendlyError(e.message), 'error'); }
 }
 async function doRedo() {
   try {
     const e = await undo.redo();
-    if (e) toast(`やり直しました：${e.label}${await showUndone(e, 'redo')}`);
-  } catch (e) { toast('やり直せませんでした：' + friendlyError(e.message), 'error'); }
+    if (e) toast(tr('やり直しました：{0}{1}', [e.label, await showUndone(e, 'redo')]));
+  } catch (e) { toast(tr('やり直せませんでした：') + friendlyError(e.message), 'error'); }
 }
 
 /**
@@ -308,14 +310,14 @@ async function showUndone(e, dir) {
   const cells = (dir === 'undo' ? e.cells?.before : e.cells?.after) ?? [];
   const cols = (dir === 'undo' ? e.undoCols : e.redoCols) ?? (e.col ? [e.col] : []);
   // CASCADE などで複数の表が変わったときは、表ごとの件数も添える（コンソールの実行はラベルに入っている）
-  const many = e.tables && Object.keys(e.tables).length > 1 && !e.label.startsWith('SQL コンソール') ? `（${tableSummary(e.tables)}）` : '';
+  const many = e.tables && Object.keys(e.tables).length > 1 && !e.label.startsWith(tr('SQL コンソール')) ? tr('（{0}）', [tableSummary(e.tables)]) : '';
   if (sheet && sheet !== state.key && allKeys().includes(sheet)) await showSheet(sheet);
   else await state.grid?.reload();
   if (!sheet || sheet !== state.key || !state.grid) return many;
   // 光らせるのは、この表のセル・行だけ
   const t = sheet.slice(2);
   const hidden = await state.grid.reveal({ cells: cells.filter((c) => c.t === undefined || c.t === t), cols });
-  return many + (hidden ? '（絞り込みで表示されていません）' : '');
+  return many + (hidden ? tr('（絞り込みで表示されていません）') : '');
 }
 
 function toggleConsole(force) {
@@ -344,32 +346,33 @@ function showWelcome() {
   $('grid-host').replaceChildren(el('div.welcome',
     el('div.home',
       el('header.home-head',
-        el('p.lead', 'スプレッドシートの手軽さで、SQLite データベースを。')),
+        el('p.lead', tr('スプレッドシートの手軽さで、SQLite データベースを。'))),
       el('div.home-tools',
-        el('button.btn.primary', { title: '空のデータベースを作る', on: { click: newDb } }, '＋ 新規作成'),
-        el('button.btn', { title: '.sqlite ファイルをデータベースとして取り込む（ドラッグ＆ドロップでも可）', on: { click: pickSqlite } }, '⤒ 取り込む'),
-        el('button.btn', { title: 'サンプルのデータベースを作る', on: { click: makeSample } }, '✨ サンプル'),
-        files.supported ? el('button.btn', { title: 'パソコンの .sqlite ファイルをそのまま開いて編集する', on: { click: fileModeDialog } }, '📂 ローカルファイルを直接編集…') : null),
+        el('button.btn.primary', { title: tr('空のデータベースを作る'), on: { click: newDb } }, tr('＋ 新規作成')),
+        el('button.btn', { title: tr('.sqlite ファイルをデータベースとして取り込む（ドラッグ＆ドロップでも可）'), on: { click: pickSqlite } }, tr('⤒ 取り込む')),
+        el('button.btn', { title: tr('サンプルのデータベースを作る'), on: { click: makeSample } }, tr('✨ サンプル')),
+        files.supported ? el('button.btn', { title: tr('パソコンの .sqlite ファイルをそのまま開いて編集する'), on: { click: fileModeDialog } }, tr('📂 ローカルファイルを直接編集…')) : null),
       el('section.home-section',
         el('div.home-section-head',
-          el('h2', 'データベース'),
-          state.dbs.length > 1 ? el('button.tool-btn.home-sort', { title: '並べ替え', on: { click: (e) => sortMenu(e.currentTarget) } },
-            `並べ替え：${SORTS[homeSort()]}`, el('span.caret', ' ▾')) : null),
+          el('h2', tr('データベース')),
+          state.dbs.length > 1 ? el('button.tool-btn.home-sort', { title: tr('並べ替え'), on: { click: (e) => sortMenu(e.currentTarget) } },
+            tr('並べ替え：{0}', [SORTS[homeSort()]]), el('span.caret', ' ▾')) : null),
         state.dbs.length
-          ? el('div.home-list', el('div.home-cols', el('span', '名前'), el('span', '最終閲覧')), sortedDbs().map((n) => el('div.home-item',
-            el('button.home-row', { title: `「${n}」を開く`, on: { click: () => openDb(n) } },
+          ? el('div.home-list', el('div.home-cols', el('span', tr('名前')), el('span', tr('最終閲覧'))), sortedDbs().map((n) => el('div.home-item',
+            el('button.home-row', { title: tr('「{0}」を開く', [n]), on: { click: () => openDb(n) } },
               el('span.home-row-icon', appIcon()), el('span.home-row-name', n),
               el('span.home-row-time', viewedText(n))),
             el('button.icon-btn.home-more', {
-              title: `「${n}」の操作`, 'aria-label': `「${n}」の操作`,
+              title: tr('「{0}」の操作', [n]), 'aria-label': tr('「{0}」の操作', [n]),
               on: { click: (e) => menu(e.currentTarget, dbActions(n, { anchor: e.currentTarget, home: true }), { align: 'end' }) },
             }, '⋯'))))
-          : el('p.home-empty', 'まだデータベースがありません。', el('span.wide-only', '上の「＋ 新規作成」か「✨ サンプル」から始めましょう。'), el('span.narrow-only', '左上の ☰ から「新規作成」か「サンプル」を選んで始めましょう。'))),
-      el('footer.home-foot', $('version').textContent))));
+          : el('p.home-empty', tr('まだデータベースがありません。'), el('span.wide-only', tr('上の「＋ 新規作成」か「✨ サンプル」から始めましょう。')), el('span.narrow-only', tr('左上の ☰ から「新規作成」か「サンプル」を選んで始めましょう。')))),
+      el('footer.home-foot', $('version').textContent,
+        langSwitch()))));
 }
 
 // ホームの一覧の並べ替え（選んだものは覚えておく）。時刻の記録がないときは作成時刻を使う
-const SORTS = { viewed: '最終閲覧', updated: '最終更新', name: '名前' };
+const SORTS = { viewed: tr('最終閲覧'), updated: tr('最終更新'), name: tr('名前') };
 function homeSort() { try { const v = localStorage.getItem('home-sort'); return v in SORTS ? v : 'viewed'; } catch { return 'viewed'; } }
 function sortedDbs() {
   const by = homeSort();
@@ -392,10 +395,10 @@ function sortMenu(anchor) {
 // スマホのホーム：左から出るメニュー。ホームの操作を一通りここから選べる
 function homeDrawer() {
   const items = [
-    { label: '新規作成', icon: '＋', run: newDb },
-    { label: '取り込む', icon: '⤒', run: pickSqlite },
-    { label: 'サンプル', icon: '✨', run: makeSample },
-    files.supported ? { label: 'ローカルファイルを直接編集…', icon: '📂', run: fileModeDialog } : null,
+    { label: tr('新規作成'), icon: tr('＋'), run: newDb },
+    { label: tr('取り込む'), icon: '⤒', run: pickSqlite },
+    { label: tr('サンプル'), icon: '✨', run: makeSample },
+    files.supported ? { label: tr('ローカルファイルを直接編集…'), icon: '📂', run: fileModeDialog } : null,
   ].filter(Boolean);
   const close = () => {
     wrap.classList.remove('open');
@@ -404,11 +407,11 @@ function homeDrawer() {
   };
   const onKey = (e) => { if (e.key === 'Escape') close(); };
   const wrap = el('div.drawer-wrap', { on: { click: (e) => { if (e.target === wrap) close(); } } },
-    el('nav.drawer', { 'aria-label': 'メニュー' },
-      el('div.drawer-head', el('span.home-row-icon', appIcon()), el('span', 'SQLiteシート')),
+    el('nav.drawer', { 'aria-label': tr('メニュー') },
+      el('div.drawer-head', el('span.home-row-icon', appIcon()), el('span', tr('SQLiteシート'))),
       ...items.map((it) => el('button.drawer-item', { on: { click: () => { close(); it.run(); } } },
         el('span.mi-icon', it.icon), el('span', it.label))),
-      el('div.drawer-foot', $('version').textContent)));
+      el('div.drawer-foot', $('version').textContent, langSwitch())));
   document.body.append(wrap);
   addEventListener('keydown', onKey);
   requestAnimationFrame(() => wrap.classList.add('open'));
@@ -427,7 +430,7 @@ function renderSearch() {
       role: 'option', 'aria-selected': String(i === searchSel), tabIndex: -1,
       on: { mousedown: (e) => e.preventDefault(), click: () => pickSearch(n) },
     }, el('span.home-row-icon', appIcon()), el('span', n)))
-    : [el('div.db-search-none', '見つかりません')]));
+    : [el('div.db-search-none', tr('見つかりません'))]));
   list.hidden = false; input.setAttribute('aria-expanded', 'true');
 }
 function hideSearch() { $('db-search-list').hidden = true; $('db-search').setAttribute('aria-expanded', 'false'); }
@@ -449,35 +452,35 @@ async function fileModeDialog() {
   const recent = await files.list();
   const list = el('div.recent-list');
   const renderList = (rows) => list.replaceChildren(...(rows.length
-    ? [el('h3', '最近開いたファイル'), ...rows.map((r) => el('div.recent-item',
-      el('button.recent-row', { title: `「${r.name}」を開く`, on: { click: () => { m.close(); openRecent(r); } } },
+    ? [el('h3', tr('最近開いたファイル')), ...rows.map((r) => el('div.recent-item',
+      el('button.recent-row', { title: tr('「{0}」を開く', [r.name]), on: { click: () => { m.close(); openRecent(r); } } },
         el('span.recent-icon', '📄'), el('span.recent-name', r.name), el('span.recent-ago', ago(r.at))),
       el('button.icon-btn.recent-x', {
-        title: '一覧から消す（ファイルは消えません）', 'aria-label': `「${r.name}」を一覧から消す`,
+        title: tr('一覧から消す（ファイルは消えません）'), 'aria-label': tr('「{0}」を一覧から消す', [r.name]),
         on: { click: async () => { await files.remove(r.id); renderList(await files.list()); } },
       }, '✕')))]
     : []));
   renderList(recent);
   const m = modal([
-    el('h2', '📂 ローカルファイルを直接編集'),
-    el('p', 'パソコンの .sqlite ファイルをそのまま開いて編集します。'),
+    el('h2', tr('📂 ローカルファイルを直接編集')),
+    el('p', tr('パソコンの .sqlite ファイルをそのまま開いて編集します。')),
     el('ul.file-mode-notes',
-      el('li', `保存は手動です（${MOD}S）`),
-      el('li', 'ほかのアプリでファイルが変更されていたら、保存するときに知らせます'),
-      el('li', '閉じても、このアプリには何も残りません')),
-    el('button.btn.primary.file-mode-pick', { on: { click: () => { m.close(); openFileDialog(); } } }, '📂 ファイルを選ぶ…'),
+      el('li', tr('保存は手動です（{0}S）', [MOD])),
+      el('li', tr('ほかのアプリでファイルが変更されていたら、保存するときに知らせます')),
+      el('li', tr('閉じても、このアプリには何も残りません'))),
+    el('button.btn.primary.file-mode-pick', { on: { click: () => { m.close(); openFileDialog(); } } }, tr('📂 ファイルを選ぶ…')),
     list,
-    el('div.modal-actions', el('button.btn', { on: { click: () => m.close() } }, '閉じる')),
+    el('div.modal-actions', el('button.btn', { on: { click: () => m.close() } }, tr('閉じる'))),
   ], { className: 'file-mode' });
 }
 
 function ago(t) {
   const m = Math.round((Date.now() - t) / 60000);
-  if (m < 1) return 'たった今';
-  if (m < 60) return `${m} 分前`;
-  if (m < 60 * 24) return `${Math.round(m / 60)} 時間前`;
-  if (m < 60 * 24 * 30) return `${Math.round(m / 60 / 24)} 日前`;
-  return new Date(t).toLocaleDateString();
+  if (m < 1) return tr('たった今');
+  if (m < 60) return tr('{0} 分前', [m]);
+  if (m < 60 * 24) return tr('{0} 時間前', [Math.round(m / 60)]);
+  if (m < 60 * 24 * 30) return tr('{0} 日前', [Math.round(m / 60 / 24)]);
+  return new Date(t).toLocaleDateString(locale);
 }
 
 // ======================================================================
@@ -507,7 +510,7 @@ async function showDb(key, param) {
   undo.clear();
   Object.assign($('db-name'), {
     value: dbLabel(), hidden: false, readOnly: !!state.file,
-    title: state.file ? 'ローカルファイルを直接編集しています' : 'クリックして名前を変更',
+    title: state.file ? tr('ローカルファイルを直接編集しています') : tr('クリックして名前を変更'),
   });
   await refreshObjects();
   const keys = allKeys();
@@ -540,14 +543,14 @@ function setTx(v) {
 
 async function beginTx() {
   if (state.grid && !(await state.grid.flushDraft())) return;
-  try { await db.begin(); toast('トランザクションを開始しました。確定するまで変更は保存されません'); }
+  try { await db.begin(); toast(tr('トランザクションを開始しました。確定するまで変更は保存されません')); }
   catch (e) { toast(friendlyError(e.message), 'error'); }
 }
 
 async function commitTx() {
   if (state.grid && !(await state.grid.flushDraft())) return false;
-  try { await db.commit(); toast('確定しました', 'success'); return true; }
-  catch (e) { toast('確定できませんでした：' + friendlyError(e.message), 'error'); return false; }
+  try { await db.commit(); toast(tr('確定しました'), 'success'); return true; }
+  catch (e) { toast(tr('確定できませんでした：') + friendlyError(e.message), 'error'); return false; }
 }
 
 async function rollbackTx() {
@@ -558,21 +561,21 @@ async function rollbackTx() {
     if (snap) undo.restore(snap);
     await refreshObjects();
     if (state.key) await showSheet(state.key, { keepView: true });
-    toast('取り消しました');
+    toast(tr('取り消しました'));
     return true;
-  } catch (e) { toast('取り消せませんでした：' + friendlyError(e.message), 'error'); return false; }
+  } catch (e) { toast(tr('取り消せませんでした：') + friendlyError(e.message), 'error'); return false; }
 }
 
 /** 離れる前に：トランザクション中なら確定か取り消しを選んでもらう */
 async function settleTx() {
   if (!state.inTx) return true;
   const c = await choiceDialog({
-    title: 'トランザクション中です',
-    body: '確定していない変更があります。どうしますか？',
+    title: tr('トランザクション中です'),
+    body: tr('確定していない変更があります。どうしますか？'),
     choices: [
-      { label: 'キャンセル', value: null },
-      { label: '取り消す（ROLLBACK）', value: 'rollback', danger: true },
-      { label: '確定する（COMMIT）', value: 'commit', primary: true },
+      { label: tr('キャンセル'), value: null },
+      { label: tr('取り消す（ROLLBACK）'), value: 'rollback', danger: true },
+      { label: tr('確定する（COMMIT）'), value: 'commit', primary: true },
     ],
   });
   if (c === 'commit') return commitTx();
@@ -586,10 +589,10 @@ function setDirty(v) {
   if (!b) return;
   b.hidden = !state.file;
   if (state.file) {
-    b.textContent = state.dirty ? '● 未保存' : '✓ 保存済み';
+    b.textContent = state.dirty ? tr('● 未保存') : tr('✓ 保存済み');
     b.classList.toggle('dirty', state.dirty);
     b.disabled = !state.dirty;
-    b.title = state.dirty ? `クリックしてファイルに保存（${MOD}S）` : 'ファイルに保存されています';
+    b.title = state.dirty ? tr('クリックしてファイルに保存（{0}S）', [MOD]) : tr('ファイルに保存されています');
   }
   if (state.dbName) setUrl(); // タブのタイトルの「● 」
 }
@@ -600,12 +603,12 @@ async function leaveCurrent() {
   if (!(await settleTx())) return false;
   if (!state.file || !state.dirty) return true;
   const c = await choiceDialog({
-    title: `「${state.file.name}」への変更を保存しますか？`,
-    body: '保存しないと、開いてから行った変更は失われます。',
+    title: tr('「{0}」への変更を保存しますか？', [state.file.name]),
+    body: tr('保存しないと、開いてから行った変更は失われます。'),
     choices: [
-      { label: 'キャンセル', value: null },
-      { label: '保存しない', value: 'discard' },
-      { label: '保存する', value: 'save', primary: true },
+      { label: tr('キャンセル'), value: null },
+      { label: tr('保存しない'), value: 'discard' },
+      { label: tr('保存する'), value: 'save', primary: true },
     ],
   });
   if (c === 'save') return saveFile();
@@ -636,11 +639,11 @@ async function openRecent(r) {
 
 async function enterFile(handle, { recentId = null } = {}) {
   try {
-    if (!(await files.ensurePermission(handle))) { toast('ファイルの読み書きが許可されなかったため、開けませんでした', 'error'); return; }
+    if (!(await files.ensurePermission(handle))) { toast(tr('ファイルの読み書きが許可されなかったため、開けませんでした'), 'error'); return; }
     await db.openFile(FILE + handle.name, handle);
   } catch (e) {
     if (e.name === 'NotFoundError' && recentId != null) {
-      if (await confirmDialog({ title: `「${handle.name}」が見つかりません`, body: 'ファイルが移動・削除・名前の変更をされた可能性があります。最近開いたファイルの一覧から消しますか？', okLabel: '一覧から消す' })) {
+      if (await confirmDialog({ title: tr('「{0}」が見つかりません', [handle.name]), body: tr('ファイルが移動・削除・名前の変更をされた可能性があります。最近開いたファイルの一覧から消しますか？'), okLabel: tr('一覧から消す') })) {
         await files.remove(recentId);
       }
       if (!state.dbName) showWelcome();
@@ -662,7 +665,7 @@ async function saveFile(force = false) {
   if (state.grid && !(await state.grid.flushDraft())) return false;
   try {
     await db.save(force);
-    toast(`「${state.file.name}」に保存しました`, 'success');
+    toast(tr('「{0}」に保存しました', [state.file.name]), 'success');
     return true;
   } catch (e) {
     if (e.message === 'CONFLICT') return resolveConflict({ saving: true });
@@ -677,7 +680,7 @@ async function reloadFile() {
   try { await db.openFile(FILE + handle.name, handle); } catch (e) { toast(friendlyError(e.message), 'error'); return false; }
   setDirty(false);
   await showDb(key);
-  toast(`「${handle.name}」を読み直しました`);
+  toast(tr('「{0}」を読み直しました', [handle.name]));
   return true;
 }
 
@@ -690,16 +693,16 @@ async function resolveConflict({ saving = false } = {}) {
     const name = state.file.name;
     if (!saving && !state.dirty) {
       // こちらに未保存の変更がなければ、読み直すかどうかだけ
-      if (await confirmDialog({ title: `「${name}」がほかのアプリで変更されました`, body: '読み直して、ファイルの今の内容を表示しますか？', okLabel: '読み直す' })) return reloadFile();
+      if (await confirmDialog({ title: tr('「{0}」がほかのアプリで変更されました', [name]), body: tr('読み直して、ファイルの今の内容を表示しますか？'), okLabel: tr('読み直す') })) return reloadFile();
       return false;
     }
     const c = await choiceDialog({
-      title: `「${name}」は、開いた後にほかのアプリで変更されています`,
-      body: 'どちらの内容を残すか選んでください。',
+      title: tr('「{0}」は、開いた後にほかのアプリで変更されています', [name]),
+      body: tr('どちらの内容を残すか選んでください。'),
       choices: [
-        { label: 'キャンセル', value: null },
-        { label: 'ファイルを読み直す', hint: 'この画面での変更を捨てる', value: 'reload' },
-        { label: '上書き保存', hint: 'ほかのアプリでの変更を捨てる', value: 'overwrite', danger: true },
+        { label: tr('キャンセル'), value: null },
+        { label: tr('ファイルを読み直す'), hint: tr('この画面での変更を捨てる'), value: 'reload' },
+        { label: tr('上書き保存'), hint: tr('ほかのアプリでの変更を捨てる'), value: 'overwrite', danger: true },
       ],
     });
     if (c === 'overwrite') { askingConflict = false; return saveFile(true); }
@@ -728,7 +731,7 @@ async function importFileToBrowser() {
   const base = state.file.name.replace(/\.(sqlite3?|db)$/i, '') || 'imported';
   let def = base, i = 2;
   while (state.dbs.includes(def)) def = `${base} (${i++})`;
-  const name = await ask($('file-btn'), { title: 'データベースとして取り込む名前', value: def, okLabel: '取り込む', validate: (v) => validDbName(v) || (state.dbs.includes(v) ? `「${v}」は既にあります` : null) });
+  const name = await ask($('file-btn'), { title: tr('データベースとして取り込む名前'), value: def, okLabel: tr('取り込む'), validate: (v) => validDbName(v) || (state.dbs.includes(v) ? tr('「{0}」は既にあります', [v]) : null) });
   if (!name) return;
   try {
     if (state.grid && !(await state.grid.flushDraft())) return;
@@ -737,7 +740,7 @@ async function importFileToBrowser() {
     store.copyDb(state.dbName, name);
     requestPersist();
     state.dbs = await db.list();
-    toast(`「${name}」としてデータベースに取り込みました（このファイルはそのまま開いています）`, 'success');
+    toast(tr('「{0}」としてデータベースに取り込みました（このファイルはそのまま開いています）', [name]), 'success');
   } catch (e) { toast(friendlyError(e.message), 'error'); }
 }
 
@@ -753,16 +756,16 @@ async function requestPersist() {
 }
 
 function validDbName(v) {
-  if (!v) return '名前を入力してください';
-  if (/[\\/:*?"<>|]/.test(v)) return '使えない文字が含まれています（\\ / : * ? " < > |）';
+  if (!v) return tr('名前を入力してください');
+  if (/[\\/:*?"<>|]/.test(v)) return tr('使えない文字が含まれています（\\ / : * ? " < > |）');
   return null;
 }
 
 async function newDb(anchor) {
   if (!(await leaveCurrent())) return;
   const name = await ask(anchor instanceof Element ? anchor : $('file-btn'), {
-    title: '新しいデータベース', value: uniqueName('データベース', state.dbs), placeholder: '名前', okLabel: '作成',
-    validate: (v) => validDbName(v) || (state.dbs.includes(v) ? `「${v}」は既にあります` : null),
+    title: tr('新しいデータベース'), value: uniqueName(tr('データベース'), state.dbs), placeholder: tr('名前'), okLabel: tr('作成'),
+    validate: (v) => validDbName(v) || (state.dbs.includes(v) ? tr('「{0}」は既にあります', [v]) : null),
   });
   if (!name) return;
   try {
@@ -773,14 +776,14 @@ async function newDb(anchor) {
     state.dbs = await db.list();
     state.dbName = null;
     await openDb(name);
-    toast(`「${name}」を作成しました`, 'success');
+    toast(tr('「{0}」を作成しました', [name]), 'success');
   } catch (e) { toast(friendlyError(e.message), 'error'); }
 }
 
 async function makeSample() {
   if (!(await leaveCurrent())) return;
-  let name = 'サンプル', i = 2;
-  while (state.dbs.includes(name)) name = `サンプル${i++}`;
+  let name = tr('サンプル'), i = 2;
+  while (state.dbs.includes(name)) name = tr('サンプル{0}', [i++]);
   try {
     store.removeDb(name); // 同名で作り直したときに前の DB の設定を引き継がない
     await db.create(name);
@@ -791,7 +794,7 @@ async function makeSample() {
     state.dbs = await db.list();
     state.dbName = null;
     await openDb(name);
-    toast('サンプルの DB を作成しました', 'success');
+    toast(tr('サンプルの DB を作成しました'), 'success');
   } catch (e) { toast(friendlyError(e.message), 'error'); }
 }
 
@@ -804,11 +807,11 @@ async function pickSqlite() {
 async function importFile(file) {
   const bytes = new Uint8Array(await file.arrayBuffer());
   const header = new TextDecoder().decode(bytes.slice(0, 15));
-  if (header !== 'SQLite format 3') { toast('SQLite のデータベースファイルではありません', 'error'); return; }
+  if (header !== 'SQLite format 3') { toast(tr('SQLite のデータベースファイルではありません'), 'error'); return; }
   let name = file.name.replace(/\.(sqlite3?|db)$/i, '') || 'imported';
   const base = name; let i = 2;
   while (state.dbs.includes(name)) name = `${base} (${i++})`;
-  name = await ask($('file-btn'), { title: 'このファイルを読み込む名前', value: name, okLabel: '読み込む', validate: (v) => validDbName(v) || (state.dbs.includes(v) ? `「${v}」は既にあります` : null) });
+  name = await ask($('file-btn'), { title: tr('このファイルを読み込む名前'), value: name, okLabel: tr('読み込む'), validate: (v) => validDbName(v) || (state.dbs.includes(v) ? tr('「{0}」は既にあります', [v]) : null) });
   if (!name) return;
   if (!(await leaveCurrent())) return;
   try {
@@ -818,7 +821,7 @@ async function importFile(file) {
     state.dbs = await db.list();
     state.dbName = null;
     await openDb(name);
-    toast(`「${name}」を読み込みました`, 'success');
+    toast(tr('「{0}」を読み込みました', [name]), 'success');
   } catch (e) { toast(friendlyError(e.message), 'error'); }
 }
 
@@ -839,7 +842,7 @@ async function exportCurrent(name = state.dbName) {
     const bytes = await db.exportDb(name);
     const w = await handle.createWritable();
     await w.write(bytes); await w.close();
-    toast(`「${handle.name}」に書き出しました`, 'success');
+    toast(tr('「{0}」に書き出しました', [handle.name]), 'success');
   } catch (e) { toast(friendlyError(e.message), 'error'); }
 }
 
@@ -849,11 +852,11 @@ async function exportCurrent(name = state.dbName) {
  */
 function dbActions(name, { anchor, home = false } = {}) {
   return [
-    home ? { label: '開く', icon: '↗', action: () => openDb(name) } : null,
-    { label: 'ファイルに書き出す…', icon: '⤓', action: () => exportCurrent(name) },
-    { label: '名前を変更…', icon: '✎', action: () => (home ? renameDbAsk(name, anchor) : (() => { $('db-name').focus(); $('db-name').select(); })()) },
-    { label: '複製…', icon: '⧉', action: () => copyDb(name, anchor) },
-    { label: '削除…', icon: '🗑', danger: true, action: () => deleteDb(name) },
+    home ? { label: tr('開く'), icon: '↗', action: () => openDb(name) } : null,
+    { label: tr('ファイルに書き出す…'), icon: '⤓', action: () => exportCurrent(name) },
+    { label: tr('名前を変更…'), icon: '✎', action: () => (home ? renameDbAsk(name, anchor) : (() => { $('db-name').focus(); $('db-name').select(); })()) },
+    { label: tr('複製…'), icon: '⧉', action: () => copyDb(name, anchor) },
+    { label: tr('削除…'), icon: '🗑', danger: true, action: () => deleteDb(name) },
   ].filter(Boolean);
 }
 
@@ -861,19 +864,19 @@ function dbMenu(anchor, { list = false } = {}) {
   const items = [];
   // 今開いているもの
   if (state.file) {
-    items.push({ header: `📄 ${state.file.name}（ローカルファイルを直接編集中）` },
-      { label: '保存', icon: '💾', kbd: `${MOD}S`, disabled: !state.dirty, action: () => saveFile() },
-      { label: 'データベースとして取り込む…', icon: '⤒', action: importFileToBrowser },
-      { label: 'ファイルを閉じる', icon: '✕', action: closeFile }, '-');
+    items.push({ header: tr('📄 {0}（ローカルファイルを直接編集中）', [state.file.name]) },
+      { label: tr('保存'), icon: '💾', kbd: `${MOD}S`, disabled: !state.dirty, action: () => saveFile() },
+      { label: tr('データベースとして取り込む…'), icon: '⤒', action: importFileToBrowser },
+      { label: tr('ファイルを閉じる'), icon: '✕', action: closeFile }, '-');
   } else if (state.dbName) {
     items.push({ header: el('span.menu-header-db', appIcon(), state.dbName) }, ...dbActions(state.dbName, { anchor }), '-');
   }
-  items.push({ header: 'データベース' });
+  items.push({ header: tr('データベース') });
   for (const n of state.dbs) items.push({ label: n, icon: n === state.dbName ? '✓' : appIcon(), action: () => { if (n !== state.dbName) openDb(n); } });
-  items.push({ label: '新規作成…', icon: '＋', action: () => newDb(anchor) },
-    { label: '.sqlite ファイルを取り込む…', icon: '⤒', action: pickSqlite },
-    { label: 'サンプルを作成', icon: '✨', action: makeSample });
-  if (files.supported) items.push('-', { label: 'ローカルファイルを直接編集…', icon: '📂', action: fileModeDialog });
+  items.push({ label: tr('新規作成…'), icon: tr('＋'), action: () => newDb(anchor) },
+    { label: tr('.sqlite ファイルを取り込む…'), icon: '⤒', action: pickSqlite },
+    { label: tr('サンプルを作成'), icon: '✨', action: makeSample });
+  if (files.supported) items.push('-', { label: tr('ローカルファイルを直接編集…'), icon: '📂', action: fileModeDialog });
   if (list) return items;
   menu(anchor, items);
 }
@@ -881,14 +884,14 @@ function dbMenu(anchor, { list = false } = {}) {
 // ---------- メニューバーの各メニュー ----------
 function editItems() {
   return [
-    { label: undo.canUndo() ? `元に戻す：${undo.peekUndo()}` : '元に戻す', icon: '↶', kbd: `${MOD}Z`, disabled: !undo.canUndo(), action: doUndo },
-    { label: undo.canRedo() ? `やり直す：${undo.peekRedo()}` : 'やり直す', icon: '↷', kbd: `${MOD}Y`, disabled: !undo.canRedo(), action: doRedo },
+    { label: undo.canUndo() ? tr('元に戻す：{0}', [undo.peekUndo()]) : tr('元に戻す'), icon: '↶', kbd: `${MOD}Z`, disabled: !undo.canUndo(), action: doUndo },
+    { label: undo.canRedo() ? tr('やり直す：{0}', [undo.peekRedo()]) : tr('やり直す'), icon: '↷', kbd: `${MOD}Y`, disabled: !undo.canRedo(), action: doRedo },
   ];
 }
 
 /** 「表示形式」メニュー */
 function formatItems() {
-  return [{ header: 'テキストの折り返し' }, ...wrapItems()];
+  return [{ header: tr('テキストの折り返し') }, ...wrapItems()];
 }
 
 /**
@@ -897,12 +900,12 @@ function formatItems() {
  */
 function wrapItems(cols) {
   const g = state.grid;
-  if (!g) return [{ label: '折り返す', icon: '', disabled: true }, { label: '切り詰める', icon: '', disabled: true }];
+  if (!g) return [{ label: tr('折り返す'), icon: '', disabled: true }, { label: tr('切り詰める'), icon: '', disabled: true }];
   const targets = cols ?? g.selectedCols();
   const on = targets.filter((c) => g.isWrap(c)).length;
   return [
-    { label: '折り返す', icon: on === targets.length ? '✓' : '', action: () => g.setWrap(targets, true) },
-    { label: '切り詰める', icon: on === 0 ? '✓' : '', action: () => g.setWrap(targets, false) },
+    { label: tr('折り返す'), icon: on === targets.length ? '✓' : '', action: () => g.setWrap(targets, true) },
+    { label: tr('切り詰める'), icon: on === 0 ? '✓' : '', action: () => g.setWrap(targets, false) },
   ];
 }
 
@@ -911,38 +914,52 @@ function dataItems() {
   const name = state.key?.slice(2), locked = isTable && state.lockedSheets?.has(name);
   const anchor = $('prot-btn');
   return [
-    { header: '保護' },
-    { label: '保護されたシートと範囲…', icon: '🔒', disabled: !isTable, action: () => protPanel(anchor) },
+    { header: tr('保護') },
+    { label: tr('保護されたシートと範囲…'), icon: '🔒', disabled: !isTable, action: () => protPanel(anchor) },
     locked
-      ? { label: 'シートの保護を外す…', icon: '🔓', action: () => unprotect(state.prots.find((p) => p.kind === 'sheet')) }
-      : { label: 'シート全体を保護…', icon: '🔒', disabled: !isTable, action: () => protect({ kind: 'sheet' }, anchor) },
-    { label: '選択範囲を保護…', icon: '▦', disabled: !isTable || !state.grid, action: () => protectSelection(anchor) },
+      ? { label: tr('シートの保護を外す…'), icon: '🔓', action: () => unprotect(state.prots.find((p) => p.kind === 'sheet')) }
+      : { label: tr('シート全体を保護…'), icon: '🔒', disabled: !isTable, action: () => protect({ kind: 'sheet' }, anchor) },
+    { label: tr('選択範囲を保護…'), icon: '▦', disabled: !isTable || !state.grid, action: () => protectSelection(anchor) },
     '-',
-    { header: 'トランザクション' },
+    { header: tr('トランザクション') },
     ...(state.inTx
-      ? [{ label: '確定（COMMIT）', icon: '✓', action: commitTx },
-        { label: '取り消し（ROLLBACK）', icon: '↶', danger: true, action: rollbackTx }]
-      : [{ label: 'トランザクションを開始', icon: '⧗', action: beginTx }]),
+      ? [{ label: tr('確定（COMMIT）'), icon: '✓', action: commitTx },
+        { label: tr('取り消し（ROLLBACK）'), icon: '↶', danger: true, action: rollbackTx }]
+      : [{ label: tr('トランザクションを開始'), icon: '⧗', action: beginTx }]),
   ];
 }
 
 function toolItems() {
   const isTable = state.key?.[0] === 't' && !!state.model;
   return [
-    { label: 'テーブルの設計', icon: '⚙', disabled: !isTable, action: () => togglePanel() },
-    { label: 'SQL コンソール', icon: '⌨', kbd: `${MOD}\``, action: () => toggleConsole() },
-    { label: 'コマンド', icon: '⌕', kbd: `${MOD}K`, action: () => palette() },
+    { label: tr('テーブルの設計'), icon: '⚙', disabled: !isTable, action: () => togglePanel() },
+    { label: tr('SQL コンソール'), icon: '⌨', kbd: `${MOD}\``, action: () => toggleConsole() },
+    { label: tr('コマンド'), icon: '⌕', kbd: `${MOD}K`, action: () => palette() },
+    '-', ...langItems(),
   ];
+}
+
+/** ホーム・ドロワーの下の、言語の切り替え（日本語 | English） */
+function langSwitch() {
+  return el('span.home-lang', { title: 'Language / 言語' }, ...Object.entries(LANGS).map(([k, label]) => el('button.lang-btn', {
+    class: k === lang ? 'on' : '', 'aria-pressed': String(k === lang), on: { click: () => { if (k !== lang) setLang(k); } },
+  }, label)));
+}
+
+/** 言語の切り替え（見出しは両方の言語で書き、どちらの人にも見つけられるように） */
+function langItems() {
+  return [{ header: 'Language / 言語' },
+    ...Object.entries(LANGS).map(([k, label]) => ({ label, icon: k === lang ? '✓' : '', action: () => { if (k !== lang) setLang(k); } }))];
 }
 
 /** 狭い画面：メニューバーの中身を1つのメニューに */
 function allMenu(anchor) {
   menu(anchor, [
-    { header: 'ファイル' }, ...dbMenu(anchor, { list: true }), '-',
-    { header: '編集' }, ...editItems(), '-',
+    { header: tr('ファイル') }, ...dbMenu(anchor, { list: true }), '-',
+    { header: tr('編集') }, ...editItems(), '-',
     ...formatItems(), '-',
     ...dataItems(), '-',
-    { header: 'ツール' }, ...toolItems(),
+    { header: tr('ツール') }, ...toolItems(),
   ]);
 }
 
@@ -959,7 +976,7 @@ let renaming = false;
 async function commitDbName(value) {
   const from = state.dbName, to = value.trim(), input = $('db-name');
   if (!from || renaming || state.file) return; // ファイルの名前はここでは変えない
-  const err = to === from ? null : validDbName(to) || (state.dbs.includes(to) ? `「${to}」は既にあります` : null);
+  const err = to === from ? null : validDbName(to) || (state.dbs.includes(to) ? tr('「{0}」は既にあります', [to]) : null);
   if (to === from || err) {
     if (err) toast(err, 'error');
     input.value = from;
@@ -983,8 +1000,8 @@ async function commitDbName(value) {
 // ホームの「⋯」から名前を変える（開いていない DB）
 async function renameDbAsk(from, anchor) {
   const to = await ask(anchor, {
-    title: '新しい名前', value: from, okLabel: '変更',
-    validate: (v) => (v === from ? null : validDbName(v) || (state.dbs.includes(v) ? `「${v}」は既にあります` : null)),
+    title: tr('新しい名前'), value: from, okLabel: tr('変更'),
+    validate: (v) => (v === from ? null : validDbName(v) || (state.dbs.includes(v) ? tr('「{0}」は既にあります', [v]) : null)),
   });
   if (!to || to === from) return;
   try {
@@ -992,16 +1009,16 @@ async function renameDbAsk(from, anchor) {
     store.renameDb(from, to);
     state.dbs = await db.list();
     showWelcome();
-    toast(`「${from}」を「${to}」に変更しました`);
+    toast(tr('「{0}」を「{1}」に変更しました', [from, to]));
   } catch (e) { toast(friendlyError(e.message), 'error'); }
 }
 
 // 複製。シート画面からなら複製を開き、ホームからなら一覧に加えるだけ
 async function copyDb(from = state.dbName, anchor = $('file-btn')) {
   const opened = from === state.dbName;
-  let def = `${from} のコピー`, i = 2;
-  while (state.dbs.includes(def)) def = `${from} のコピー ${i++}`;
-  const to = await ask(anchor, { title: '複製先の名前', value: def, okLabel: '複製', validate: (v) => validDbName(v) || (state.dbs.includes(v) ? `「${v}」は既にあります` : null) });
+  let def = tr('{0} のコピー', [from]), i = 2;
+  while (state.dbs.includes(def)) def = tr('{0} のコピー {1}', [from, i++]);
+  const to = await ask(anchor, { title: tr('複製先の名前'), value: def, okLabel: tr('複製'), validate: (v) => validDbName(v) || (state.dbs.includes(v) ? tr('「{0}」は既にあります', [v]) : null) });
   if (!to) return;
   try {
     await db.copy(from, to);
@@ -1009,17 +1026,17 @@ async function copyDb(from = state.dbName, anchor = $('file-btn')) {
     store.duplicateDb(from, to);
     state.dbs = await db.list();
     if (opened) { state.dbName = null; await openDb(to); } else showWelcome();
-    toast(`「${to}」を作成しました`, 'success');
+    toast(tr('「{0}」を作成しました', [to]), 'success');
   } catch (e) { toast(friendlyError(e.message), 'error'); }
 }
 
 async function deleteDb(name = state.dbName) {
-  if (!await confirmDialog({ title: `「${name}」を削除しますか？`, body: 'データベースのすべてのデータが失われ、元に戻せません。必要なら先に書き出してください。', okLabel: '削除', danger: true })) return;
+  if (!await confirmDialog({ title: tr('「{0}」を削除しますか？', [name]), body: tr('データベースのすべてのデータが失われ、元に戻せません。必要なら先に書き出してください。'), okLabel: tr('削除'), danger: true })) return;
   try {
     await db.remove(name);
     store.removeDb(name);
     state.dbs = await db.list();
-    toast(`「${name}」を削除しました`);
+    toast(tr('「{0}」を削除しました', [name]));
     if (name === state.dbName) state.dbName = null;
     showWelcome();
   } catch (e) { toast(friendlyError(e.message), 'error'); }
@@ -1056,7 +1073,7 @@ function allKeys() {
 
 const tableNames = () => state.objects.filter((o) => o.type === 'table').map((o) => o.name);
 const KIND_ICON = { t: '▦', v: '◫', q: '⌕' };
-const KIND_NAME = { t: 'テーブル', v: 'ビュー', q: 'クエリ' };
+const KIND_NAME = { t: tr('テーブル'), v: tr('ビュー'), q: tr('クエリ') };
 
 function renderTabs() {
   const tabs = $('tabs');
@@ -1064,7 +1081,7 @@ function renderTabs() {
     const kind = key[0], name = key.slice(2);
     return el('button.tab', {
       class: (key === state.key ? 'on ' : '') + 'k-' + kind,
-      title: `${KIND_NAME[kind]}：${name}`,
+      title: tr('{0}：{1}', [KIND_NAME[kind], name]),
       on: {
         // タッチ：開いているタブをもう一度タップするか、長押しでタブのメニュー（スプレッドシートのアプリと同じ）
         click: (e) => {
@@ -1075,7 +1092,7 @@ function renderTabs() {
         dblclick: (e) => renameSheet(key, e.currentTarget),
         contextmenu: (e) => { e.preventDefault(); if (e.pointerType !== 'touch') tabMenu(key, e.currentTarget); },
       },
-    }, el('span.tab-icon', KIND_ICON[kind]), name, kind === 't' && state.lockedSheets?.has(name) ? el('span.tab-lock', { title: 'シート全体が保護されています' }, '🔒') : null);
+    }, el('span.tab-icon', KIND_ICON[kind]), name, kind === 't' && state.lockedSheets?.has(name) ? el('span.tab-lock', { title: tr('シート全体が保護されています') }, '🔒') : null);
   }));
   tabs.querySelector('.tab.on')?.scrollIntoView({ inline: 'nearest', block: 'nearest' });
   // 上部のパンくず：DB 名 › 今のシート
@@ -1087,25 +1104,25 @@ function renderTabs() {
 function tabMenu(key, anchor) {
   const kind = key[0], name = key.slice(2);
   menu(anchor, [
-    { header: `${KIND_NAME[kind]}：${name}` },
-    { label: '名前を変更…', icon: '✎', action: () => renameSheet(key, anchor) },
-    kind === 't' ? { label: '複製…', icon: '⧉', action: () => duplicateTable(name, anchor) } : null,
+    { header: tr('{0}：{1}', [KIND_NAME[kind], name]) },
+    { label: tr('名前を変更…'), icon: '✎', action: () => renameSheet(key, anchor) },
+    kind === 't' ? { label: tr('複製…'), icon: '⧉', action: () => duplicateTable(name, anchor) } : null,
     kind === 't' ? (state.lockedSheets?.has(name)
-      ? { label: 'シートの保護を外す…', icon: '🔓', action: () => withSheet(key, () => unprotect(state.prots.find((p) => p.kind === 'sheet'))) }
-      : { label: 'シートを保護…', icon: '🔒', action: () => withSheet(key, () => protect({ kind: 'sheet' }, anchor)) }) : null,
-    kind !== 'q' ? { label: 'SQL コンソールで SELECT', icon: '⌨', action: () => sqlConsole.insert(`SELECT * FROM ${q(name)};`) } : null,
-    kind === 't' ? { label: 'CSV で書き出し', icon: '⤓', action: () => exportCsv(key) } : { label: 'CSV で書き出し', icon: '⤓', action: () => exportCsv(key) },
+      ? { label: tr('シートの保護を外す…'), icon: '🔓', action: () => withSheet(key, () => unprotect(state.prots.find((p) => p.kind === 'sheet'))) }
+      : { label: tr('シートを保護…'), icon: '🔒', action: () => withSheet(key, () => protect({ kind: 'sheet' }, anchor)) }) : null,
+    kind !== 'q' ? { label: tr('SQL コンソールで SELECT'), icon: '⌨', action: () => sqlConsole.insert(`SELECT * FROM ${q(name)};`) } : null,
+    kind === 't' ? { label: tr('CSV で書き出し'), icon: '⤓', action: () => exportCsv(key) } : { label: tr('CSV で書き出し'), icon: '⤓', action: () => exportCsv(key) },
     '-',
-    { label: '削除…', icon: '🗑', danger: true, action: () => deleteSheet(key) },
+    { label: tr('削除…'), icon: '🗑', danger: true, action: () => deleteSheet(key) },
   ].filter(Boolean), { });
 }
 
 function addSheetMenu(anchor) {
   if (!state.dbName) return;
   menu(anchor, [
-    { label: '新しいテーブル', icon: '▦', action: () => newTable(anchor) },
-    { label: '新しいクエリ', icon: '⌕', action: () => newQuery() },
-    { label: 'ファイルから表を作成（CSV/TSV）…', icon: '⤒', action: () => importCsv() },
+    { label: tr('新しいテーブル'), icon: '▦', action: () => newTable(anchor) },
+    { label: tr('新しいクエリ'), icon: '⌕', action: () => newQuery() },
+    { label: tr('ファイルから表を作成（CSV/TSV）…'), icon: '⤒', action: () => importCsv() },
   ]);
 }
 
@@ -1123,19 +1140,19 @@ function saveQueries() { store.setQueries(state.dbName, state.queries); }
 
 async function newTable(anchor) {
   const name = await ask(anchor, {
-    title: '新しいテーブル', value: uniqueName('テーブル', objNames()), okLabel: '作成',
-    validate: (v) => !v ? '名前を入力してください' : objNames().includes(v) ? `「${v}」は既にあります` : null,
+    title: tr('新しいテーブル'), value: uniqueName(tr('テーブル'), objNames()), okLabel: tr('作成'),
+    validate: (v) => !v ? tr('名前を入力してください') : objNames().includes(v) ? tr('「{0}」は既にあります', [v]) : null,
   });
   if (!name) return;
   try {
-    await db.exec(`CREATE TABLE ${q(name)} (\n  "id" INTEGER PRIMARY KEY,\n  "名前" TEXT\n) STRICT`);
+    await db.exec(tr('CREATE TABLE {0} (\n  "id" INTEGER PRIMARY KEY,\n  "名前" TEXT\n) STRICT', [q(name)]));
     await refreshObjects();
     await showSheet('t:' + name);
-    toast('テーブルを作成しました。列は見出しの ＋ か「⚙ 設計」から追加できます。');
+    toast(tr('テーブルを作成しました。列は見出しの ＋ か「⚙ 設計」から追加できます。'));
   } catch (e) { toast(friendlyError(e.message), 'error'); }
 }
 
-async function newQuery(sql, base = 'クエリ') {
+async function newQuery(sql, base = tr('クエリ')) {
   const name = uniqueName(base, queryNames());
   const first = tableNames()[0];
   sql ??= first ? `SELECT *\nFROM ${q(first)}\nLIMIT 100` : 'SELECT 1';
@@ -1156,15 +1173,15 @@ function viewSelect(sql) {
 async function renameSheet(key, anchor) {
   const kind = key[0], name = key.slice(2);
   const to = await ask(anchor, {
-    title: `${KIND_NAME[kind]}の名前を変更`, value: name, okLabel: '変更',
-    validate: (v) => !v ? '名前を入力してください' : v !== name && namesFor(kind).includes(v) ? `「${v}」は既にあります` : null,
+    title: tr('{0}の名前を変更', [KIND_NAME[kind]]), value: name, okLabel: tr('変更'),
+    validate: (v) => !v ? tr('名前を入力してください') : v !== name && namesFor(kind).includes(v) ? tr('「{0}」は既にあります', [v]) : null,
   });
   if (!to || to === name) return;
   try {
     await doRenameSheet(kind, name, to);
     // 名前の変更も元に戻せる（戻すときは、どのシートを開いていても名前だけを戻す）
     undo.push({
-      label: `${KIND_NAME[kind]}「${name}」→「${to}」の名前の変更`,
+      label: tr('{0}「{1}」→「{2}」の名前の変更', [KIND_NAME[kind], name, to]),
       undoSheet: kind + ':' + name, redoSheet: kind + ':' + to,
       undoFn: () => doRenameSheet(kind, to, name),
       redoFn: () => doRenameSheet(kind, name, to),
@@ -1233,9 +1250,9 @@ async function deleteSheet(key) {
   let body = '';
   if (kind === 't') {
     const n = (await db.query(`SELECT count(*) FROM ${q(name)}`)).rows[0][0];
-    body = `${n} 行のデータとインデックス・トリガーも削除されます。元に戻せません。`;
+    body = tr('{0} 行のデータとインデックス・トリガーも削除されます。元に戻せません。', [n]);
   }
-  if (!await confirmDialog({ title: `${KIND_NAME[kind]}「${name}」を削除しますか？`, body, okLabel: '削除', danger: true })) return;
+  if (!await confirmDialog({ title: tr('{0}「{1}」を削除しますか？', [KIND_NAME[kind], name]), body, okLabel: tr('削除'), danger: true })) return;
   try {
     const idx = allKeys().indexOf(key); // 消す前の位置（隣のシートを開くため）
     if (kind === 't') await db.exec(`DROP TABLE ${q(name)}`);
@@ -1249,7 +1266,7 @@ async function deleteSheet(key) {
 }
 
 async function duplicateTable(name, anchor) {
-  const to = await ask(anchor, { title: 'テーブルを複製', value: uniqueName(name + '_copy', objNames()), okLabel: '複製', validate: (v) => !v ? '名前を入力してください' : objNames().includes(v) ? `「${v}」は既にあります` : null });
+  const to = await ask(anchor, { title: tr('テーブルを複製'), value: uniqueName(name + '_copy', objNames()), okLabel: tr('複製'), validate: (v) => !v ? tr('名前を入力してください') : objNames().includes(v) ? tr('「{0}」は既にあります', [v]) : null });
   if (!to) return;
   try {
     const m = await readTable(name);
@@ -1310,10 +1327,10 @@ async function showSheet(key, { keepView = true } = {}) {
     updateStatus();
     $('sheet-head').replaceChildren();
     $('grid-host').replaceChildren(el('div.empty-db',
-      el('h2', 'まだシートがありません'),
-      el('p.muted', 'テーブルを作るか、SQL コンソールから CREATE TABLE を実行してください。'),
-      el('div.row-gap', el('button.btn.primary', { on: { click: (e) => addSheetMenu(e.currentTarget) } }, '＋ 追加'),
-        el('button.btn', { on: { click: () => toggleConsole(true) } }, '⌨ SQL を書く'))));
+      el('h2', tr('まだシートがありません')),
+      el('p.muted', tr('テーブルを作るか、SQL コンソールから CREATE TABLE を実行してください。')),
+      el('div.row-gap', el('button.btn.primary', { on: { click: (e) => addSheetMenu(e.currentTarget) } }, tr('＋ 追加')),
+        el('button.btn', { on: { click: () => toggleConsole(true) } }, tr('⌨ SQL を書く')))));
     updatePanel();
     return;
   }
@@ -1369,24 +1386,24 @@ function renderSheetHead(kind, name, error) {
   if (kind === 'q' || kind === 'v') parts.push(queryEditor(kind, name, error));
   const view = viewOf(state.key);
   const chips = el('div.chips',
-    view.sorts.length ? el('span.sort-chips', { title: '並べ替え（左ほど優先）' },
+    view.sorts.length ? el('span.sort-chips', { title: tr('並べ替え（左ほど優先）') },
       view.sorts.flatMap((s, i) => [
         i ? el('span.sort-sep', '›') : null,
         el('span.chip.sort', {
           class: i === 0 && state.justSorted === s.col ? 'flash' : '',
-          title: view.sorts.length > 1 ? 'クリックで昇順／降順を切り替え・ドラッグで優先順位を変更' : 'クリックで昇順／降順を切り替え',
+          title: view.sorts.length > 1 ? tr('クリックで昇順／降順を切り替え・ドラッグで優先順位を変更') : tr('クリックで昇順／降順を切り替え'),
           dataset: { i },
           on: { pointerdown: (e) => sortChipPointer(e, i) },
         }, view.sorts.length > 1 ? el('span.chip-grip', '⋮⋮') : null, `${s.dir === 'asc' ? '↑' : '↓'} ${s.col}`,
-        el('button.chip-x', { title: 'この並べ替えを解除', on: { click: () => removeSort(s.col) } }, '×')),
+        el('button.chip-x', { title: tr('この並べ替えを解除'), on: { click: () => removeSort(s.col) } }, '×')),
       ])) : null,
     view.filters.map((f, i) => el('span.chip.filter', {
-      title: 'クリックで編集',
+      title: tr('クリックで編集'),
       on: { click: (e) => { if (!e.target.closest('.chip-x')) filterPopover(e.currentTarget, f.col, i); } },
-    }, `${f.col} ${FILTER_OPS.find((o) => o.id === f.op)?.label.replace(/^\S+ /, '') ?? f.op}${FILTER_OPS.find((o) => o.id === f.op)?.noValue ? '' : ' 「' + f.value + '」'}`,
-    el('button.chip-x', { title: '絞り込みを解除', on: { click: () => { view.filters.splice(i, 1); reloadSheet(); } } }, '×'))),
+    }, `${f.col} ${FILTER_OPS.find((o) => o.id === f.op)?.label.replace(/^\S+ /, '') ?? f.op}${FILTER_OPS.find((o) => o.id === f.op)?.noValue ? '' : tr(' 「') + f.value + tr('」')}`,
+    el('button.chip-x', { title: tr('絞り込みを解除'), on: { click: () => { view.filters.splice(i, 1); reloadSheet(); } } }, '×'))),
     el('span.grow'),
-    kind === 't' && state.source ? el('code.sheet-sql', { title: 'このシートが実行している SQL' }, state.source.displaySql()) : null,
+    kind === 't' && state.source ? el('code.sheet-sql', { title: tr('このシートが実行している SQL') }, state.source.displaySql()) : null,
   );
   // 並べ替え・絞り込みがあるときだけ出す
   if (view.sorts.length || view.filters.length) parts.push(chips);
@@ -1411,7 +1428,7 @@ function queryEditor(kind, name, error) {
       input: () => { ta.rows = Math.min(14, Math.max(3, ta.value.split('\n').length)); dirtyMark.hidden = ta.value === original; },
     },
   });
-  const dirtyMark = el('span.dirty-dot', { hidden: true, title: '未実行の変更' }, '●');
+  const dirtyMark = el('span.dirty-dot', { hidden: true, title: tr('未実行の変更') }, '●');
   const err = el('div.query-error', error ? friendlyError(error.message) : '');
   async function run() {
     const sql = ta.value.trim().replace(/;+\s*$/, '');
@@ -1432,28 +1449,28 @@ function queryEditor(kind, name, error) {
   }
   const actions = isView
     ? el('div.query-actions',
-      el('span.muted.sm', 'ビューの定義'),
+      el('span.muted.sm', tr('ビューの定義')),
       el('span.grow'),
-      el('button.btn.sm', { on: { click: (e) => { ta.readOnly = false; ta.focus(); e.currentTarget.remove(); saveBtn.hidden = false; } } }, '✎ 編集'),
-      el('button.btn.sm', { on: { click: () => newQuery(original, name + 'のクエリ') } }, 'クエリとして複製'),
-      Object.assign(el('button.btn.primary.sm', { hidden: true, on: { click: run } }, 'ビューを更新'), {}))
+      el('button.btn.sm', { on: { click: (e) => { ta.readOnly = false; ta.focus(); e.currentTarget.remove(); saveBtn.hidden = false; } } }, tr('✎ 編集')),
+      el('button.btn.sm', { on: { click: () => newQuery(original, name + tr('のクエリ')) } }, tr('クエリとして複製')),
+      Object.assign(el('button.btn.primary.sm', { hidden: true, on: { click: run } }, tr('ビューを更新')), {}))
     : el('div.query-actions',
-      el('span.muted.sm', `${MOD}Enter で実行`), dirtyMark,
+      el('span.muted.sm', tr('{0}Enter で実行', [MOD])), dirtyMark,
       el('span.grow'),
-      el('button.btn.sm', { on: { click: () => saveAsView(name, ta.value) } }, '◫ ビューとして保存'),
-      el('button.btn.primary.sm', { on: { click: run } }, '▶ 実行'));
+      el('button.btn.sm', { on: { click: () => saveAsView(name, ta.value) } }, tr('◫ ビューとして保存')),
+      el('button.btn.primary.sm', { on: { click: run } }, tr('▶ 実行')));
   const saveBtn = actions.querySelector('.btn.primary');
   return el('div.query-box', { class: isView ? 'readonly' : '' }, ta, actions, err);
 }
 
 async function saveAsView(queryName, sql) {
   sql = sql.trim().replace(/;+\s*$/, '');
-  const name = await ask($('sheet-head'), { title: 'ビューの名前', value: uniqueName(queryName, objNames()), okLabel: '作成', validate: (v) => !v ? '名前を入力してください' : objNames().includes(v) ? `「${v}」は既にあります` : null });
+  const name = await ask($('sheet-head'), { title: tr('ビューの名前'), value: uniqueName(queryName, objNames()), okLabel: tr('作成'), validate: (v) => !v ? tr('名前を入力してください') : objNames().includes(v) ? tr('「{0}」は既にあります', [v]) : null });
   if (!name) return;
   try {
     await db.exec(`CREATE VIEW ${q(name)} AS ${sql}`);
     // 同名ならクエリをビューに置き換える。別名なら元のクエリを残すか尋ねる
-    if (name === queryName || await confirmDialog({ title: 'ビューを作成しました', body: `元のクエリ「${queryName}」は削除しますか？`, okLabel: '削除する' })) {
+    if (name === queryName || await confirmDialog({ title: tr('ビューを作成しました'), body: tr('元のクエリ「{0}」は削除しますか？', [queryName]), okLabel: tr('削除する') })) {
       state.queries = state.queries.filter((x) => x.name !== queryName);
       saveQueries();
     }
@@ -1524,7 +1541,7 @@ function filterPopover(anchor, colName, index) {
   const cur = index != null ? view.filters[index] : { col: colName, op: 'eq', value: '' };
   const colSel = el('select.input', state.source.columns.map((c) => el('option', { value: c.name, selected: c.name === cur.col }, c.name)));
   const opSel = el('select.input', FILTER_OPS.map((o) => el('option', { value: o.id, selected: o.id === cur.op }, o.label)));
-  const val = el('input.input', { value: cur.value ?? '', placeholder: '値', autofocus: true });
+  const val = el('input.input', { value: cur.value ?? '', placeholder: tr('値'), autofocus: true });
   const sync = () => { val.hidden = FILTER_OPS.find((o) => o.id === opSel.value)?.noValue; };
   opSel.addEventListener('change', sync); sync();
   const apply = () => {
@@ -1534,11 +1551,11 @@ function filterPopover(anchor, colName, index) {
     reloadSheet();
   };
   popover(anchor, el('form.filter-form', { on: { submit: (e) => { e.preventDefault(); apply(); } } },
-    el('div.ask-title', '絞り込み'), colSel, opSel, val,
+    el('div.ask-title', tr('絞り込み')), colSel, opSel, val,
     el('div.ask-actions',
-      index != null ? el('button.btn.danger-text', { type: 'button', on: { click: () => { view.filters.splice(index, 1); closePopover(); reloadSheet(); } } }, '解除') : null,
+      index != null ? el('button.btn.danger-text', { type: 'button', on: { click: () => { view.filters.splice(index, 1); closePopover(); reloadSheet(); } } }, tr('解除')) : null,
       el('span.grow'),
-      el('button.btn.primary', { type: 'submit' }, '適用'))));
+      el('button.btn.primary', { type: 'submit' }, tr('適用')))));
 }
 
 // ---------- グリッドのフック ----------
@@ -1567,7 +1584,7 @@ function gridHooks(kind) {
         } catch { /* 無視 */ }
       };
       const sheet = state.key;
-      undo.push({ label: `「${sheet.slice(2)}」の列幅の変更`, sheet, col: changes[0].name, undoFn: () => apply((x) => x.before), redoFn: () => apply((x) => x.after) });
+      undo.push({ label: tr('「{0}」の列幅の変更', [sheet.slice(2)]), sheet, col: changes[0].name, undoFn: () => apply((x) => x.before), redoFn: () => apply((x) => x.after) });
     },
     // テキストの折り返しも元に戻せる。before / after: 折り返す列の名前の配列
     onWrap: (key, before, after) => {
@@ -1576,7 +1593,7 @@ function gridHooks(kind) {
         try { if (names.length) localStorage.setItem('wrap:' + key, JSON.stringify(names)); else localStorage.removeItem('wrap:' + key); } catch { /* 無視 */ }
       };
       const sheet = state.key;
-      undo.push({ label: `「${sheet.slice(2)}」のテキストの折り返し`, sheet, undoFn: () => apply(before), redoFn: () => apply(after) });
+      undo.push({ label: tr('「{0}」のテキストの折り返し', [sheet.slice(2)]), sheet, undoFn: () => apply(before), redoFn: () => apply(after) });
     },
     // 行の高さも同じく元に戻せる。changes: [{id: 行の見分け方, before, after}]
     onRowHeight: (key, changes) => {
@@ -1590,14 +1607,14 @@ function gridHooks(kind) {
         } catch { /* 無視 */ }
       };
       const sheet = state.key;
-      undo.push({ label: `「${sheet.slice(2)}」の行の高さの変更`, sheet, undoFn: () => apply((x) => x.before), redoFn: () => apply((x) => x.after) });
+      undo.push({ label: tr('「{0}」の行の高さの変更', [sheet.slice(2)]), sheet, undoFn: () => apply((x) => x.before), redoFn: () => apply((x) => x.after) });
     },
     onAddColumn: isTable ? (anchor) => quickAddColumn(anchor) : null,
     onContextMenu: (pos, range) => cellMenu(pos, range),
-    onReadonlyEdit: (col) => toast(isTable ? (col ? `「${col.name}」は生成列のため編集できません` : '編集できません') : `${KIND_NAME[kind]}の結果は編集できません。元のテーブルで編集してください`),
+    onReadonlyEdit: (col) => toast(isTable ? (col ? tr('「{0}」は生成列のため編集できません', [col.name]) : tr('編集できません')) : tr('{0}の結果は編集できません。元のテーブルで編集してください', [KIND_NAME[kind]])),
     onBlobEdit: (r, c) => blobMenu(r, c),
     onBlobView: (r, c) => viewBlob(r, c),
-    onProtectedEdit: (prots) => toast(`🔒 ${prots[0].note || '保護されています'}（${describe(state.model, prots[0])}）`),
+    onProtectedEdit: (prots) => toast(tr('🔒 {0}（{1}）', [prots[0].note || tr('保護されています'), describe(state.model, prots[0])])),
     onCellCtrlClick: isTable ? (r, c, row) => {
       const col = state.source.columns[c];
       if (!col.fk || row.values[c] == null) return false;
@@ -1616,12 +1633,12 @@ function updateFx(s) {
   s ??= { r: g.cur.r, c: g.cur.c, row: g.rowAt(g.cur.r), isNew: g.cur.r === g.newRowIndex, col: g.cols[g.cur.c], range: g.range() };
   const col = s.col;
   const draft = s.isNew && g.hasDraft;
-  ref.textContent = col ? (s.isNew ? (g.draft ? `✎ ${draft ? '未保存' : '新しい行'} · ${col.name}` : '＋ 行を追加（クリックか Enter）') : `${col.name} · ${s.r + 1}行目`) : '';
+  ref.textContent = col ? (s.isNew ? (g.draft ? `✎ ${draft ? tr('未保存') : tr('新しい行')} · ${col.name}` : tr('＋ 行を追加（クリックか Enter）')) : tr('{0} · {1}行目', [col.name, s.r + 1])) : '';
   const v = s.isNew ? (g.draft ? g.draft.values[s.c] : undefined) : s.row?.values[s.c];
   fx.readOnly = !state.source.editable || col?.readonly || v instanceof Uint8Array;
   fx.classList.toggle('null', false);
   // グリッドでフォームを開いたときと同じ文字列（下書きの未入力は空で、INSERT で入るものを placeholder に）
-  fx.value = v instanceof Uint8Array ? `BLOB（${v.length} バイト）` : !col ? '' : s.isNew ? (g.draft ? g.formAt(s.r, s.c) : '') : s.row ? formText(v) : '';
+  fx.value = v instanceof Uint8Array ? tr('BLOB（{0} バイト）', [v.length]) : !col ? '' : s.isNew ? (g.draft ? g.formAt(s.r, s.c) : '') : s.row ? formText(v) : '';
   fx.placeholder = s.isNew && g.draft && v === undefined ? g.placeholderFor(s.c) : '';
   updateStatus(s.range);
 }
@@ -1630,7 +1647,7 @@ function updateStatus(range) {
   const g = state.grid;
   const st = $('status');
   if (!g) { st.textContent = ''; return; }
-  let text = `${g.rowCount.toLocaleString()} 行`;
+  let text = tr('{0} 行', [g.rowCount.toLocaleString()]);
   if (range) {
     const cells = (Math.min(range.r1, g.rowCount - 1) - range.r0 + 1) * (range.c1 - range.c0 + 1);
     if (cells > 1 && cells <= 20000) {
@@ -1640,7 +1657,7 @@ function updateStatus(range) {
         if (!row) continue;
         for (let c = range.c0; c <= range.c1; c++) { const v = row.values[c]; if (typeof v === 'number') { sum += v; n++; } }
       }
-      text = `選択 ${cells.toLocaleString()} セル` + (n ? ` · 合計 ${+sum.toFixed(10)} · 平均 ${+(sum / n).toFixed(4)}` : '') + ' · ' + text;
+      text = tr('選択 {0} セル', [cells.toLocaleString()]) + (n ? tr(' · 合計 {0} · 平均 {1}', [+sum.toFixed(10), +(sum / n).toFixed(4)]) : '') + ' · ' + text;
     }
   }
   st.textContent = text;
@@ -1649,23 +1666,23 @@ function updateStatus(range) {
 // ---------- 式ピッカー（数式バーの fx） ----------
 // よく使う組み込み関数の説明。一覧そのものは PRAGMA function_list から取る（この DB で使えるものだけを出す）
 const FN_HELP = {
-  abs: ['abs(X)', '絶対値'], coalesce: ['coalesce(X, Y, …)', '最初の NULL でない値'], ifnull: ['ifnull(X, Y)', 'X が NULL なら Y'],
-  iif: ['iif(条件, 真, 偽)', '条件で値を選ぶ'], nullif: ['nullif(X, Y)', 'X と Y が同じなら NULL'],
-  length: ['length(X)', '文字数'], lower: ['lower(X)', '小文字にする'], upper: ['upper(X)', '大文字にする'],
-  trim: ['trim(X)', '前後の空白を取る'], ltrim: ['ltrim(X)', '先頭の空白を取る'], rtrim: ['rtrim(X)', '末尾の空白を取る'],
-  substr: ['substr(X, 開始, 長さ)', '部分文字列（1 始まり）'], replace: ['replace(X, 探す, 置換)', '文字列を置き換える'],
-  instr: ['instr(X, 探す)', '見つかった位置（なければ 0）'], printf: ['printf(書式, …)', '書式を指定して文字列に'], format: ['format(書式, …)', '書式を指定して文字列に'],
-  round: ['round(X, 桁)', '四捨五入'], max: ['max(X, Y, …)', '最大値'], min: ['min(X, Y, …)', '最小値'],
-  random: ['random()', '乱数（整数）'], typeof: ['typeof(X)', '値の型の名前'], hex: ['hex(X)', '16 進の文字列'],
-  date: ["date('now')", '日付（YYYY-MM-DD）'], time: ["time('now')", '時刻（HH:MM:SS）'], datetime: ["datetime('now')", '日時'],
-  julianday: ["julianday('now')", 'ユリウス日（日数の差の計算に）'], strftime: ["strftime('%Y/%m', X)", '書式を指定して日時を文字列に'],
-  unixepoch: ["unixepoch('now')", 'UNIX 時刻（秒）'], json_extract: ["json_extract(X, '$.key')", 'JSON から値を取り出す'],
-  json_object: ["json_object('key', X, …)", 'JSON オブジェクトを作る'], json_array: ['json_array(X, …)', 'JSON 配列を作る'],
-  concat: ['concat(X, Y, …)', '文字列をつなぐ'], concat_ws: ['concat_ws(区切り, X, …)', '区切り文字でつなぐ'],
+  abs: ['abs(X)', tr('絶対値')], coalesce: ['coalesce(X, Y, …)', tr('最初の NULL でない値')], ifnull: ['ifnull(X, Y)', tr('X が NULL なら Y')],
+  iif: [tr('iif(条件, 真, 偽)'), tr('条件で値を選ぶ')], nullif: ['nullif(X, Y)', tr('X と Y が同じなら NULL')],
+  length: ['length(X)', tr('文字数')], lower: ['lower(X)', tr('小文字にする')], upper: ['upper(X)', tr('大文字にする')],
+  trim: ['trim(X)', tr('前後の空白を取る')], ltrim: ['ltrim(X)', tr('先頭の空白を取る')], rtrim: ['rtrim(X)', tr('末尾の空白を取る')],
+  substr: [tr('substr(X, 開始, 長さ)'), tr('部分文字列（1 始まり）')], replace: [tr('replace(X, 探す, 置換)'), tr('文字列を置き換える')],
+  instr: [tr('instr(X, 探す)'), tr('見つかった位置（なければ 0）')], printf: [tr('printf(書式, …)'), tr('書式を指定して文字列に')], format: [tr('format(書式, …)'), tr('書式を指定して文字列に')],
+  round: [tr('round(X, 桁)'), tr('四捨五入')], max: ['max(X, Y, …)', tr('最大値')], min: ['min(X, Y, …)', tr('最小値')],
+  random: ['random()', tr('乱数（整数）')], typeof: ['typeof(X)', tr('値の型の名前')], hex: ['hex(X)', tr('16 進の文字列')],
+  date: ["date('now')", tr('日付（YYYY-MM-DD）')], time: ["time('now')", tr('時刻（HH:MM:SS）')], datetime: ["datetime('now')", tr('日時')],
+  julianday: ["julianday('now')", tr('ユリウス日（日数の差の計算に）')], strftime: ["strftime('%Y/%m', X)", tr('書式を指定して日時を文字列に')],
+  unixepoch: ["unixepoch('now')", tr('UNIX 時刻（秒）')], json_extract: ["json_extract(X, '$.key')", tr('JSON から値を取り出す')],
+  json_object: ["json_object('key', X, …)", tr('JSON オブジェクトを作る')], json_array: ['json_array(X, …)', tr('JSON 配列を作る')],
+  concat: ['concat(X, Y, …)', tr('文字列をつなぐ')], concat_ws: [tr('concat_ws(区切り, X, …)'), tr('区切り文字でつなぐ')],
 };
 const EXPR_CONSTS = [
-  ['NULL', '値なし'], ['CURRENT_TIMESTAMP', '今の日時（UTC）'], ['CURRENT_DATE', '今日の日付（UTC）'], ['CURRENT_TIME', '今の時刻（UTC）'],
-  ['TRUE', '1'], ['FALSE', '0'], ['CASE WHEN  THEN  ELSE  END', '条件で値を分ける'], [' || ', '文字列をつなぐ'],
+  ['NULL', tr('値なし')], ['CURRENT_TIMESTAMP', tr('今の日時（UTC）')], ['CURRENT_DATE', tr('今日の日付（UTC）')], ['CURRENT_TIME', tr('今の時刻（UTC）')],
+  ['TRUE', '1'], ['FALSE', '0'], ['CASE WHEN  THEN  ELSE  END', tr('条件で値を分ける')], [' || ', tr('文字列をつなぐ')],
 ];
 let fnListCache = null;
 async function scalarFunctions() {
@@ -1685,27 +1702,27 @@ async function exprPicker(anchor) {
   const g = state.grid;
   // BLOB が入っているセルは式を書けないので、BLOB の操作を出す
   if (g && g.rowAt(g.cur.r)?.values[g.cur.c] instanceof Uint8Array) { blobMenu(g.cur.r, g.cur.c, anchor); return; }
-  if (fx.readOnly) { toast('このセルは編集できません'); return; }
+  if (fx.readOnly) { toast(tr('このセルは編集できません')); return; }
   const fns = await scalarFunctions();
   const fileRow = g && g.acceptsBlob(g.cur.c) && g.canEdit(g.cur.r, g.cur.c)
-    ? el('button.btn.sm.expr-file', { type: 'button', on: { mousedown: (e) => e.preventDefault(), click: () => { closePopover(); loadFileInto(g.cur.r, g.cur.c); } } }, '⤒ ファイルから読み込む…（BLOB）')
+    ? el('button.btn.sm.expr-file', { type: 'button', on: { mousedown: (e) => e.preventDefault(), click: () => { closePopover(); loadFileInto(g.cur.r, g.cur.c); } } }, tr('⤒ ファイルから読み込む…（BLOB）'))
     : null;
   const onNew = g && g.cur.r === g.newRowIndex;
   const groups = {
-    '関数': [...fns.filter((n) => FN_HELP[n]), ...fns.filter((n) => !FN_HELP[n])].map((n) => ({
+    [tr('関数')]: [...fns.filter((n) => FN_HELP[n]), ...fns.filter((n) => !FN_HELP[n])].map((n) => ({
       // スプレッドシートと同じく関数名は大文字で見せる（SQLite は大文字小文字を区別しない）
       key: n, label: n.toUpperCase(), insert: `${n.toUpperCase()}()`, caret: -1,
-      sig: (FN_HELP[n]?.[0] ?? `${n}(…)`).replace(/^\w+/, (m) => m.toUpperCase()), hint: FN_HELP[n]?.[1] ?? 'SQLite の組み込み関数' })),
-    '列': state.source.columns.map((c) => ({ key: c.name, label: c.name, insert: q(c.name), sig: q(c.name), hint: `同じ行の「${c.name}」の値${c.type ? `（${c.type}）` : ''}` })),
-    '定数・構文': EXPR_CONSTS.map(([v, h]) => ({ key: v, label: v.trim(), insert: v, sig: v.trim(), hint: h, caret: v.startsWith('CASE') ? -'  THEN  ELSE  END'.length + 1 : 0 })),
+      sig: (FN_HELP[n]?.[0] ?? `${n}(…)`).replace(/^\w+/, (m) => m.toUpperCase()), hint: FN_HELP[n]?.[1] ?? tr('SQLite の組み込み関数') })),
+    [tr('列')]: state.source.columns.map((c) => ({ key: c.name, label: c.name, insert: q(c.name), sig: q(c.name), hint: tr('同じ行の「{0}」の値{1}', [c.name, c.type ? tr('（{0}）', [c.type]) : '']) })),
+    [tr('定数・構文')]: EXPR_CONSTS.map(([v, h]) => ({ key: v, label: v.trim(), insert: v, sig: v.trim(), hint: h, caret: v.startsWith('CASE') ? -'  THEN  ELSE  END'.length + 1 : 0 })),
   };
-  let tab = '関数', active = 0, items = [];
-  const search = el('input.expr-search', { placeholder: '関数や列を検索', spellcheck: false });
+  let tab = tr('関数'), active = 0, items = [];
+  const search = el('input.expr-search', { placeholder: tr('関数や列を検索'), spellcheck: false });
   const tabs = el('div.expr-tabs');
   const list = el('div.expr-list');
   // 右側：選んでいる項目の説明（スプレッドシートの関数ヘルプのカード）
   const help = el('div.expr-help');
-  const note = el('div.expr-note', onNew ? '新しい行の式では列は使えません。' : '選ぶと数式バーに入ります。数式バーで Enter を押すと確定します。');
+  const note = el('div.expr-note', onNew ? tr('新しい行の式では列は使えません。') : tr('選ぶと数式バーに入ります。数式バーで Enter を押すと確定します。'));
   const insert = (it) => {
     closePopover();
     let v = fx.value, a = fx.selectionStart ?? v.length, b = fx.selectionEnd ?? v.length;
@@ -1728,7 +1745,7 @@ async function exprPicker(anchor) {
       class: i === active ? 'on' : '', type: 'button',
       on: { mousedown: (e) => { e.preventDefault(); insert(it); }, mouseenter: () => { if (active !== i) { active = i; mark(); } } },
     }, el('span.mono.expr-label', it.label))));
-    if (!items.length) list.append(el('div.expr-empty', '見つかりません'));
+    if (!items.length) list.append(el('div.expr-empty', tr('見つかりません')));
     mark();
   };
   // 選択の印と説明だけ更新する（一覧は作り直さない）
@@ -1766,34 +1783,34 @@ function headerMenu(c, anchor) {
   const isTable = state.key[0] === 't';
   const items = [
     { header: col.name },
-    { label: '昇順に並べ替え', icon: '↑', action: () => pushSort(col.name, 'asc') },
-    { label: '降順に並べ替え', icon: '↓', action: () => pushSort(col.name, 'desc') },
-    viewOf(state.key).sorts.some((s) => s.col === col.name) ? { label: 'この列の並べ替えを解除', icon: '⇅', action: () => removeSort(col.name) } : null,
-    { label: '絞り込み…', icon: '⏷', action: () => filterPopover(anchor instanceof Element ? anchor : $('sheet-head'), col.name) },
+    { label: tr('昇順に並べ替え'), icon: '↑', action: () => pushSort(col.name, 'asc') },
+    { label: tr('降順に並べ替え'), icon: '↓', action: () => pushSort(col.name, 'desc') },
+    viewOf(state.key).sorts.some((s) => s.col === col.name) ? { label: tr('この列の並べ替えを解除'), icon: '⇅', action: () => removeSort(col.name) } : null,
+    { label: tr('絞り込み…'), icon: '⏷', action: () => filterPopover(anchor instanceof Element ? anchor : $('sheet-head'), col.name) },
     '-',
     // 列ごと選んでいてこの列がその中にあれば、選んだ列すべて（列幅と同じ）
-    { header: 'テキストの折り返し' }, ...wrapItems(state.grid.resizeCols(c)),
+    { header: tr('テキストの折り返し') }, ...wrapItems(state.grid.resizeCols(c)),
   ];
   if (isTable) {
     items.push('-',
-      { label: '列の設定…', icon: '⚙', action: () => togglePanel(true, col.name) },
-      { label: '名前を変更…', icon: '✎', action: () => renameColumn(col.name, anchor) },
-      { label: '列を保護…', icon: '🔒', action: () => protect({ kind: 'cols', cols: [col.name] }, anchor instanceof Element ? anchor : $('sheet-head')) },
-      { label: '列を追加…', icon: '＋', action: () => quickAddColumn(anchor instanceof Element ? anchor : $('sheet-head')) });
+      { label: tr('列の設定…'), icon: '⚙', action: () => togglePanel(true, col.name) },
+      { label: tr('名前を変更…'), icon: '✎', action: () => renameColumn(col.name, anchor) },
+      { label: tr('列を保護…'), icon: '🔒', action: () => protect({ kind: 'cols', cols: [col.name] }, anchor instanceof Element ? anchor : $('sheet-head')) },
+      { label: tr('列を追加…'), icon: tr('＋'), action: () => quickAddColumn(anchor instanceof Element ? anchor : $('sheet-head')) });
     if (col.fk) {
       items.push('-',
-        { label: `参照先「${col.fk.table}」を開く`, icon: '→', action: () => showSheet('t:' + col.fk.table) },
-        { label: `「${col.fk.table}」を結合したクエリを作成`, icon: '⋈', action: () => joinQuery(col) });
+        { label: tr('参照先「{0}」を開く', [col.fk.table]), icon: '→', action: () => showSheet('t:' + col.fk.table) },
+        { label: tr('「{0}」を結合したクエリを作成', [col.fk.table]), icon: '⋈', action: () => joinQuery(col) });
     }
-    items.push('-', { label: '列を削除…', icon: '🗑', danger: true, disabled: state.model.columns.length <= 1, action: () => dropColumn(col.name) });
+    items.push('-', { label: tr('列を削除…'), icon: '🗑', danger: true, disabled: state.model.columns.length <= 1, action: () => dropColumn(col.name) });
   }
   menu(anchor, items.filter(Boolean));
 }
 
 async function renameColumn(name, anchor) {
   const to = await ask(anchor instanceof Element ? anchor : $('sheet-head'), {
-    title: '列名を変更', value: name, okLabel: '変更',
-    validate: (v) => !v ? '名前を入力してください' : v !== name && state.model.columns.some((c) => c.name === v) ? `「${v}」は既にあります` : null,
+    title: tr('列名を変更'), value: name, okLabel: tr('変更'),
+    validate: (v) => !v ? tr('名前を入力してください') : v !== name && state.model.columns.some((c) => c.name === v) ? tr('「{0}」は既にあります', [v]) : null,
   });
   if (!to || to === name) return;
   try {
@@ -1806,7 +1823,7 @@ async function renameColumn(name, anchor) {
 }
 
 async function dropColumn(name) {
-  if (!await confirmDialog({ title: `列「${name}」を削除しますか？`, body: 'この列のデータはすべて失われ、元に戻せません。', okLabel: '削除', danger: true })) return;
+  if (!await confirmDialog({ title: tr('列「{0}」を削除しますか？', [name]), body: tr('この列のデータはすべて失われ、元に戻せません。'), okLabel: tr('削除'), danger: true })) return;
   const m = state.model;
   try {
     // キー・制約に含まれる列は ALTER TABLE DROP COLUMN できないので作り直す
@@ -1833,16 +1850,16 @@ async function dropColumn(name) {
 
 function quickAddColumn(anchor) {
   const m = state.model;
-  const name = el('input.input', { placeholder: '列名', autofocus: true, value: uniqueName('列', m.columns.map((c) => c.name)) });
+  const name = el('input.input', { placeholder: tr('列名'), autofocus: true, value: uniqueName(tr('列'), m.columns.map((c) => c.name)) });
   const type = el('select.input', TYPES.map((t) => el('option', { value: t, selected: t === 'TEXT' }, t)));
   const nn = el('input', { type: 'checkbox' });
-  const dflt = el('input.input.mono', { placeholder: '既定値（任意）例: 0 / 文字列 / =CURRENT_TIMESTAMP' });
-  const fkSel = el('select.input', el('option', { value: '' }, '外部キーなし'), tableNames().map((t) => el('option', { value: t }, `→ ${t}`)));
+  const dflt = el('input.input.mono', { placeholder: tr('既定値（任意）例: 0 / 文字列 / =CURRENT_TIMESTAMP') });
+  const fkSel = el('select.input', el('option', { value: '' }, tr('外部キーなし')), tableNames().map((t) => el('option', { value: t }, `→ ${t}`)));
   const err = el('div.field-error');
   const submit = async () => {
     const n = name.value.trim();
-    if (!n) { err.textContent = '列名を入力してください'; return; }
-    if (m.columns.some((c) => c.name === n)) { err.textContent = `「${n}」は既にあります`; return; }
+    if (!n) { err.textContent = tr('列名を入力してください'); return; }
+    if (m.columns.some((c) => c.name === n)) { err.textContent = tr('「{0}」は既にあります', [n]); return; }
     let def = `${q(n)} ${type.value}`;
     if (nn.checked) def += ' NOT NULL';
     // セルのフォームと同じ書き方：普通の文字は値、= で始まれば式、空は既定値なし
@@ -1860,10 +1877,10 @@ function quickAddColumn(anchor) {
         const stmts = migrationSql(m, next);
         // 単純な列の追加だと思っているはずなので、作り直すことと実行する SQL を見せてから
         const ok = await confirmDialog({
-          title: '列を追加するために、テーブルを作り直しますか？',
-          body: '既定値が式や CURRENT_TIMESTAMP などの列は ALTER TABLE で追加できないため、新しい定義でテーブルを作り直し、データをコピーします。外部キー違反があれば元に戻します。',
+          title: tr('列を追加するために、テーブルを作り直しますか？'),
+          body: tr('既定値が式や CURRENT_TIMESTAMP などの列は ALTER TABLE で追加できないため、新しい定義でテーブルを作り直し、データをコピーします。外部キー違反があれば元に戻します。'),
           code: stmts.join(';\n') + ';',
-          okLabel: '作り直して追加',
+          okLabel: tr('作り直して追加'),
         });
         if (!ok) return;
         await db.rebuild(stmts.map((sql) => ({ sql })));
@@ -1875,14 +1892,14 @@ function quickAddColumn(anchor) {
     } catch (e) { err.textContent = friendlyError(e.message); }
   };
   popover(anchor, el('form.add-col', { on: { submit: (e) => { e.preventDefault(); submit(); } } },
-    el('div.ask-title', '列を追加'),
+    el('div.ask-title', tr('列を追加')),
     name, type,
-    el('label.chk', nn, '必須（NOT NULL）'),
+    el('label.chk', nn, tr('必須（NOT NULL）')),
     dflt, fkSel, err,
     el('div.ask-actions',
-      el('button.btn.link', { type: 'button', on: { click: () => { closePopover(); togglePanel(true); state.panel?.addColumn(); } } }, '詳細設定…'),
+      el('button.btn.link', { type: 'button', on: { click: () => { closePopover(); togglePanel(true); state.panel?.addColumn(); } } }, tr('詳細設定…')),
       el('span.grow'),
-      el('button.btn.primary', { type: 'submit' }, '追加'))), { align: 'end' });
+      el('button.btn.primary', { type: 'submit' }, tr('追加')))), { align: 'end' });
   setTimeout(() => name.select(), 0);
 }
 
@@ -1899,7 +1916,7 @@ async function jumpToRef(fk, value) {
   const key = 't:' + fk.table;
   state.views.set(key, { sorts: [], filters: [{ col: fk.refCol, op: 'eq', value: String(value) }] });
   await showSheet(key);
-  toast(`「${fk.table}」の ${fk.refCol} = ${value} を表示しています（チップの × で解除）`);
+  toast(tr('「{0}」の {1} = {2} を表示しています（チップの × で解除）', [fk.table, fk.refCol, value]));
 }
 
 function fkPicker(r, c, anchor) {
@@ -1907,7 +1924,7 @@ function fkPicker(r, c, anchor) {
   const col = state.source.columns[c];
   const fk = col.fk;
   const labelCol = state.source.labelCols.get(col.name);
-  const input = el('input.input', { placeholder: `${fk.table} を検索`, autofocus: true });
+  const input = el('input.input', { placeholder: tr('{0} を検索', [fk.table]), autofocus: true });
   const list = el('div.fk-list');
   let items = [], active = 0;
   const choose = async (v) => {
@@ -1922,7 +1939,7 @@ function fkPicker(r, c, anchor) {
       class: i === active ? 'on' : '',
       on: { mousedown: (e) => { e.preventDefault(); choose(v); } },
     }, el('span.fk-v', String(v)), label != null ? el('span.fk-l', String(label)) : null)),
-    !items.length ? el('div.muted.pad', '該当なし') : '');
+    !items.length ? el('div.muted.pad', tr('該当なし')) : '');
   };
   const search = async () => {
     const s = input.value.trim();
@@ -1940,7 +1957,7 @@ function fkPicker(r, c, anchor) {
     if (e.key === 'Enter' && !e.isComposing) { e.preventDefault(); if (items[active]) choose(items[active][0]); }
   });
   popover(anchor, el('div.fk-picker', el('div.ask-title', `→ ${fk.table}.${fk.refCol}`), input, list,
-    col.readonly ? null : el('button.btn.sm.link', { on: { click: () => choose(null) } }, 'NULL にする')), { onClose: () => state.grid?.focus() });
+    col.readonly ? null : el('button.btn.sm.link', { on: { click: () => choose(null) } }, tr('NULL にする'))), { onClose: () => state.grid?.focus() });
   search();
 }
 
@@ -1961,7 +1978,7 @@ async function pasteFromMenu(g) {
       if (image || text || html) return g.pasteClipboard({ file: image, text, html });
     } catch { /* 下の readText() に任せる */ }
   }
-  try { g.paste(await navigator.clipboard.readText()); } catch { toast(`${MOD}V で貼り付けてください`); }
+  try { g.paste(await navigator.clipboard.readText()); } catch { toast(tr('{0}V で貼り付けてください', [MOD])); }
 }
 
 async function cellMenu(pos, range) {
@@ -1969,32 +1986,32 @@ async function cellMenu(pos, range) {
   const isTable = state.key[0] === 't';
   const rows = Math.min(range.r1, g.rowCount - 1) - range.r0 + 1;
   const items = [
-    { label: 'コピー', icon: '⧉', kbd: `${MOD}C`, action: () => g.copy() },
+    { label: tr('コピー'), icon: '⧉', kbd: `${MOD}C`, action: () => g.copy() },
   ];
   const { r, c } = g.cur;
   const cv = r === g.newRowIndex ? g.draft?.values[c] : g.rowAt(r)?.values[c];
   const blobItems = [];
   if (cv instanceof Uint8Array && r !== g.newRowIndex) {
     const a = blobActions(r, c);
-    blobItems.push({ label: 'BLOB を表示', icon: '🔍', action: () => viewBlob(r, c) }, { label: 'ダウンロード', icon: '⤓', action: a.download });
+    blobItems.push({ label: tr('BLOB を表示'), icon: '🔍', action: () => viewBlob(r, c) }, { label: tr('ダウンロード'), icon: '⤓', action: a.download });
   }
   // BLOB 型か型のない列なら、NULL のセルや新しい行でもファイルを入れられる
-  if (g.acceptsBlob(c) && g.canEdit(r, c)) blobItems.push({ label: 'ファイルから読み込む…', icon: '⤒', action: () => loadFileInto(r, c) });
+  if (g.acceptsBlob(c) && g.canEdit(r, c)) blobItems.push({ label: tr('ファイルから読み込む…'), icon: '⤒', action: () => loadFileInto(r, c) });
   if (blobItems.length) items.unshift(...blobItems, '-');
   if (isTable) {
     items.push(
-      { label: '貼り付け', icon: '📋', kbd: `${MOD}V`, action: () => pasteFromMenu(g) },
-      { label: '値をクリア（NULL）', icon: '⌫', kbd: 'Delete', action: () => g.clearSelection() },
-      { label: '下へコピー', icon: '⇣', kbd: `${MOD}D`, disabled: range.r1 <= range.r0, action: () => g.fillDown() },
+      { label: tr('貼り付け'), icon: '📋', kbd: `${MOD}V`, action: () => pasteFromMenu(g) },
+      { label: tr('値をクリア（NULL）'), icon: '⌫', kbd: 'Delete', action: () => g.clearSelection() },
+      { label: tr('下へコピー'), icon: '⇣', kbd: `${MOD}D`, disabled: range.r1 <= range.r0, action: () => g.fillDown() },
       '-',
-      { label: rows > 1 ? `${rows} 行を複製` : '行を複製', icon: '⧉', disabled: rows < 1, action: async () => { try { await state.source.duplicateRows(await g.rowsBetween(range.r0, range.r0 + rows - 1)); await g.reload(); } catch (e) { toast(friendlyError(e.message), 'error'); } } },
-      { label: rows > 1 ? `${rows} 行を削除` : '行を削除', icon: '🗑', kbd: `${MOD}-`, danger: true, disabled: rows < 1, action: () => deleteSelectedRows() });
+      { label: rows > 1 ? tr('{0} 行を複製', [rows]) : tr('行を複製'), icon: '⧉', disabled: rows < 1, action: async () => { try { await state.source.duplicateRows(await g.rowsBetween(range.r0, range.r0 + rows - 1)); await g.reload(); } catch (e) { toast(friendlyError(e.message), 'error'); } } },
+      { label: rows > 1 ? tr('{0} 行を削除', [rows]) : tr('行を削除'), icon: '🗑', kbd: `${MOD}-`, danger: true, disabled: rows < 1, action: () => deleteSelectedRows() });
     const here = g.protAt(g.cur.r, g.cur.c);
-    items.push('-', { label: '範囲を保護…', icon: '🔒', action: () => protectSelection(pos) },
-      ...here.map((p) => ({ label: `保護を外す：${p.note || describe(state.model, p)}`, icon: '🔓', action: () => unprotect(p) })));
+    items.push('-', { label: tr('範囲を保護…'), icon: '🔒', action: () => protectSelection(pos) },
+      ...here.map((p) => ({ label: tr('保護を外す：{0}', [p.note || describe(state.model, p)]), icon: '🔓', action: () => unprotect(p) })));
     const col = state.source.columns[g.cur.c];
     const v = g.rowAt(g.cur.r)?.values[g.cur.c];
-    if (col?.fk && v != null) items.push('-', { label: `参照先の行を開く（${col.fk.table}）`, icon: '→', kbd: `${MOD}クリック`, action: () => jumpToRef(col.fk, v) });
+    if (col?.fk && v != null) items.push('-', { label: tr('参照先の行を開く（{0}）', [col.fk.table]), icon: '→', kbd: tr('{0}クリック', [MOD]), action: () => jumpToRef(col.fk, v) });
   }
   menu(pos, items);
 }
@@ -2013,10 +2030,10 @@ async function protectSelection(anchor) {
   const cols = m.columns.slice(c0, c1 + 1).map((c) => c.name);
   const wholeCols = g.colSelect || (r0 === 0 && r1 >= g.rowCount - 1 && g.rowCount > 1);
   if (wholeCols) return protect({ kind: 'cols', cols }, anchor);
-  if (!canProtectRows(m)) { toast('主キーのない表では、行や範囲は保護できません（列やシート全体は保護できます）', 'error'); return; }
+  if (!canProtectRows(m)) { toast(tr('主キーのない表では、行や範囲は保護できません（列やシート全体は保護できます）'), 'error'); return; }
   const last = Math.min(r1, g.rowCount - 1);
   if (last < r0) return;
-  if (last - r0 >= 1000) { toast('一度に保護できるのは 1000 行までです', 'error'); return; }
+  if (last - r0 >= 1000) { toast(tr('一度に保護できるのは 1000 行までです'), 'error'); return; }
   const pkIdx = m.pk.map((p) => m.columns.findIndex((c) => c.name === p));
   const keys = (await g.rowsBetween(r0, last)).filter(Boolean)
     .map((row) => pkIdx.map((i) => { const v = row.values[i]; return typeof v === 'bigint' && Number.isSafeInteger(Number(v)) ? Number(v) : v; }));
@@ -2026,34 +2043,34 @@ async function protectSelection(anchor) {
 
 async function protect(spec, anchor) {
   const what = describe(state.model, spec);
-  const note = await ask(anchor, { title: `🔒 ${what}を保護`, placeholder: '説明（任意）例：4月分は確定済み', okLabel: '保護する' });
+  const note = await ask(anchor, { title: tr('🔒 {0}を保護', [what]), placeholder: tr('説明（任意）例：4月分は確定済み'), okLabel: tr('保護する') });
   if (note === null) return;
   try {
     const names = (await db.query(`SELECT name FROM sqlite_schema WHERE type = 'trigger'`)).rows.map(([n]) => n);
     await db.batch(protectSql(state.model, { ...spec, note }, names));
     await refreshObjects();
     await reloadSheet();
-    toast(`🔒 ${what}を保護しました`, 'success');
+    toast(tr('🔒 {0}を保護しました', [what]), 'success');
   } catch (e) { toast(friendlyError(e.message), 'error'); }
 }
 
 async function unprotect(p) {
   if (!p) return;
   const what = describe(state.model, p);
-  const body = `${PROT_ICON[p.kind]} ${what}${p.note ? `「${p.note}」` : ''}。外すと、この範囲を編集できるようになります。`;
-  if (!await confirmDialog({ title: '保護を外しますか？', body, okLabel: '外す' })) return;
+  const body = tr('{0} {1}{2}。外すと、この範囲を編集できるようになります。', [PROT_ICON[p.kind], what, p.note ? tr('「{0}」', [p.note]) : '']);
+  if (!await confirmDialog({ title: tr('保護を外しますか？'), body, okLabel: tr('外す') })) return;
   try {
     await db.batch(unprotectSql(p));
     await refreshObjects();
     await reloadSheet();
-    toast(`🔓 ${what}の保護を外しました`);
+    toast(tr('🔓 {0}の保護を外しました', [what]));
   } catch (e) { toast(friendlyError(e.message), 'error'); }
 }
 
 function updateProtBtn(kind = state.key?.[0]) {
   const b = $('prot-btn'), n = kind === 't' ? state.prots?.length || 0 : 0;
   b.disabled = kind !== 't';
-  b.title = kind === 't' ? 'シートと範囲の保護' : '保護できるのはテーブルだけです';
+  b.title = kind === 't' ? tr('シートと範囲の保護') : tr('保護できるのはテーブルだけです');
   $('prot-n').hidden = !n;
   $('prot-n').textContent = n;
 }
@@ -2064,23 +2081,23 @@ function protPanel(anchor) {
   popover(anchor, el('div.prot-panel',
     protSection(state.model),
     el('div.prot-actions',
-      locked ? null : el('button.btn.sm', { on: { click: () => { closePopover(); protect({ kind: 'sheet' }, anchor); } } }, '🔒 シート全体を保護…'),
-      el('button.btn.sm', { disabled: !state.grid, on: { click: () => { closePopover(); protectSelection(anchor); } } }, '▦ 選択範囲を保護…'))),
+      locked ? null : el('button.btn.sm', { on: { click: () => { closePopover(); protect({ kind: 'sheet' }, anchor); } } }, tr('🔒 シート全体を保護…')),
+      el('button.btn.sm', { disabled: !state.grid, on: { click: () => { closePopover(); protectSelection(anchor); } } }, tr('▦ 選択範囲を保護…')))),
   { align: 'start' });
 }
 
 function protSection(m) {
   return el('div',
-    el('div.ask-title', '🔒 保護されたシートと範囲'),
-    state.prots?.length ? null : el('div.prot-empty', 'このシートには保護がありません。'),
+    el('div.ask-title', tr('🔒 保護されたシートと範囲')),
+    state.prots?.length ? null : el('div.prot-empty', tr('このシートには保護がありません。')),
     el('div.prot-list', (state.prots || []).map((p) => el('div.prot-item', {
-      title: 'クリックで範囲を選択',
+      title: tr('クリックで範囲を選択'),
       on: { click: (e) => { if (!e.target.closest('button')) { closePopover(); selectProtection(p); } } },
     },
     el('span.prot-icon', PROT_ICON[p.kind]),
     el('div.prot-text', el('div.prot-note', p.note || describe(m, p)), p.note ? el('div.prot-what', describe(m, p)) : null),
-    el('button.btn.sm', { title: '保護を外す', on: { click: () => { closePopover(); unprotect(p); } } }, '🔓 外す')))),
-    el('div.prot-foot', '範囲は、選んでから下のボタンか右クリック →「範囲を保護…」で'));
+    el('button.btn.sm', { title: tr('保護を外す'), on: { click: () => { closePopover(); unprotect(p); } } }, tr('🔓 外す'))))),
+    el('div.prot-foot', tr('範囲は、選んでから下のボタンか右クリック →「範囲を保護…」で')));
 }
 
 /** 保護の範囲をグリッドで選択する（先頭 5000 行の中で探す） */
@@ -2092,7 +2109,7 @@ async function selectProtection(p) {
   if (p.keys) {
     const rows = g.rowCount ? await g.rowsBetween(0, Math.min(g.rowCount, 5000) - 1) : [];
     const hits = rows.map((row, r) => (row && g.protAt(r, c0).includes(p) ? r : -1)).filter((r) => r >= 0);
-    if (!hits.length) { toast('保護された行が見つかりません（絞り込みで隠れているかもしれません）'); return; }
+    if (!hits.length) { toast(tr('保護された行が見つかりません（絞り込みで隠れているかもしれません）')); return; }
     r0 = Math.min(...hits); r1 = Math.max(...hits);
   }
   g.cur = { r: r0, c: c0 }; g.ext = { r: r1, c: c1 };
@@ -2109,7 +2126,7 @@ async function deleteSelectedRows() {
     await state.source.deleteRows(rows.filter(Boolean));
     await g.reload();
     g.moveTo(r0, g.cur.c);
-    toast(`${rows.length} 行を削除しました（${MOD}Z で元に戻せます）`);
+    toast(tr('{0} 行を削除しました（{1}Z で元に戻せます）', [rows.length, MOD]));
   } catch (e) { toast(friendlyError(e.message), 'error'); }
 }
 
@@ -2139,10 +2156,10 @@ function blobMenu(r, c, anchor) {
   const a = blobActions(r, c);
   const cellEl = anchor || g.body.querySelector(`.gr[data-r="${r}"] .gc[data-c="${c}"]`) || g.sink;
   menu(cellEl, [
-    { label: '表示', icon: '🔍', disabled: !(a.v instanceof Uint8Array), action: () => viewBlob(r, c) },
-    { label: 'ファイルから読み込む…', icon: '⤒', action: a.load },
-    { label: 'ダウンロード', icon: '⤓', disabled: !(a.v instanceof Uint8Array), action: a.download },
-    { label: 'NULL にする', icon: '⌫', action: a.clear },
+    { label: tr('表示'), icon: '🔍', disabled: !(a.v instanceof Uint8Array), action: () => viewBlob(r, c) },
+    { label: tr('ファイルから読み込む…'), icon: '⤒', action: a.load },
+    { label: tr('ダウンロード'), icon: '⤓', disabled: !(a.v instanceof Uint8Array), action: a.download },
+    { label: tr('NULL にする'), icon: '⌫', action: a.clear },
   ]);
 }
 
@@ -2160,26 +2177,26 @@ function viewBlob(r, c) {
   const objectUrl = () => (url ??= URL.createObjectURL(new Blob([v], { type: k.mime })));
   const showHex = () => body.replaceChildren(
     el('pre.blob-view-hex', hexDump(v, { max: 4096, width: innerWidth < 600 ? 8 : 16 })),
-    v.length > 4096 ? el('p.muted', '先頭 4096 バイトだけを表示しています') : '');
+    v.length > 4096 ? el('p.muted', tr('先頭 4096 バイトだけを表示しています')) : '');
   const kind = k.mime.split('/')[0];
   if (!v.length) {
-    body.append(el('p.muted', '空の BLOB です（0 バイト）'));
+    body.append(el('p.muted', tr('空の BLOB です（0 バイト）')));
   } else if (k.image) {
     // SVG も <img> で見せる（<img> の中ではスクリプトも外部の読み込みも動かない）
-    const img = el('img.blob-view-img', { src: objectUrl(), alt: '', title: 'クリックで原寸 ↔ 画面に収める' });
+    const img = el('img.blob-view-img', { src: objectUrl(), alt: '', title: tr('クリックで原寸 ↔ 画面に収める') });
     img.addEventListener('load', () => meta.textContent = `${k.label} · ${img.naturalWidth}×${img.naturalHeight} · ${fmtBytes(v.length)}`, { once: true });
     body.append(img);
     img.addEventListener('click', () => body.classList.toggle('actual'));
   } else if (kind === 'video' || kind === 'audio') {
     const media = el(`${kind}.blob-view-media`, { src: objectUrl(), controls: true, preload: 'metadata' });
     // ブラウザが再生できない形式なら 16 進ダンプに切り替える
-    media.addEventListener('error', () => { showHex(); meta.textContent += '（このブラウザでは再生できません）'; }, { once: true });
+    media.addEventListener('error', () => { showHex(); meta.textContent += tr('（このブラウザでは再生できません）'); }, { once: true });
     body.append(media);
   } else if (k.mime === 'application/pdf') {
     // Chrome の PDF ビューアは sandbox 付きの iframe では動かないので付けない（中身は PDF で、ページのスクリプトには触れない）
     body.classList.add('pdf');
     body.append(el('iframe.blob-view-pdf', { src: objectUrl(), title: 'PDF' }),
-      el('p.muted', '表示されないときは「ダウンロード」で保存して開いてください'));
+      el('p.muted', tr('表示されないときは「ダウンロード」で保存して開いてください')));
   } else if (k.text) {
     const text = asText(v) ?? '';
     const max = 16384;
@@ -2201,10 +2218,10 @@ function viewBlob(r, c) {
     el('div.blob-view-head', el('h2', state.source.columns[c].name), meta),
     body,
     el('div.modal-actions',
-      editable ? el('button.btn', { on: { click: done(a.load) } }, '⤒ 読み込む…') : null,
-      el('button.btn', { on: { click: a.download } }, '⤓ ダウンロード'),
+      editable ? el('button.btn', { on: { click: done(a.load) } }, tr('⤒ 読み込む…')) : null,
+      el('button.btn', { on: { click: a.download } }, tr('⤓ ダウンロード')),
       editable ? el('button.btn', { on: { click: done(a.clear) } }, '⌫ NULL') : null,
-      el('button.btn.primary', { autofocus: true, on: { click: () => dlg.close() } }, '閉じる')),
+      el('button.btn.primary', { autofocus: true, on: { click: () => dlg.close() } }, tr('閉じる'))),
   ], { className: 'blob-view', onClose: () => { if (url) URL.revokeObjectURL(url); g.focus(); } });
 }
 
@@ -2241,8 +2258,8 @@ function updatePanel(focusCol) {
       const back = { fromTable: r.toTable, toTable: r.fromTable, cols: r.cols.map(([a, b]) => [b, a]) };
       undo.push({
         label: r.cols.length
-          ? `「${r.toTable}」の列名の変更（${r.cols.map(([a, b]) => `${a}→${b}`).join('、')}）`
-          : `テーブル「${r.fromTable}」→「${r.toTable}」の名前の変更`,
+          ? tr('「{0}」の列名の変更（{1}）', [r.toTable, r.cols.map(([a, b]) => `${a}→${b}`).join(tr('、'))])
+          : tr('テーブル「{0}」→「{1}」の名前の変更', [r.fromTable, r.toTable]),
         undoSheet: 't:' + r.fromTable, redoSheet: 't:' + r.toTable,
         undoCols: r.cols.map(([a]) => a), redoCols: r.cols.map(([, b]) => b),
         undoFn: () => renameSchema(back),
@@ -2285,8 +2302,8 @@ async function importCsv() {
   const { parseTsv } = await import('./grid.js');
   const tsv = f.name.endsWith('.tsv') || (text.split('\n')[0].includes('\t') && !text.split('\n')[0].includes(','));
   const rows = tsv ? parseTsv(text) : parseCsv(text);
-  if (rows.length < 1) { toast('データがありません', 'error'); return; }
-  const header = rows[0].map((h, i) => h.trim() || `列${i + 1}`);
+  if (rows.length < 1) { toast(tr('データがありません'), 'error'); return; }
+  const header = rows[0].map((h, i) => h.trim() || tr('列{0}', [i + 1]));
   const data = rows.slice(1).filter((r) => r.some((v) => v !== ''));
   // 列の型を推定
   const types = header.map((_, i) => {
@@ -2295,7 +2312,7 @@ async function importCsv() {
     if (vals.length && vals.every((v) => /^[-+]?(\d+\.?\d*|\.\d+)(e[-+]?\d+)?$/i.test(v.trim()))) return 'REAL';
     return 'TEXT';
   });
-  const name = await ask($('tabs'), { title: `${data.length} 行・${header.length} 列を新しいテーブルに`, value: uniqueName(f.name.replace(/\.\w+$/, ''), objNames()), okLabel: '作成', validate: (v) => !v ? '名前を入力してください' : objNames().includes(v) ? `「${v}」は既にあります` : null });
+  const name = await ask($('tabs'), { title: tr('{0} 行・{1} 列を新しいテーブルに', [data.length, header.length]), value: uniqueName(f.name.replace(/\.\w+$/, ''), objNames()), okLabel: tr('作成'), validate: (v) => !v ? tr('名前を入力してください') : objNames().includes(v) ? tr('「{0}」は既にあります', [v]) : null });
   if (!name) return;
   const cols = header.map((h, i) => `  ${q(h)} ${types[i]}`).join(',\n');
   const ins = `INSERT INTO ${q(name)} (${header.map(q).join(', ')}) VALUES (${header.map(() => '?').join(', ')})`;
@@ -2306,7 +2323,7 @@ async function importCsv() {
     ]);
     await refreshObjects();
     await showSheet('t:' + name);
-    toast(`${data.length} 行を読み込みました`, 'success');
+    toast(tr('{0} 行を読み込みました', [data.length]), 'success');
   } catch (e) { toast(friendlyError(e.message), 'error'); }
 }
 
@@ -2331,20 +2348,20 @@ function palette() {
   if (!state.dbName) return;
   const commands = [
     ...allKeys().map((k) => ({ label: k.slice(2), hint: KIND_NAME[k[0]], icon: KIND_ICON[k[0]], run: () => showSheet(k) })),
-    { label: '新しいテーブル', icon: '＋', run: () => newTable($('tabs')) },
-    { label: '新しいクエリ', icon: '＋', run: () => newQuery() },
-    { label: 'SQL コンソールを開く', icon: '⌨', run: () => toggleConsole(true) },
-    state.model ? { label: 'テーブルの設計を開く', icon: '⚙', run: () => togglePanel(true) } : null,
-    state.file ? null : { label: 'DB をファイルに書き出す', icon: '⤓', run: () => exportCurrent() },
+    { label: tr('新しいテーブル'), icon: tr('＋'), run: () => newTable($('tabs')) },
+    { label: tr('新しいクエリ'), icon: tr('＋'), run: () => newQuery() },
+    { label: tr('SQL コンソールを開く'), icon: '⌨', run: () => toggleConsole(true) },
+    state.model ? { label: tr('テーブルの設計を開く'), icon: '⚙', run: () => togglePanel(true) } : null,
+    state.file ? null : { label: tr('DB をファイルに書き出す'), icon: '⤓', run: () => exportCurrent() },
     ...(state.inTx
-      ? [{ label: 'トランザクションを確定（COMMIT）', icon: '✓', run: commitTx },
-        { label: 'トランザクションを取り消し（ROLLBACK）', icon: '↶', run: rollbackTx }]
-      : [{ label: 'トランザクションを開始', icon: '⧗', run: beginTx }]),
-    { label: 'CSV からテーブルを作成', icon: '⤒', run: importCsv },
-    state.file ? { label: 'ファイルに保存', icon: '💾', run: () => saveFile() } : null,
-    ...state.dbs.filter((n) => n !== state.dbName).map((n) => ({ label: n, hint: 'DB を開く', icon: appIcon(), run: () => openDb(n) })),
+      ? [{ label: tr('トランザクションを確定（COMMIT）'), icon: '✓', run: commitTx },
+        { label: tr('トランザクションを取り消し（ROLLBACK）'), icon: '↶', run: rollbackTx }]
+      : [{ label: tr('トランザクションを開始'), icon: '⧗', run: beginTx }]),
+    { label: tr('CSV からテーブルを作成'), icon: '⤒', run: importCsv },
+    state.file ? { label: tr('ファイルに保存'), icon: '💾', run: () => saveFile() } : null,
+    ...state.dbs.filter((n) => n !== state.dbName).map((n) => ({ label: n, hint: tr('DB を開く'), icon: appIcon(), run: () => openDb(n) })),
   ].filter(Boolean);
-  const input = el('input.input.palette-input', { placeholder: 'シートやコマンドを検索…', autofocus: true });
+  const input = el('input.input.palette-input', { placeholder: tr('シートやコマンドを検索…'), autofocus: true });
   const list = el('div.palette-list');
   let items = commands, active = 0;
   const render = () => list.replaceChildren(...items.map((c, i) => el('button.palette-item', {

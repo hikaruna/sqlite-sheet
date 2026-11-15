@@ -1,3 +1,4 @@
+import { t as tr } from './i18n.js';
 // 「ローカルファイルを直接編集」モードの補助：最近開いたファイルと、読み書きの許可。
 // 最近開いたファイルはファイルハンドルだけを IndexedDB に持つ（中身は持たない）。
 //   { id: 連番, name: ファイル名, handle: FileSystemFileHandle, at: 開いた時刻 }
@@ -6,7 +7,7 @@ const DB_NAME = 'sqlite-sheet-recent', STORE = 'recent', MAX = 10;
 /** File System Access API（ファイルの直接編集）が使えるか（Chrome / Edge） */
 export const supported = typeof window.showOpenFilePicker === 'function';
 
-export const PICKER_TYPES = [{ description: 'SQLite データベース', accept: { 'application/x-sqlite3': ['.sqlite', '.sqlite3', '.db'] } }];
+export const PICKER_TYPES = [{ description: tr('SQLite データベース'), accept: { 'application/x-sqlite3': ['.sqlite', '.sqlite3', '.db'] } }];
 
 // 最初の試作で使っていた、DB の一覧にファイルを混ぜる方式の保存先。もう使わないので消す
 try { indexedDB.deleteDatabase('sqlite-sheet-files'); } catch { /* 無視 */ }

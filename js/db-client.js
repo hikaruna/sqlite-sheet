@@ -1,3 +1,4 @@
+import { t as tr } from './i18n.js';
 // Worker との Promise RPC。発行した SQL はログとして購読者に流す。
 const worker = new Worker(new URL('./db-worker.js', import.meta.url), { type: 'module' });
 let seq = 0;
@@ -67,7 +68,7 @@ export const db = {
   /** batch と同じ。変わった行の記録（{bytes, tables, rows}）も返す：{results, changes, untrackable} */
   batchTracked: (stmts, source = 'gui') => logged(() => call('batchTracked', stmts), stmts, source),
   /** 記録（changeset の配列、実行した順）を当てる（dir: 'undo' | 'redo'） */
-  applyChangeset: (bytes, dir) => logged(() => call('applyChangeset', bytes, dir), [{ sql: dir === 'undo' ? '-- 元に戻す' : '-- やり直す' }], dir),
+  applyChangeset: (bytes, dir) => logged(() => call('applyChangeset', bytes, dir), [{ sql: dir === 'undo' ? tr('-- 元に戻す') : tr('-- やり直す') }], dir),
   /** SQL コンソール：1文ずつ確かめながら実行。元に戻せない文の手前で止まる（paused） */
   consoleRun: (sql, opts) => logged(() => call('consoleRun', sql, opts), [{ sql }], 'console'),
   onLog: (f) => logListeners.add(f),

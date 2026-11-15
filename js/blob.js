@@ -1,3 +1,4 @@
+import { t as tr } from './i18n.js';
 // BLOB の中身の種類を見分ける（先頭のバイト＝マジックナンバーで判定）
 
 const startsWith = (b, sig, at = 0) => b.length >= at + sig.length && sig.every((x, i) => x === null || b[at + i] === x);
@@ -19,7 +20,7 @@ const SIGS = [
   [[0x49, 0x44, 0x33], K('audio/mpeg', 'mp3', 'MP3')],
 ];
 
-const BIN = K('application/octet-stream', 'bin', 'バイナリ');
+const BIN = K('application/octet-stream', 'bin', tr('バイナリ'));
 const cache = new WeakMap();
 
 /** @param {Uint8Array} b @returns {Kind} */
@@ -45,7 +46,7 @@ function detect(b) {
   const text = asText(b);
   if (text != null) {
     if (/^\s*(<\?xml[^>]*>\s*)?(<!--[\s\S]*?-->\s*)*(<!DOCTYPE svg[^>]*>\s*)?<svg[\s>]/i.test(text)) return K('image/svg+xml', 'svg', 'SVG', true);
-    return { ...K('text/plain', 'txt', 'テキスト'), text: true };
+    return { ...K('text/plain', 'txt', tr('テキスト')), text: true };
   }
   return BIN;
 }

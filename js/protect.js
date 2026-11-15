@@ -1,6 +1,7 @@
 // 保護（Google スプレッドシートの「保護されたシートと範囲」）。
 // 保護はトリガーそのもの：書き込みを SQLite が拒否する。アプリはトリガーを読んで見た目を合わせるだけ。
 // 1つの保護 = 同じ番号を持つトリガーの組（protect_<番号>_<種類>）。説明などはトリガー本体のコメントに書く。
+import { t as tr } from './i18n.js';
 import { q, lit } from './db-client.js';
 
 const NAME_RE = /^protect_(\d+)_(ins|upd|del|key)$/;
@@ -45,7 +46,7 @@ export function protectSql(model, spec, existing) {
   for (const n of existing) { const m = n.match(NAME_RE); if (m) id = Math.max(id, +m[1] + 1); }
   const t = q(model.name);
   const meta = JSON.stringify({ kind: spec.kind, note: spec.note || '', keys: spec.keys || undefined });
-  const msg = '保護されています' + (spec.note ? `：${spec.note}` : `（${describe(model, spec)}）`);
+  const msg = tr('保護されています') + (spec.note ? tr('：{0}', [spec.note]) : tr('（{0}）', [describe(model, spec)]));
   const body = `BEGIN\n  -- sqlite-sheet:protect ${meta}\n  SELECT RAISE(ABORT, ${lit(msg)});\nEND`;
   const trig = (op, event, when) => `CREATE TRIGGER ${q(`protect_${id}_${op}`)} BEFORE ${event} ON ${t}${when ? `\nWHEN ${when}` : ''}\n${body}`;
   const ofCols = (cols) => `UPDATE OF ${cols.map(q).join(', ')}`;
@@ -75,11 +76,11 @@ export const unprotectSql = (p) => p.triggers.map((n) => ({ sql: `DROP TRIGGER $
 /** 人が読む説明：「シート全体」「列 名前, メール」「3 行」「3 行 × 列 名前」 */
 export function describe(model, p) {
   const keyCol = model.pk.join(', ');
-  const rows = p.keys ? (p.keys.length <= 3 ? `${keyCol} が ${p.keys.map((k) => k.join('/')).join(', ')} の行` : `${p.keys.length} 行`) : '';
-  if (p.kind === 'sheet') return 'シート全体';
-  if (p.kind === 'cols') return `列 ${p.cols.join(', ')}`;
+  const rows = p.keys ? (p.keys.length <= 3 ? tr('{0} が {1} の行', [keyCol, p.keys.map((k) => k.join('/')).join(', ')]) : tr('{0} 行', [p.keys.length])) : '';
+  if (p.kind === 'sheet') return tr('シート全体');
+  if (p.kind === 'cols') return tr('列 {0}', [p.cols.join(', ')]);
   if (p.kind === 'rows') return rows;
-  return `${rows}の ${p.cols.join(', ')}`;
+  return tr('{0}の {1}', [rows, p.cols.join(', ')]);
 }
 
 export const KIND_ICON = { sheet: '▦', cols: '▥', rows: '▤', range: '▣' };

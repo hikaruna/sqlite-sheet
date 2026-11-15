@@ -1,21 +1,22 @@
 // グリッドのデータ元：テーブル（編集可）と、ビュー/クエリ（読み取り専用）
+import { t as tr } from './i18n.js';
 import { db, q, inline, lit } from './db-client.js';
 import { affinity } from './schema.js';
 import { pushChanges } from './undo.js';
 import { txMarks } from './txmarks.js';
 
 export const FILTER_OPS = [
-  { id: 'eq', label: '＝ 等しい', sql: (c) => `${c} = ?` },
-  { id: 'ne', label: '≠ 等しくない', sql: (c) => `${c} IS NOT ?` },
-  { id: 'contains', label: '含む', sql: (c) => `instr(${c}, ?) > 0` },
-  { id: 'starts', label: 'で始まる', sql: (c) => `substr(${c}, 1, length(?1)) = ?1`, named: true },
-  { id: 'gt', label: '＞ より大きい', sql: (c) => `${c} > ?` },
-  { id: 'ge', label: '≧ 以上', sql: (c) => `${c} >= ?` },
-  { id: 'lt', label: '＜ より小さい', sql: (c) => `${c} < ?` },
-  { id: 'le', label: '≦ 以下', sql: (c) => `${c} <= ?` },
-  { id: 'null', label: 'NULL である', sql: (c) => `${c} IS NULL`, noValue: true },
-  { id: 'notnull', label: 'NULL でない', sql: (c) => `${c} IS NOT NULL`, noValue: true },
-  { id: 'empty', label: '空（NULL か空文字）', sql: (c) => `coalesce(${c}, '') = ''`, noValue: true },
+  { id: 'eq', label: tr('＝ 等しい'), sql: (c) => `${c} = ?` },
+  { id: 'ne', label: tr('≠ 等しくない'), sql: (c) => `${c} IS NOT ?` },
+  { id: 'contains', label: tr('含む'), sql: (c) => `instr(${c}, ?) > 0` },
+  { id: 'starts', label: tr('で始まる'), sql: (c) => `substr(${c}, 1, length(?1)) = ?1`, named: true },
+  { id: 'gt', label: tr('＞ より大きい'), sql: (c) => `${c} > ?` },
+  { id: 'ge', label: tr('≧ 以上'), sql: (c) => `${c} >= ?` },
+  { id: 'lt', label: tr('＜ より小さい'), sql: (c) => `${c} < ?` },
+  { id: 'le', label: tr('≦ 以下'), sql: (c) => `${c} <= ?` },
+  { id: 'null', label: tr('NULL である'), sql: (c) => `${c} IS NULL`, noValue: true },
+  { id: 'notnull', label: tr('NULL でない'), sql: (c) => `${c} IS NOT NULL`, noValue: true },
+  { id: 'empty', label: tr('空（NULL か空文字）'), sql: (c) => `coalesce(${c}, '') = ''`, noValue: true },
 ];
 
 /** 入力文字列を列の型に合わせた値に */
@@ -97,28 +98,33 @@ export function formToDefault(text, type) {
 export function friendlyError(msg) {
   const m = String(msg);
   let r;
-  if ((r = m.match(/UNIQUE constraint failed: (.+)/))) return `重複しています（一意制約: ${r[1]}）`;
-  if ((r = m.match(/NOT NULL constraint failed: (.+)/))) return `空（NULL）にできません: ${r[1]}`;
-  if (/FOREIGN KEY constraint failed/.test(m)) return '外部キー制約違反：参照先に存在しない値か、他の行から参照されています';
-  if ((r = m.match(/CHECK constraint failed: (.+)/))) return `CHECK 制約に違反しています: ${r[1]}`;
-  if ((r = m.match(/cannot store (\w+) value in (\w+) column (.+)/))) return `${r[3]} は ${r[2]} 型です（${r[1]} は入れられません）`;
-  if ((r = m.match(/no such table: (.+)/))) return `テーブル ${r[1]} がありません`;
-  if ((r = m.match(/no such column: (.+)/))) return `列 ${r[1]} がありません`;
-  if ((r = m.match(/near "(.+?)": syntax error/))) return `SQL の構文エラー（"${r[1]}" 付近）`;
-  return m;
+  if ((r = m.match(/UNIQUE constraint failed: (.+)/))) return tr('重複しています（一意制約: {0}）', [r[1]]);
+  if ((r = m.match(/NOT NULL constraint failed: (.+)/))) return tr('空（NULL）にできません: {0}', [r[1]]);
+  if (/FOREIGN KEY constraint failed/.test(m)) return tr('外部キー制約違反：参照先に存在しない値か、他の行から参照されています');
+  if ((r = m.match(/CHECK constraint failed: (.+)/))) return tr('CHECK 制約に違反しています: {0}', [r[1]]);
+  if ((r = m.match(/cannot store (\w+) value in (\w+) column (.+)/))) return tr('{0} は {1} 型です（{2} は入れられません）', [r[3], r[2], r[1]]);
+  if ((r = m.match(/no such table: (.+)/))) return tr('テーブル {0} がありません', [r[1]]);
+  if ((r = m.match(/no such column: (.+)/))) return tr('列 {0} がありません', [r[1]]);
+  if ((r = m.match(/near "(.+?)": syntax error/))) return tr('SQL の構文エラー（"{0}" 付近）', [r[1]]);
+  // Worker（db-worker.js）が出す日本語のエラーも、英語のときは訳す
+  if ((r = m.match(/^「(.+)」は既にあります$/))) return tr('「{0}」は既にあります', [r[1]]);
+  if ((r = m.match(/^ファイルに保存できませんでした：(.*)$/s))) return tr('ファイルに保存できませんでした：{0}', [r[1]]);
+  if ((r = m.match(/^外部キー制約に違反する行が (\d+) 件あるため適用できません（例: (.+)）$/))) return tr('外部キー制約に違反する行が {0} 件あるため適用できません（例: {1}）', [r[1], r[2]]);
+  if ((r = m.match(/^(.+) に失敗しました（(.+)）$/))) return tr('{0} に失敗しました（{1}）', [tr(r[1]), r[2]]);
+  return tr(m);
 }
 
 /** 式を計算したときのエラーを、ユーザーが書いた式に合わせた言葉に */
 function exprError(msg, newRow) {
   const m = String(msg);
   let r;
-  if (/incomplete input/.test(m)) return '式が途中で終わっています（括弧や引用符が閉じているか確かめてください）';
+  if (/incomplete input/.test(m)) return tr('式が途中で終わっています（括弧や引用符が閉じているか確かめてください）');
   if ((r = m.match(/near "(.+?)": syntax error/))) {
     // ) や FROM はアプリが式のあとに足したもの。そこで止まるのは、式の書き方そのものの誤り
-    return r[1] === ')' || /^from$/i.test(r[1]) ? '式の書き方が正しくありません' : `"${r[1]}" 付近の書き方が正しくありません`;
+    return r[1] === ')' || /^from$/i.test(r[1]) ? tr('式の書き方が正しくありません') : tr('"{0}" 付近の書き方が正しくありません', [r[1]]);
   }
-  if ((r = m.match(/no such column: (.+)/))) return newRow ? `新しい行の式では列（${r[1]}）を使えません` : `列 ${r[1]} がありません`;
-  if ((r = m.match(/no such function: (.+)/))) return `関数 ${r[1]} はありません`;
+  if ((r = m.match(/no such column: (.+)/))) return newRow ? tr('新しい行の式では列（{0}）を使えません', [r[1]]) : tr('列 {0} がありません', [r[1]]);
+  if ((r = m.match(/no such function: (.+)/))) return tr('関数 {0} はありません', [r[1]]);
   return friendlyError(m);
 }
 
@@ -173,13 +179,13 @@ export class TableSource {
     this.columns = model.columns.map((c) => {
       const badges = [];
       const t = c.type || 'ANY';
-      badges.push({ text: t, cls: 'type', title: '型' });
-      if (model.pk.includes(c.name)) badges.push({ text: model.pk.length > 1 ? `🔑${model.pk.indexOf(c.name) + 1}` : '🔑', cls: 'pk', title: model.pk.length > 1 ? `複合主キー（${model.pk.join(', ')}）` : (model.rowidAlias === c.name ? '主キー（自動採番）' : '主キー') });
-      if (uniq.has(c.name)) badges.push({ text: '◇', cls: 'uq', title: '一意（UNIQUE）' });
+      badges.push({ text: t, cls: 'type', title: tr('型') });
+      if (model.pk.includes(c.name)) badges.push({ text: model.pk.length > 1 ? `🔑${model.pk.indexOf(c.name) + 1}` : '🔑', cls: 'pk', title: model.pk.length > 1 ? tr('複合主キー（{0}）', [model.pk.join(', ')]) : (model.rowidAlias === c.name ? tr('主キー（自動採番）') : tr('主キー')) });
+      if (uniq.has(c.name)) badges.push({ text: '◇', cls: 'uq', title: tr('一意（UNIQUE）') });
       const fk = model.fks.find((f) => f.cols.includes(c.name));
-      if (fk) badges.push({ text: '→', cls: 'fk', title: `外部キー → ${fk.table}(${fk.refCols.join(', ')})` });
-      if (c.notnull && !model.pk.includes(c.name)) badges.push({ text: '必須', cls: 'nn', title: 'NOT NULL' });
-      if (c.generated) badges.push({ text: 'ƒ', cls: 'gen', title: `生成列: ${c.generated.expr}` });
+      if (fk) badges.push({ text: '→', cls: 'fk', title: tr('外部キー → {0}({1})', [fk.table, fk.refCols.join(', ')]) });
+      if (c.notnull && !model.pk.includes(c.name)) badges.push({ text: tr('必須'), cls: 'nn', title: 'NOT NULL' });
+      if (c.generated) badges.push({ text: 'ƒ', cls: 'gen', title: tr('生成列: {0}', [c.generated.expr]) });
       const a = affinity(c.type);
       return {
         name: c.name,
@@ -325,7 +331,7 @@ export class TableSource {
     const exprs = parts.filter((p) => p.check);
     if (!exprs.length || !/incomplete input|syntax error|no such column|no such function|unrecognized token|wrong number of arguments|式は1つだけ|式で DB/.test(e.message)) return e;
     const one = exprs.length === 1 ? exprs[0].col : null;
-    const err = new Error(`${one ? `「${one.name}」の` : ''}式を計算できません：${exprError(e.message, newRow)}`);
+    const err = new Error(tr('{0}式を計算できません：{1}', [one ? tr('「{0}」の', [one.name]) : '', exprError(e.message, newRow)]));
     err.col = one ? this.model.columns.indexOf(one) : -1;
     return err;
   }
@@ -372,7 +378,7 @@ export class TableSource {
       const ret = r.results[i].rows[0];
       if (ret) p.newKey = Object.fromEntries(this.keyCols().map((k, j) => [k, ret[j]]));
     });
-    pushChanges(`「${this.model.name}」の${changes.length > 1 ? `${changes.length} セルの変更` : 'セルの変更'}`, 't:' + this.model.name, r);
+    pushChanges(tr('「{0}」の{1}', [this.model.name, changes.length > 1 ? tr('{0} セルの変更', [changes.length]) : tr('セルの変更')]), 't:' + this.model.name, r);
     for (const p of plans) {
       const fresh = p.newKey && await this.fetchByKey(p.newKey);
       if (fresh) out.push({ row: p.row, rowObj: fresh });
@@ -402,12 +408,12 @@ export class TableSource {
     let r;
     try { r = await db.batchTracked(stmts); } catch (e) { throw this.exprFailure(e, allParts, true); }
     const n = r.results.filter((x) => x.rows[0]).length;
-    pushChanges(`「${this.model.name}」の${n > 1 ? `${n} 行の追加` : '行の追加'}`, 't:' + this.model.name, r);
+    pushChanges(tr('「{0}」の{1}', [this.model.name, n > 1 ? tr('{0} 行の追加', [n]) : tr('行の追加')]), 't:' + this.model.name, r);
   }
 
   async deleteRows(rowObjs) {
     const r = await db.batchTracked(rowObjs.map((x) => this.deleteStmt(x.key)));
-    pushChanges(`「${this.model.name}」の${rowObjs.length > 1 ? `${rowObjs.length} 行の削除` : '行の削除'}`, 't:' + this.model.name, r);
+    pushChanges(tr('「{0}」の{1}', [this.model.name, rowObjs.length > 1 ? tr('{0} 行の削除', [rowObjs.length]) : tr('行の削除')]), 't:' + this.model.name, r);
   }
 
   async duplicateRows(rowObjs) {

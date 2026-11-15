@@ -1,6 +1,7 @@
 // Undo/Redo。各操作は「元に戻す関数」と「やり直す関数」の組（undoFn / redoFn）で記録する。
 // データの変更は、SQLite のセッションで取った変更の記録（changeset）を逆向き・そのままに当てる（pushChanges）。
 // 列幅や名前の変更などは、それぞれの関数で戻す
+import { t as tr } from './i18n.js';
 import { db } from './db-client.js';
 import { txMarks } from './txmarks.js';
 
@@ -50,7 +51,7 @@ export function tableSummary(tables) {
   return Object.entries(tables ?? {})
     .map(([t, n]) => [t, n.insert + n.delete + n.update])
     .sort((a, b) => b[1] - a[1])
-    .map(([t, n]) => `「${t}」${n} 行`).join('・');
+    .map(([t, n]) => tr('「{0}」{1} 行', [t, n])).join(tr('・'));
 }
 
 /**

@@ -1,4 +1,5 @@
 // SQL コンソール：任意の SQL を実行。GUI が発行した SQL も履歴に流れる
+import { t as tr } from './i18n.js';
 import { db, inline } from './db-client.js';
 import { el, modKey, toast, choiceDialog } from './ui.js';
 import { pushChanges, tableSummary } from './undo.js';
@@ -26,7 +27,7 @@ export class SqlConsole {
   build() {
     this.input = el('textarea.console-input.mono', {
       spellcheck: false, rows: 4,
-      placeholder: 'SQL を入力（Ctrl+Enter で実行、Ctrl+↑↓ で履歴）\n例: CREATE INDEX … / CREATE VIEW … AS SELECT … / UPDATE … SET …',
+      placeholder: tr('SQL を入力（Ctrl+Enter で実行、Ctrl+↑↓ で履歴）\n例: CREATE INDEX … / CREATE VIEW … AS SELECT … / UPDATE … SET …'),
       on: { keydown: (e) => this.onKey(e) },
     });
     this.status = el('span.console-status');
@@ -39,8 +40,8 @@ export class SqlConsole {
         this.tabsEl,
         el('span.grow'),
         this.status,
-        el('button.btn.primary.sm', { on: { click: () => this.run() } }, '▶ 実行'),
-        el('button.icon-btn', { title: '閉じる（Ctrl+`）', on: { click: () => this.toggle(false) } }, '×')),
+        el('button.btn.primary.sm', { on: { click: () => this.run() } }, tr('▶ 実行')),
+        el('button.icon-btn', { title: tr('閉じる（Ctrl+`）'), on: { click: () => this.toggle(false) } }, '×')),
       el('div.console-body', this.input, this.out),
     );
     this.renderTabs();
@@ -55,7 +56,7 @@ export class SqlConsole {
   }
 
   renderTabs() {
-    this.tabsEl.replaceChildren(...[['result', '結果'], ['log', '実行履歴']].map(([id, label]) =>
+    this.tabsEl.replaceChildren(...[['result', tr('結果')], ['log', tr('実行履歴')]].map(([id, label]) =>
       el('button.ctab', { class: this.tab === id ? 'on' : '', on: { click: () => { this.tab = id; this.renderTabs(); this.renderOut(); } } }, label)));
   }
 
@@ -113,13 +114,13 @@ export class SqlConsole {
         if (r.error) { error = r.error; break; }
         if (!r.paused) break;
         const c = await choiceDialog({
-          title: '元に戻せない操作です',
-          body: '次の文は表や列を変える・消すなどの操作で、元に戻せません。実行すると、これまでの「元に戻す」の記録も消えます。',
+          title: tr('元に戻せない操作です'),
+          body: tr('次の文は表や列を変える・消すなどの操作で、元に戻せません。実行すると、これまでの「元に戻す」の記録も消えます。'),
           code: r.text,
           choices: [
-            { label: 'キャンセル', value: null },
-            { label: '残りも確認せずに実行', value: 'all' },
-            { label: '実行する', value: 'one', danger: true },
+            { label: tr('キャンセル'), value: null },
+            { label: tr('残りも確認せずに実行'), value: 'all' },
+            { label: tr('実行する'), value: 'one', danger: true },
           ],
         });
         if (!c) { cancelled = true; break; }
@@ -134,7 +135,7 @@ export class SqlConsole {
     else if (untrackable) this.cb.onDataChanged();
     else if (changes.length) {
       const short = sql.replace(/\s+/g, ' ').slice(0, 40) + (sql.length > 40 ? '…' : '');
-      const entry = pushChanges(`SQL コンソールの実行（${short}、${tableSummary(changes.length === 1 ? changes[0].tables : mergeTables(changes))}）`, null, { changes }, {
+      const entry = pushChanges(tr('SQL コンソールの実行（{0}、{1}）', [short, tableSummary(changes.length === 1 ? changes[0].tables : mergeTables(changes))]), null, { changes }, {
         onUndo: () => { item.undone = true; this.refreshLog(); },
         onRedo: () => { item.undone = false; this.refreshLog(); },
       });
@@ -148,8 +149,8 @@ export class SqlConsole {
     }
     this.lastResult = last;
     this.status.textContent = cancelled
-      ? `途中で止めました（${ms} ms）`
-      : last.columns.length ? `${last.rows.length} 行（${ms} ms）` : `完了：${last.changes} 行に影響（${ms} ms）`;
+      ? tr('途中で止めました（{0} ms）', [ms])
+      : last.columns.length ? tr('{0} 行（{1} ms）', [last.rows.length, ms]) : tr('完了：{0} 行に影響（{1} ms）', [last.changes, ms]);
     this.status.className = 'console-status ok';
     this.renderOut();
   }
@@ -162,7 +163,7 @@ export class SqlConsole {
       // 古い順に下へ積む（ターミナルと同じ向き）。開いたときは最新が見える一番下から
       this.logList = el('div.log-list', this.log.map((it) => this.logItem(it)));
       this.jumpBtn = el('button.log-jump', { hidden: true, on: { click: () => this.scrollToBottom() } });
-      this.out.replaceChildren(this.log.length ? this.logList : el('p.muted.pad', 'まだ何も実行していません。GUI で行った操作の SQL もここに記録されます。'),
+      this.out.replaceChildren(this.log.length ? this.logList : el('p.muted.pad', tr('まだ何も実行していません。GUI で行った操作の SQL もここに記録されます。')),
         el('div.log-jump-wrap', this.jumpBtn));
       this.setUnseen(0);
       this.scrollToBottom();
@@ -170,8 +171,8 @@ export class SqlConsole {
     }
     this.logList = this.jumpBtn = null;
     const r = this.lastResult;
-    if (!r) { if (!this.out.querySelector('.console-error')) this.out.replaceChildren(el('p.muted.pad', '結果はここに表示されます。')); return; }
-    if (!r.columns.length) { this.out.replaceChildren(el('p.muted.pad', '実行しました。')); return; }
+    if (!r) { if (!this.out.querySelector('.console-error')) this.out.replaceChildren(el('p.muted.pad', tr('結果はここに表示されます。'))); return; }
+    if (!r.columns.length) { this.out.replaceChildren(el('p.muted.pad', tr('実行しました。'))); return; }
     const host = el('div.console-grid');
     this.out.replaceChildren(host);
     const rows = r.rows;
@@ -188,13 +189,13 @@ export class SqlConsole {
   logItem(it) {
     return el('div.log-item', {
       class: [it.error ? 'err' : '', it.undone ? 'undone' : ''].join(' ').trim(),
-      title: 'クリックで入力欄にコピー',
+      title: tr('クリックで入力欄にコピー'),
       on: { click: () => { this.input.value = inline(it.sql, it.bind); this.input.focus(); } },
     },
-    el('span.log-src', { gui: 'GUI', console: 'SQL', undo: '元に戻す', redo: 'やり直し' }[it.source] || it.source),
+    el('span.log-src', { gui: 'GUI', console: 'SQL', undo: tr('元に戻す'), redo: tr('やり直し') }[it.source] || it.source),
     el('span.log-time', it.at.toLocaleTimeString()),
     el('code.log-sql', inline(it.sql, it.bind)),
-    it.undone ? el('span.log-undone', '元に戻しました') : null,
+    it.undone ? el('span.log-undone', tr('元に戻しました')) : null,
     it.error ? el('div.log-err', friendlyError(it.error)) : null);
   }
 
@@ -221,7 +222,7 @@ export class SqlConsole {
     this.unseen = n;
     if (!this.jumpBtn) return;
     this.jumpBtn.hidden = !n;
-    this.jumpBtn.textContent = `↓ 新しい記録 ${n} 件`;
+    this.jumpBtn.textContent = tr('↓ 新しい記録 {0} 件', [n]);
   }
 }
 

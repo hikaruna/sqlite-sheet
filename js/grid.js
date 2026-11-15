@@ -1,4 +1,5 @@
 // スプレッドシート風グリッド：仮想スクロール、セル選択、編集、コピー＆ペースト
+import { t as tr } from './i18n.js';
 import { el, modKey, fmtBytes } from './ui.js';
 import { sniff } from './blob.js';
 import { affinity } from './schema.js';
@@ -76,7 +77,7 @@ export class Grid {
   placeholderFor(c) {
     const col = this.cols[c];
     if (!col || col.readonly) return '';
-    if (col.auto) return '（自動採番）';
+    if (col.auto) return tr('（自動採番）');
     if (col.dflt != null) return defaultToForm(col.dflt);
     return col.notnull ? '' : '=NULL';
   }
@@ -131,8 +132,8 @@ export class Grid {
     const out = {};
     const m = String(msg).match(/NOT NULL constraint failed: (?:[^.]+\.)?(.+)/);
     const named = m && this.cols.findIndex((c) => c.name === m[1].trim());
-    if (named != null && named >= 0) { out[named] = '必須です'; return out; }
-    this.cols.forEach((col, c) => { if (col.required && (this.draft?.values[c] ?? null) === null) out[c] = '必須です'; });
+    if (named != null && named >= 0) { out[named] = tr('必須です'); return out; }
+    this.cols.forEach((col, c) => { if (col.required && (this.draft?.values[c] ?? null) === null) out[c] = tr('必須です'); });
     return out;
   }
 
@@ -143,7 +144,7 @@ export class Grid {
     this.inner = el('div.grid-inner');
     this.header = el('div.grid-header');
     this.body = el('div.grid-body');
-    this.sink = el('textarea.grid-sink', { spellcheck: false, autocomplete: 'off', rows: 1, 'aria-label': 'セル入力' });
+    this.sink = el('textarea.grid-sink', { spellcheck: false, autocomplete: 'off', rows: 1, 'aria-label': tr('セル入力') });
     // タッチ端末：選んでいるだけのときはキーボードを出さない（編集を始めたら出す）
     if (TOUCH) this.sink.inputMode = 'none';
     // 範囲を広げるつまみ（タッチ端末だけ。指でなぞるとスクロールになるので）
@@ -449,7 +450,7 @@ export class Grid {
     if (e.button !== 0) return;
     e.preventDefault(); e.stopPropagation();
     const [a, b] = this.resizeRows(r);
-    if (b - a + 1 > MAX_RESIZE_ROWS) { this.hooks.onError?.(new Error(`一度に高さを変えられるのは ${MAX_RESIZE_ROWS} 行までです`)); return; }
+    if (b - a + 1 > MAX_RESIZE_ROWS) { this.hooks.onError?.(new Error(tr('一度に高さを変えられるのは {0} 行までです', [MAX_RESIZE_ROWS]))); return; }
     const startY = e.clientY, startH = this.rowH(r), base = new Map(this.manualHeights);
     let h = startH, moved = false;
     const move = (ev) => {
@@ -470,7 +471,7 @@ export class Grid {
 
   /** 行番号の欄の下の境目（ドラッグで高さを変える・ダブルクリックで中身に合わせる） */
   rowResizer(r) {
-    return el('div.gr-resize', { title: 'ドラッグで高さを変更・ダブルクリックで中身に合わせる', on: {
+    return el('div.gr-resize', { title: tr('ドラッグで高さを変更・ダブルクリックで中身に合わせる'), on: {
       mousedown: (e) => { e.stopPropagation(); if (!this.touchRecent()) this.startRowResize(e, r, 'mouse'); },
       dblclick: (e) => { e.preventDefault(); e.stopPropagation(); if (!this.touchRecent()) this.autoFitRows(r); },
       pointerdown: (e) => {
@@ -489,7 +490,7 @@ export class Grid {
   /** 行の高さを中身に合わせる（境目のダブルクリック・ダブルタップ）。選んだ行が複数ならそれぞれを合わせる */
   async autoFitRows(r) {
     const [a, b] = this.resizeRows(r);
-    if (b - a + 1 > MAX_RESIZE_ROWS) { this.hooks.onError?.(new Error(`一度に高さを変えられるのは ${MAX_RESIZE_ROWS} 行までです`)); return; }
+    if (b - a + 1 > MAX_RESIZE_ROWS) { this.hooks.onError?.(new Error(tr('一度に高さを変えられるのは {0} 行までです', [MAX_RESIZE_ROWS]))); return; }
     const rows = await this.rowsBetween(a, b);
     // 画像が原寸で見える高さと、折り返した文字が全部見える高さの大きいほう
     const text = this.measureRows(rows);
@@ -610,7 +611,7 @@ export class Grid {
     h.replaceChildren();
     h.style.width = this.totalW() + 'px';
     this.inner.style.width = this.totalW() + 'px';
-    h.append(el('div.gh-corner', { style: { width: RHW + 'px' }, title: 'すべて選択', on: { mousedown: (e) => { e.preventDefault(); this.selectAll(); } } }));
+    h.append(el('div.gh-corner', { style: { width: RHW + 'px' }, title: tr('すべて選択'), on: { mousedown: (e) => { e.preventDefault(); this.selectAll(); } } }));
     this.cols.forEach((col, c) => {
       const cell = el('div.gh-cell', {
         style: { width: this.colW(c) + 'px' },
@@ -636,11 +637,11 @@ export class Grid {
       el('span.gh-name', col.name),
       ...(col.badges || []).map((b) => el('span.gh-badge', { class: b.cls || '', title: b.title || '' }, b.text)),
       el('span.gh-spacer'),
-      col.sort ? el('span.gh-sort', { title: col.sort.total > 1 ? `並べ替えの第${col.sort.rank}基準` : '並べ替え中' },
+      col.sort ? el('span.gh-sort', { title: col.sort.total > 1 ? tr('並べ替えの第{0}基準', [col.sort.rank]) : tr('並べ替え中') },
         (col.sort.dir === 'asc' ? '↑' : '↓') + (col.sort.total > 1 ? col.sort.rank : '')) : null,
-      col.filtered ? el('span.gh-filter', { title: '絞り込み中' }, '⏷') : null,
-      el('button.gh-btn', { title: '列メニュー', on: { click: (e) => { e.stopPropagation(); this.hooks.onHeaderMenu?.(c, e.currentTarget); } } }, '⋮')),
-      el('div.gh-resize', { title: 'ドラッグで幅を変更・ダブルクリックで中身に合わせる', on: {
+      col.filtered ? el('span.gh-filter', { title: tr('絞り込み中') }, '⏷') : null,
+      el('button.gh-btn', { title: tr('列メニュー'), on: { click: (e) => { e.stopPropagation(); this.hooks.onHeaderMenu?.(c, e.currentTarget); } } }, '⋮')),
+      el('div.gh-resize', { title: tr('ドラッグで幅を変更・ダブルクリックで中身に合わせる'), on: {
         mousedown: (e) => { if (!this.touchRecent()) this.startResize(e, c, 'mouse'); },
         dblclick: (e) => { e.preventDefault(); e.stopPropagation(); if (!this.touchRecent()) this.autoFit(c); },
         pointerdown: (e) => {
@@ -656,7 +657,7 @@ export class Grid {
       h.append(cell);
     });
     if (this.hooks.onAddColumn) {
-      h.append(el('button.gh-add', { title: '列を追加', on: { click: (e) => this.hooks.onAddColumn(e.currentTarget) } }, '＋'));
+      h.append(el('button.gh-add', { title: tr('列を追加'), on: { click: (e) => this.hooks.onAddColumn(e.currentTarget) } }, tr('＋')));
     }
   }
 
@@ -743,7 +744,7 @@ export class Grid {
         const here = this.cur.r === r;
         // 行は表の幅いっぱいにする（行番号の欄と同じく、横にスクロールしても「＋」が左に残るように）
         frag.append(el('div.gr.row-adder', { class: here ? 'cur' : '', style: { top: this.rowY(r) + 'px', width: this.totalW() + 'px' }, dataset: { r } },
-          el('div.gr-head', { style: { width: RHW + 'px' }, title: '行を追加（最後の行で ↓ でも開きます）' }, '＋')));
+          el('div.gr-head', { style: { width: RHW + 'px' }, title: tr('行を追加（最後の行で ↓ でも開きます）') }, tr('＋'))));
         continue;
       }
       const row = isNew ? null : this.rowAt(r);
@@ -759,7 +760,7 @@ export class Grid {
       rowEl.append(el('div.gr-head', {
         class: rowSel ? 'hl' : '',
         style: { width: RHW + 'px' },
-        title: isNew ? '新しい行（行を離れると保存・Esc で取り消し）' : '',
+        title: isNew ? tr('新しい行（行を離れると保存・Esc で取り消し）') : '',
       }, isNew ? '✎' : String(r + 1), isNew ? null : this.rowResizer(r)));
       for (let c = 0; c < this.cols.length; c++) {
         const cell = el('div.gc', { style: { width: widths[c] + 'px' }, dataset: { c } });
@@ -785,7 +786,7 @@ export class Grid {
         }
         if (col.fk && this.source.editable && r === this.cur.r && c === this.cur.c && this.hooks.onFkPick) {
           cell.append(el('button.fk-drop', {
-            title: '参照先から選ぶ（Alt+↓）',
+            title: tr('参照先から選ぶ（Alt+↓）'),
             on: { mousedown: (e) => { e.preventDefault(); e.stopPropagation(); this.hooks.onFkPick(r, c, e.currentTarget); } },
           }, '▾'));
         }
@@ -803,7 +804,7 @@ export class Grid {
   renderEmpty() {
     const show = this.rowCount === 0 && !this.source.editable;
     if (show && !this.empty) {
-      this.empty = el('div.grid-empty', '行がありません');
+      this.empty = el('div.grid-empty', tr('行がありません'));
       this.host.append(this.empty);
     } else if (!show && this.empty) { this.empty.remove(); this.empty = null; }
   }
@@ -1350,8 +1351,8 @@ export class Grid {
       } else {
         await navigator.clipboard.writeText(tsv);
       }
-      this.hooks.onInfo?.(image ? '画像をコピーしました' : `${n} セルをコピーしました`);
-    } catch { this.hooks.onError?.(new Error('クリップボードに書き込めませんでした')); }
+      this.hooks.onInfo?.(image ? tr('画像をコピーしました') : tr('{0} セルをコピーしました', [n]));
+    } catch { this.hooks.onError?.(new Error(tr('クリップボードに書き込めませんでした'))); }
   }
 
   /** 貼ろうとしている中身が、直前にこのアプリでコピーしたものか（そうなら BLOB を含む元の値を返す） */
@@ -1386,7 +1387,7 @@ export class Grid {
     for (let c = c0; c <= c1; c++) if (this.acceptsBlob(c)) blobCols.push(c);
     if (file && blobCols.length) return this.pasteBlob(new Uint8Array(await file.arrayBuffer()), blobCols);
     if (text) return this.paste(text);
-    if (file) this.hooks.onError?.(new Error('ファイルや画像は BLOB の列（または型のない列）にだけ貼り付けられます'));
+    if (file) this.hooks.onError?.(new Error(tr('ファイルや画像は BLOB の列（または型のない列）にだけ貼り付けられます')));
   }
 
   /** ドロップ先が、ファイルを入れられるセルなら {r, c} */
@@ -1407,7 +1408,7 @@ export class Grid {
    */
   async pasteBlob(bytes, cols, { r0, r1 } = this.range()) {
     if (!this.source.editable) { this.hooks.onReadonlyEdit?.(); return; }
-    const what = sniff(bytes).image ? '画像' : 'ファイル';
+    const what = sniff(bytes).image ? tr('画像') : tr('ファイル');
     const changes = [];
     let toDraft = 0;
     for (let r = r0; r <= r1; r++) {
@@ -1417,9 +1418,9 @@ export class Grid {
       }
     }
     if (toDraft) { this.render(); this.emitSelect(); }
-    if (!changes.length) { if (toDraft) this.hooks.onInfo?.(`${what}を新しい行に入れました（行を離れると保存されます）`); return; }
+    if (!changes.length) { if (toDraft) this.hooks.onInfo?.(tr('{0}を新しい行に入れました（行を離れると保存されます）', [what])); return; }
     const ok = await this.write(changes);
-    if (ok) this.hooks.onInfo?.(changes.length > 1 ? `${changes.length} セルに${what}を入れました` : `${what}を入れました（${fmtBytes(bytes.length)}）`);
+    if (ok) this.hooks.onInfo?.(changes.length > 1 ? tr('{0} セルに{1}を入れました', [changes.length, what]) : tr('{0}を入れました（{1}）', [what, fmtBytes(bytes.length)]));
   }
 
   /** 文字（TSV）を貼る。values（行×列の値）を渡したときはそれをそのまま貼る */
@@ -1434,7 +1435,7 @@ export class Grid {
     const rows = single ? r1 - r0 + 1 : data.length;
     const cols = single ? c1 - c0 + 1 : Math.max(...data.map((d) => d.length));
     if (!single && c0 + cols > this.cols.length) {
-      this.hooks.onError?.(new Error(`貼り付けるデータが ${cols} 列あり、右端からはみ出します`));
+      this.hooks.onError?.(new Error(tr('貼り付けるデータが {0} 列あり、右端からはみ出します', [cols])));
       return;
     }
     for (let i = 0; i < rows; i++) {
@@ -1457,7 +1458,7 @@ export class Grid {
       this.cur = { r: r0, c: c0 };
       this.ext = { r: Math.min(r0 + rows - 1, this.totalRows - 1), c: c0 + cols - 1 };
       this.render(); this.emitSelect();
-      if (changes.length > 1) this.hooks.onInfo?.(`${changes.length} セルを貼り付けました`);
+      if (changes.length > 1) this.hooks.onInfo?.(tr('{0} セルを貼り付けました', [changes.length]));
     }
   }
 
@@ -1527,7 +1528,7 @@ export class Grid {
           // 下書きを閉じて、最後の行へ戻る（行がなければ「＋ 行を追加」の上に留まる）
           this.cur = { r: Math.max(0, this.rowCount - 1), c }; this.ext = { ...this.cur };
           this.ensureVisible(); this.render(); this.emitSelect();
-          if (had) this.hooks.onInfo?.('新しい行の入力を取り消しました');
+          if (had) this.hooks.onInfo?.(tr('新しい行の入力を取り消しました'));
           return;
         }
         this.ext = { ...this.cur }; this.render(); return;
@@ -1615,7 +1616,7 @@ async function toPng(bytes, mime) {
     const c = document.createElement('canvas');
     c.width = img.naturalWidth || 300; c.height = img.naturalHeight || 150;
     c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
-    return await new Promise((resolve, reject) => c.toBlob((b) => (b ? resolve(b) : reject(new Error('PNG に変換できませんでした'))), 'image/png'));
+    return await new Promise((resolve, reject) => c.toBlob((b) => (b ? resolve(b) : reject(new Error(tr('PNG に変換できませんでした')))), 'image/png'));
   } finally { URL.revokeObjectURL(url); }
 }
 

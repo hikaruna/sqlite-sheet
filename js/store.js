@@ -5,6 +5,7 @@
 //   w:<DB>/<表>      列の幅
 //   meta:<DB>        {created, viewed, updated}：作成・最後に開いた・最後に書き込んだ時刻（ミリ秒）
 // DB の名前変更・複製・削除・作り直しに合わせて、ここでまとめて付け替える・消す。
+import { t as tr } from './i18n.js';
 import { toast } from './ui.js';
 
 const exact = ['queries:', 'order:', 'last-sheet:', 'meta:'];
@@ -67,7 +68,7 @@ export function setQueries(db, list) {
   try {
     localStorage.setItem('queries:' + db, JSON.stringify(list.map(({ name, sql }) => ({ name, sql }))));
   } catch (e) {
-    toast('クエリを保存できませんでした（ブラウザの保存領域がいっぱいかもしれません）', 'error');
+    toast(tr('クエリを保存できませんでした（ブラウザの保存領域がいっぱいかもしれません）'), 'error');
     throw e;
   }
 }
