@@ -1531,17 +1531,18 @@ function gridHooks(kind) {
     onRedo: doRedo,
     onHeaderMenu: (c, anchor) => headerMenu(c, anchor),
     // 列幅の変更も元に戻せるようにする（スプレッドシートと同じ）。別のシートに移っていたら保存値だけ戻す
-    onColumnWidth: (key, name, before, after) => {
-      const apply = (w) => {
-        if (state.grid?.source.widthKey === key) { state.grid.setColWidth(name, w); return; }
+    // changes: [{name, before, after}]。複数の列をまとめて変えたときも1回で戻る
+    onColumnWidth: (key, changes) => {
+      const apply = (pick) => {
+        if (state.grid?.source.widthKey === key) { state.grid.setColWidths(Object.fromEntries(changes.map((x) => [x.name, pick(x)]))); return; }
         try {
           const all = JSON.parse(localStorage.getItem('w:' + key) || '{}');
-          if (w == null) delete all[name]; else all[name] = w;
+          for (const x of changes) { const w = pick(x); if (w == null) delete all[x.name]; else all[x.name] = w; }
           localStorage.setItem('w:' + key, JSON.stringify(all));
         } catch { /* 無視 */ }
       };
       const sheet = state.key;
-      undo.push({ label: `「${sheet.slice(2)}」の列幅の変更`, sheet, col: name, undoFn: () => apply(before), redoFn: () => apply(after) });
+      undo.push({ label: `「${sheet.slice(2)}」の列幅の変更`, sheet, col: changes[0].name, undoFn: () => apply((x) => x.before), redoFn: () => apply((x) => x.after) });
     },
     onAddColumn: isTable ? (anchor) => quickAddColumn(anchor) : null,
     onContextMenu: (pos, range) => cellMenu(pos, range),

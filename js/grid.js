@@ -300,25 +300,39 @@ export class Grid {
     try { localStorage.setItem('w:' + this.source.widthKey, JSON.stringify(this.widths)); } catch { /* 無視 */ }
   }
   /** 列幅を変える（undefined なら自動の幅に戻す）。元に戻す・やり直すからも呼ぶ */
-  setColWidth(name, w) {
-    if (w == null) delete this.widths[name]; else this.widths[name] = w;
+  setColWidths(map) {
+    for (const [name, w] of Object.entries(map)) { if (w == null) delete this.widths[name]; else this.widths[name] = w; }
     this.saveWidths(); this.renderHeader(); this.render();
   }
 
-  /** 列幅の変更を知らせる（元に戻すに積むため）。変わっていなければ何もしない */
-  emitWidth(name, before) {
-    const after = this.widths[name];
-    if (after !== before) this.hooks.onColumnWidth?.(this.source.widthKey, name, before, after);
+  /** 列幅の変更をまとめて知らせる（元に戻すに1回分として積むため）。befores: {列名: 変更前}。変わっていなければ何もしない */
+  emitWidths(befores) {
+    const changes = Object.entries(befores).map(([name, before]) => ({ name, before, after: this.widths[name] })).filter((x) => x.after !== x.before);
+    if (changes.length) this.hooks.onColumnWidth?.(this.source.widthKey, changes);
+  }
+
+  /** 境目を操作した列 c と一緒に変える列。列ごと選んでいて c がその中にあれば選んだ列すべて（スプレッドシートと同じ） */
+  resizeCols(c) {
+    const { c0, c1 } = this.range();
+    if (!this.colSelect || c < c0 || c > c1) return [c];
+    return Array.from({ length: c1 - c0 + 1 }, (_, i) => c0 + i);
   }
 
   /**
-   * 列幅を中身に合わせる（境界線のダブルクリック・ダブルタップ）。
+   * 列幅を中身に合わせる（境界線のダブルクリック・ダブルタップ）。選んだ列が複数ならそれぞれを合わせる。
    * 読み込み済みの行の値がすべて収まる幅にする（見出しは数えない。まだ読んでいない行も数えない）
    */
   autoFit(c) {
+    const targets = this.resizeCols(c);
+    const befores = Object.fromEntries(targets.map((i) => [this.cols[i].name, this.widths[this.cols[i].name]]));
+    for (const i of targets) this.widths[this.cols[i].name] = this.fitWidth(i);
+    this.saveWidths(); this.renderHeader(); this.render();
+    this.emitWidths(befores);
+  }
+
+  /** 列 c の中身がすべて収まる幅 */
+  fitWidth(c) {
     const col = this.cols[c];
-    if (!col) return;
-    const before = this.widths[col.name];
     // 実際と同じ CSS で、幅を決めずに並べて測る
     const probe = el('div.gr', { style: { position: 'absolute', visibility: 'hidden', top: 0, left: 0, width: 'max-content', display: 'block' } });
     const cells = [];
@@ -334,9 +348,7 @@ export class Grid {
     this.body.append(probe);
     const w = Math.max(MIN_W, ...cells.map((x) => x.offsetWidth));
     probe.remove();
-    this.widths[col.name] = Math.ceil(w) + 2;
-    this.saveWidths(); this.renderHeader(); this.render();
-    this.emitWidth(col.name, before);
+    return Math.ceil(w) + 2;
   }
 
   colW(c) { const col = this.cols[c]; return this.widths[col.name] ?? col.width ?? (col.width = autoWidth(col)); }
@@ -412,15 +424,19 @@ export class Grid {
   startResize(e, c, kind) {
     if (e.button !== 0) return;
     e.preventDefault(); e.stopPropagation();
-    const startX = e.clientX, startW = this.colW(c), name = this.cols[c].name, before = this.widths[name];
+    // 列ごと複数選んでいれば、選んだ列すべてを同じ幅にする
+    const targets = this.resizeCols(c).map((i) => this.cols[i].name);
+    const startX = e.clientX, startW = this.colW(c);
+    const befores = Object.fromEntries(targets.map((name) => [name, this.widths[name]]));
     const move = (ev) => {
-      this.widths[this.cols[c].name] = Math.max(MIN_W, startW + (ev.clientX - startX) / this.z);
+      const w = Math.max(MIN_W, startW + (ev.clientX - startX) / this.z);
+      for (const name of targets) this.widths[name] = w;
       this.renderHeader(); this.render();
     };
     const up = () => {
       removeEventListener(kind + 'move', move); removeEventListener(kind + 'up', up); removeEventListener('pointercancel', up);
       this.saveWidths();
-      this.emitWidth(name, before);
+      this.emitWidths(befores);
     };
     addEventListener(kind + 'move', move); addEventListener(kind + 'up', up); addEventListener('pointercancel', up);
   }
