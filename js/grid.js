@@ -622,6 +622,9 @@ export class Grid {
         on: {
           pointerdown: (e) => {
             if (e.pointerType === 'mouse' || e.target.closest('.gh-btn, .gh-resize')) return;
+            // 境目の近くを続けて2回タップしたら、その列の幅を中身に合わせる
+            const near = [...h.querySelectorAll('.gh-cell')].findIndex((x) => Math.abs(x.getBoundingClientRect().right - e.clientX) <= 10);
+            if (this.borderDoubleTap('col', near, e)) return;
             // タッチ（スプレッドシートと同じ）：タップで列を選ぶ。選んでいる列をもう一度タップするか、長押しで列メニュー
             // スクロールのために指を動かしたら何もしない
             this.tap(e, () => {
@@ -656,18 +659,14 @@ export class Grid {
       el('div.gh-resize', { title: tr('ドラッグで幅を変更・ダブルクリックで中身に合わせる'), on: {
         mousedown: (e) => { if (!this.touchRecent()) this.startResize(e, c, 'mouse'); },
         dblclick: (e) => { e.preventDefault(); e.stopPropagation(); if (!this.touchRecent()) this.autoFit(c); },
-        pointerdown: (e) => {
-          if (e.pointerType === 'mouse') return;
-          this.lastTouch = Date.now();
-          // ダブルタップで中身に合わせる
-          const t = this.lastResizeTap;
-          this.lastResizeTap = { c, at: Date.now() };
-          if (t && t.c === c && Date.now() - t.at < 350) { e.preventDefault(); this.lastResizeTap = null; this.autoFit(c); return; }
-          this.startResize(e, c, 'pointer');
-        },
+        // タッチ端末ではこの帯はタップを受け取らない（CSS）。幅は「◂▸」のつまみ、ダブルタップは borderDoubleTap で扱う
       } }));
       h.append(cell);
     });
+    // 列を選んでいるときの、幅を変えるつまみ（タッチ端末だけ。置き場所は placeHandle で決める）
+    if (TOUCH) h.append(this.widthKnob = el('div.gh-knob', { hidden: true, title: tr('ドラッグで幅を変更・ダブルクリックで中身に合わせる'), on: {
+      pointerdown: (e) => { this.lastTouch = Date.now(); this.startResize(e, this.range().c1, 'pointer'); },
+    } }));
     if (this.hooks.onAddColumn) {
       h.append(el('button.gh-add', { title: tr('列を追加'), on: { click: (e) => this.hooks.onAddColumn(e.currentTarget) } }, tr('＋')));
     }
@@ -896,10 +895,12 @@ export class Grid {
     const show = TOUCH && !this.editing && this.cols.length > 0 && this.rowCount > 0 && this.cur.r !== this.newRowIndex;
     // 列ごと選んでいるときは、右下のつまみの代わりに（スプレッドシートと同じ）
     // ・選んだ列の左右の境目に、範囲を広げるつまみ（見えている範囲の縦の真ん中）
+    // ・見出しの右下の境目に、幅を変えるつまみ
     const head = show && this.colSelect && !this.rowSelect;
     const { r1, c0, c1 } = this.range();
     this.handle.hidden = !show || head;
     this.colHandles.forEach((h) => { h.hidden = !head; });
+    if (this.widthKnob) this.widthKnob.hidden = !head;
     if (head) {
       const st = this.scroll.scrollTop / this.z, vh = this.scroll.clientHeight / this.z;
       // 見えているデータの行の縦の真ん中（行が画面の下まで届かなければ、データのある所だけの真ん中）
@@ -908,6 +909,7 @@ export class Grid {
       const [l, r] = this.colHandles;
       Object.assign(l.style, { left: this.colX(c0) + 'px', top });
       Object.assign(r.style, { left: (this.colX(c1) + this.colW(c1)) + 'px', top });
+      if (this.widthKnob) this.widthKnob.style.left = (this.colX(c1) + this.colW(c1)) + 'px';
     }
     if (!show || head) return;
     Object.assign(this.handle.style, { left: (this.colX(c1) + this.colW(c1)) + 'px', top: this.rowY(r1 + 1) + 'px' });
@@ -1058,6 +1060,21 @@ export class Grid {
     const up = () => { if (done) return; end(); onTap(); };
     const timer = onLong ? setTimeout(() => { if (done) return; end(); onLong(); }, LONG_PRESS) : 0;
     addEventListener('pointermove', move); addEventListener('pointerup', up); addEventListener('pointercancel', end);
+  }
+
+  /**
+   * タッチ：境目の近く（i は列か行の番号。近くなければ -1）を続けて2回タップしたかを見る。
+   * 2回目なら中身に合わせて true（そのタップのふつうの動き＝メニューなどは出さない）。1回目はふつうのタップとして通す
+   */
+  borderDoubleTap(kind, i, e) {
+    const t = this.lastBorderTap, now = Date.now();
+    this.lastBorderTap = i >= 0 ? { kind, i, at: now } : null;
+    if (i < 0 || !t || t.kind !== kind || t.i !== i || now - t.at >= 350) return false;
+    this.lastBorderTap = null;
+    this.lastTouch = now;
+    e.preventDefault();
+    if (kind === 'col') this.autoFit(i); else this.autoFitRows(i);
+    return true;
   }
 
   onTouchDown(e) {

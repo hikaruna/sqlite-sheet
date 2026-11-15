@@ -760,6 +760,15 @@ body.dropping::after {
   content: ''; position: absolute; inset: 5px; border-radius: 50%;
   background: var(--accent); border: 2px solid var(--surface); box-shadow: 0 1px 3px rgb(0 0 0 / .3);
 }
+/* 列ごと選んでいるときの、見出しの右下の境目に出す幅を変えるつまみ（タッチ端末だけ） */
+.gh-knob {
+  position: absolute; top: 100%; z-index: 6; width: 30px; height: 30px; margin: -15px 0 0 -15px; touch-action: none;
+}
+.gh-knob::after {
+  content: '◂▸'; position: absolute; inset: 4px; display: grid; place-items: center; border-radius: 50%;
+  background: var(--surface-3); color: var(--text-2); border: 1px solid var(--line-strong);
+  font-size: 9px; letter-spacing: -1px; box-shadow: 0 1px 3px rgb(0 0 0 / .3);
+}
 @media (hover: none) {
   .gh-btn { opacity: 1; }
 }
@@ -775,7 +784,8 @@ body.dropping::after {
   input, textarea, select, [contenteditable] { font-size: 16px !important; }
   .gr { height: 34px; line-height: 33px; }
   .gc.wrap { padding-top: 6px; padding-bottom: 7px; }
-  .gh-resize { right: -10px; width: 20px; touch-action: none; }
+  /* 境目の帯はタップを受け取らず、下の見出し・行番号に通す（幅・高さはつまみで、ダブルタップは grid.js が位置で見分ける） */
+  .gh-resize { pointer-events: none; }
   .gr-resize { height: 12px; touch-action: none; }
   .gh-btn { width: 28px; height: 28px; }
   .icon-btn { width: 36px; height: 36px; }
