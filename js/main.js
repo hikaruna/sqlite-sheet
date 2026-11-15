@@ -186,6 +186,7 @@ function buildChrome() {
       el('nav.menubar',
         el('button#file-btn.menubar-btn', { on: { click: (e) => dbMenu(e.currentTarget) } }, 'ファイル'),
         el('button.menubar-btn', { on: { click: (e) => menu(e.currentTarget, editItems()) } }, '編集'),
+        el('button.menubar-btn', { on: { click: (e) => menu(e.currentTarget, formatItems()) } }, '表示形式'),
         el('button.menubar-btn', { on: { click: (e) => menu(e.currentTarget, dataItems()) } }, 'データ'),
         el('button.menubar-btn', { on: { click: (e) => menu(e.currentTarget, toolItems()) } }, 'ツール')),
       el('button.icon-btn.menubar-all', { title: 'メニュー', 'aria-label': 'メニュー', on: { click: (e) => allMenu(e.currentTarget) } }, '☰')),
@@ -203,6 +204,9 @@ function buildChrome() {
       el('span.vsep'),
       // 保護：テーブルなら常に出す（保護がなくても、ここから新しく保護できる）
       el('button#prot-btn.tb-btn', { title: 'シートと範囲の保護', on: { click: (e) => protPanel(e.currentTarget) } }, icon('lock'), el('span.tb-label', '保護'), el('span#prot-n.tb-count', { hidden: true })),
+      el('span.vsep'),
+      // テキストの折り返し（スプレッドシートのツールバーと同じく、押すと選べる）
+      el('button#wrap-btn.tb-btn', { title: 'テキストの折り返し', on: { click: (e) => { if (state.grid) menu(e.currentTarget, wrapItems()); } } }, icon('wrap')),
       el('span.grow'),
       el('button#panel-btn.tb-btn', { title: 'テーブルの設計（列・キー・制約）', on: { click: () => togglePanel() } }, icon('design'), el('span.tb-label', '設計')),
       el('button#console-btn.tb-btn', { title: `SQL コンソール（${MOD}\`）`, on: { click: () => toggleConsole() } }, icon('terminal'), el('span.tb-label', 'SQL')),
@@ -882,6 +886,26 @@ function editItems() {
   ];
 }
 
+/** 「表示形式」メニュー */
+function formatItems() {
+  return [{ header: 'テキストの折り返し' }, ...wrapItems()];
+}
+
+/**
+ * テキストの折り返しの選択肢。cols（列の番号）を省くと、選んでいるセルを含む列すべてが対象。
+ * 今の設定に ✓（列ごとに違うときは付けない）
+ */
+function wrapItems(cols) {
+  const g = state.grid;
+  if (!g) return [{ label: '折り返す', icon: '', disabled: true }, { label: '切り詰める', icon: '', disabled: true }];
+  const targets = cols ?? g.selectedCols();
+  const on = targets.filter((c) => g.isWrap(c)).length;
+  return [
+    { label: '折り返す', icon: on === targets.length ? '✓' : '', action: () => g.setWrap(targets, true) },
+    { label: '切り詰める', icon: on === 0 ? '✓' : '', action: () => g.setWrap(targets, false) },
+  ];
+}
+
 function dataItems() {
   const isTable = state.key?.[0] === 't' && !!state.model;
   const name = state.key?.slice(2), locked = isTable && state.lockedSheets?.has(name);
@@ -916,6 +940,7 @@ function allMenu(anchor) {
   menu(anchor, [
     { header: 'ファイル' }, ...dbMenu(anchor, { list: true }), '-',
     { header: '編集' }, ...editItems(), '-',
+    ...formatItems(), '-',
     ...dataItems(), '-',
     { header: 'ツール' }, ...toolItems(),
   ]);
@@ -1544,6 +1569,15 @@ function gridHooks(kind) {
       const sheet = state.key;
       undo.push({ label: `「${sheet.slice(2)}」の列幅の変更`, sheet, col: changes[0].name, undoFn: () => apply((x) => x.before), redoFn: () => apply((x) => x.after) });
     },
+    // テキストの折り返しも元に戻せる。before / after: 折り返す列の名前の配列
+    onWrap: (key, before, after) => {
+      const apply = (names) => {
+        if (state.grid?.source.widthKey === key) { state.grid.setWrapNames(names); return; }
+        try { if (names.length) localStorage.setItem('wrap:' + key, JSON.stringify(names)); else localStorage.removeItem('wrap:' + key); } catch { /* 無視 */ }
+      };
+      const sheet = state.key;
+      undo.push({ label: `「${sheet.slice(2)}」のテキストの折り返し`, sheet, undoFn: () => apply(before), redoFn: () => apply(after) });
+    },
     // 行の高さも同じく元に戻せる。changes: [{id: 行の見分け方, before, after}]
     onRowHeight: (key, changes) => {
       const apply = (pick) => {
@@ -1736,6 +1770,9 @@ function headerMenu(c, anchor) {
     { label: '降順に並べ替え', icon: '↓', action: () => pushSort(col.name, 'desc') },
     viewOf(state.key).sorts.some((s) => s.col === col.name) ? { label: 'この列の並べ替えを解除', icon: '⇅', action: () => removeSort(col.name) } : null,
     { label: '絞り込み…', icon: '⏷', action: () => filterPopover(anchor instanceof Element ? anchor : $('sheet-head'), col.name) },
+    '-',
+    // 列ごと選んでいてこの列がその中にあれば、選んだ列すべて（列幅と同じ）
+    { header: 'テキストの折り返し' }, ...wrapItems(state.grid.resizeCols(c)),
   ];
   if (isTable) {
     items.push('-',

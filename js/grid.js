@@ -15,6 +15,8 @@ const DEFAULT_W = 150;
 const MIN_W = 20;        // 列幅の最小（1文字のデータに合わせても使えるように）
 const MIN_H = 18;        // 行の高さの最小
 const MAX_FIT_H = 300;   // 中身に合わせるときの高さの上限（画像）
+const MAX_WRAP_H = 600;  // 折り返した文字に合わせて伸ばす高さの上限
+const MAX_TEXT = 5000;   // セルに表示する文字数の上限（表示を軽くするため）
 const MAX_RESIZE_ROWS = 5000; // まとめて高さを変えられる行数の上限
 // 表の拡大率（タッチ端末で二本指でつまむ）。見出しと表の中身に CSS の zoom を掛ける。
 // スクロール位置・表示の大きさは拡大後の値なので、行や列の位置と比べるときは z で割る
@@ -47,7 +49,10 @@ export class Grid {
     this.draft = null;     // 新しい行の下書き { values: [列ごとの文字列|null|undefined(未入力)], errors: {c: msg} }
     this.widths = this.loadWidths();
     this.heights = this.loadHeights(); // 保存してある行の高さ {行の見分け方(JSON): 高さ}
-    this.rowHeights = new Map(); this.hIdx = []; this.hCum = []; // 今の並びでの {何行目: 高さ} と、位置計算用の累積
+    this.manualHeights = new Map(); // 自分で決めた高さ {何行目: 高さ}
+    this.autoHeights = new Map();   // 折り返した文字に合わせた自動の高さ {何行目: 高さ}（保存しない）
+    this.rowHeights = new Map(); this.hIdx = []; this.hCum = []; // 両方を合わせた {何行目: 高さ} と、位置計算用の累積
+    this.wraps = this.loadWraps();  // 折り返して表示する列の名前
     this.z = TOUCH ? loadZoom() : 1;
     this.build();
   }
@@ -205,6 +210,7 @@ export class Grid {
     this.rowCount = count;
     if (!keepSelection) { this.cur = { r: 0, c: 0 }; this.ext = { ...this.cur }; }
     this.clampCursor();
+    this.autoHeights = new Map(); // 読み込み直すので、折り返しの高さも測り直す
     this.setHeightMap(heightMap);
     this.renderHeader();
     this.render();
@@ -310,7 +316,7 @@ export class Grid {
   /** 列幅を変える（undefined なら自動の幅に戻す）。元に戻す・やり直すからも呼ぶ */
   setColWidths(map) {
     for (const [name, w] of Object.entries(map)) { if (w == null) delete this.widths[name]; else this.widths[name] = w; }
-    this.saveWidths(); this.renderHeader(); this.render();
+    this.saveWidths(); this.renderHeader(); this.render(); this.afterWidthChange();
   }
 
   /** 列幅の変更をまとめて知らせる（元に戻すに1回分として積むため）。befores: {列名: 変更前}。変わっていなければ何もしない */
@@ -334,7 +340,7 @@ export class Grid {
     const targets = this.resizeCols(c);
     const befores = Object.fromEntries(targets.map((i) => [this.cols[i].name, this.widths[this.cols[i].name]]));
     for (const i of targets) this.widths[this.cols[i].name] = this.fitWidth(i);
-    this.saveWidths(); this.renderHeader(); this.render();
+    this.saveWidths(); this.renderHeader(); this.render(); this.afterWidthChange();
     this.emitWidths(befores);
   }
 
@@ -392,13 +398,29 @@ export class Grid {
     }
     return map;
   }
+  /** 自分で決めた高さ（{何行目: 高さ}）を入れ替える */
   setHeightMap(map) {
+    this.manualHeights = map;
+    this.applyHeights();
+  }
+  /**
+   * 自分で決めた高さと、折り返しによる自動の高さを合わせて位置の表を作り直す（自分で決めた高さが優先）。
+   * 画面より上の行の高さが変わっても今見ている行が動かないよう、スクロール位置を合わせる
+   */
+  applyHeights() {
+    const z = this.z, st = this.scroll.scrollTop / z;
+    const anchor = this.hIdx ? this.rowAtY(Math.max(0, st)) : 0, off = this.hIdx ? st - this.rowY(anchor) : 0;
+    const map = new Map(this.autoHeights);
+    for (const [r, h] of this.manualHeights) map.set(r, h);
     this.rowHeights = map;
     this.hIdx = [...map.keys()].sort((a, b) => a - b);
     let sum = 0;
     this.hCum = this.hIdx.map((r) => (sum += map.get(r) - RH));
     this.inner.style.height = this.rowY(this.totalRows) + 'px';
+    if (st > 0) this.scroll.scrollTop = (this.rowY(anchor) + off) * z;
   }
+  /** 行 r の、自分で決めていないときの高さ（折り返しによる自動の高さか標準） */
+  autoH(r) { return this.autoHeights.get(r) ?? RH; }
   rowH(r) { return this.rowHeights.get(r) ?? RH; }
   /** 行 r の上端の位置 */
   rowY(r) {
@@ -428,7 +450,7 @@ export class Grid {
     e.preventDefault(); e.stopPropagation();
     const [a, b] = this.resizeRows(r);
     if (b - a + 1 > MAX_RESIZE_ROWS) { this.hooks.onError?.(new Error(`一度に高さを変えられるのは ${MAX_RESIZE_ROWS} 行までです`)); return; }
-    const startY = e.clientY, startH = this.rowH(r), base = new Map(this.rowHeights);
+    const startY = e.clientY, startH = this.rowH(r), base = new Map(this.manualHeights);
     let h = startH, moved = false;
     const move = (ev) => {
       moved = true;
@@ -469,17 +491,19 @@ export class Grid {
     const [a, b] = this.resizeRows(r);
     if (b - a + 1 > MAX_RESIZE_ROWS) { this.hooks.onError?.(new Error(`一度に高さを変えられるのは ${MAX_RESIZE_ROWS} 行までです`)); return; }
     const rows = await this.rowsBetween(a, b);
-    const fits = await Promise.all(rows.map((row) => fitHeight(row)));
+    // 画像が原寸で見える高さと、折り返した文字が全部見える高さの大きいほう
+    const text = this.measureRows(rows);
+    const fits = await Promise.all(rows.map(async (row, i) => Math.max(await fitHeight(row), text[i] ?? RH)));
     await this.commitRowHeights(a, b, (i) => fits[i - a]);
   }
 
-  /** 行 a〜b の高さを hOf(何行目) に決めて保存し、元に戻すに積む。標準の高さは保存から消す */
+  /** 行 a〜b の高さを hOf(何行目) に決めて保存し、元に戻すに積む。自動の高さと同じなら、決めた高さを外して自動に戻す */
   async commitRowHeights(a, b, hOf) {
     const rows = await this.rowsBetween(a, b);
     const changes = [];
     rows.forEach((row, i) => {
       const r = a + i, id = this.rowId(r, row), h = hOf(r);
-      const before = this.heights[id], after = h === RH ? undefined : h;
+      const before = this.heights[id], after = h === this.autoH(r) ? undefined : h;
       if (before === after) return;
       changes.push({ id, before, after });
       if (after == null) delete this.heights[id]; else this.heights[id] = after;
@@ -488,6 +512,84 @@ export class Grid {
     this.setHeightMap(await this.heightMap());
     this.render();
     if (changes.length) this.hooks.onRowHeight?.(this.source.widthKey, changes);
+  }
+
+  // ---------- テキストの折り返し（列ごと） ----------
+  loadWraps() {
+    try { const v = JSON.parse(localStorage.getItem('wrap:' + this.source.widthKey) || '[]'); return new Set(Array.isArray(v) ? v : []); } catch { return new Set(); }
+  }
+  saveWraps() {
+    try {
+      if (this.wraps.size) localStorage.setItem('wrap:' + this.source.widthKey, JSON.stringify([...this.wraps]));
+      else localStorage.removeItem('wrap:' + this.source.widthKey);
+    } catch { /* 無視 */ }
+  }
+  isWrap(c) { const col = this.cols[c]; return !!col && this.wraps.has(col.name); }
+  /** 選んでいるセルを含む列（折り返しの対象） */
+  selectedCols() {
+    const { c0, c1 } = this.range();
+    return Array.from({ length: c1 - c0 + 1 }, (_, i) => c0 + i).filter((c) => this.cols[c]);
+  }
+  /** 列 cols の折り返しを切り替える（元に戻すに積む） */
+  setWrap(cols, on) {
+    const before = [...this.wraps];
+    for (const c of cols) { const name = this.cols[c]?.name; if (name == null) continue; if (on) this.wraps.add(name); else this.wraps.delete(name); }
+    const after = [...this.wraps];
+    if (before.length === after.length && before.every((n) => this.wraps.has(n))) return;
+    this.saveWraps(); this.remeasure();
+    this.hooks.onWrap?.(this.source.widthKey, before, after);
+  }
+  /** 元に戻す・やり直すから：折り返す列の名前をそのまま入れ替える */
+  setWrapNames(names) {
+    this.wraps = new Set(names);
+    this.saveWraps(); this.remeasure();
+  }
+
+  /**
+   * 行ごとの、折り返した列の中身が全部見える高さ（折り返す列がなければ空）。
+   * 実際と同じ CSS のセルを、見えない所に並べて測る
+   */
+  measureRows(rows) {
+    const cols = this.cols.map((_, c) => c).filter((c) => this.isWrap(c));
+    if (!cols.length || !rows.length) return [];
+    const probe = el('div.grid-measure', { style: { position: 'absolute', visibility: 'hidden', top: 0, left: 0, pointerEvents: 'none' } });
+    const lines = rows.map((row, i) => {
+      const line = el('div.gr-measure', { style: { display: 'flex', alignItems: 'flex-start' } });
+      if (row) for (const c of cols) {
+        const cell = el('div.gc', { style: { width: this.colW(c) + 'px', height: 'auto' } });
+        this.fillCell(cell, row.values[c], this.cols[c], row, i, c);
+        line.append(cell);
+      }
+      return line;
+    });
+    probe.append(...lines);
+    this.body.append(probe);
+    const hs = lines.map((line) => Math.min(MAX_WRAP_H, Math.max(RH, Math.ceil(line.getBoundingClientRect().height / this.z))));
+    probe.remove();
+    return hs;
+  }
+
+  /** 読み込んだページの行を測って、自動の高さに入れる */
+  measurePage(p, rows) {
+    const hs = this.measureRows(rows);
+    let changed = false;
+    rows.forEach((_, i) => {
+      const r = p * PAGE + i, h = hs[i] ?? RH;
+      if (h > RH) { if (this.autoHeights.get(r) !== h) { this.autoHeights.set(r, h); changed = true; } }
+      else if (this.autoHeights.delete(r)) changed = true;
+    });
+    return changed;
+  }
+
+  /** 列幅が変わると折り返しの位置が変わるので、折り返す列があれば測り直す */
+  afterWidthChange() { if (this.wraps.size) this.remeasure(); }
+
+  /** 折り返しや列幅が変わったときに、読み込み済みの行を測り直す */
+  remeasure() {
+    this.autoHeights = new Map();
+    for (const [p, rows] of this.pages) this.measurePage(p, rows);
+    this.applyHeights();
+    this.renderHeader(); this.render(); this.placeSink();
   }
 
   /** 元に戻す・やり直すから：{行の見分け方: 高さ（undefined なら標準）} */
@@ -582,7 +684,7 @@ export class Grid {
     };
     const up = () => {
       removeEventListener(kind + 'move', move); removeEventListener(kind + 'up', up); removeEventListener('pointercancel', up);
-      this.saveWidths();
+      this.saveWidths(); this.afterWidthChange();
       this.emitWidths(befores);
     };
     addEventListener(kind + 'move', move); addEventListener(kind + 'up', up); addEventListener('pointercancel', up);
@@ -603,6 +705,7 @@ export class Grid {
     const pr = this.source.fetch(p * PAGE, PAGE).then((rows) => {
       if (gen !== this.reloadToken) return rows; // 古い読み込み結果は捨てる
       this.pages.set(p, rows);
+      if (this.measurePage(p, rows)) this.applyHeights(); // 折り返した列があれば、行の高さを中身に合わせる
       this.loading.delete(p);
       this.render();
       if (Math.floor(this.cur.r / PAGE) === p) this.emitSelect();
@@ -720,7 +823,10 @@ export class Grid {
     if (typeof v === 'number' || typeof v === 'bigint') { cell.classList.add('num'); }
     const s = String(v);
     if (s === '') { cell.classList.add('emptystr'); return; }
-    cell.textContent = s.length > 300 ? s.slice(0, 300) + '…' : s.replaceAll('\n', ' ⏎ ');
+    const t = s.length > MAX_TEXT ? s.slice(0, MAX_TEXT) + '…' : s;
+    // 折り返す列は改行をそのまま出す。折り返さない列は1行なので、改行があることだけ ⏎ で見せる
+    if (this.isWrap(c)) { cell.classList.add('wrap'); cell.textContent = t; }
+    else cell.textContent = t.replaceAll('\n', ' ⏎ ');
     if (col.fk) {
       cell.classList.add('fk');
       const label = row.labels?.[c];

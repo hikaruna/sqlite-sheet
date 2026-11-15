@@ -270,6 +270,7 @@ const ICONS = {
   command: '<path d="M15 6v12a3 3 0 1 0 3-3H6a3 3 0 1 0 3 3V6a3 3 0 1 0-3 3h12a3 3 0 1 0-3-3"/>',
   tx: '<path d="M6 2h12M6 22h12"/><path d="M7 2v4l5 6-5 6v4M17 2v4l-5 6 5 6v4"/>',
   chevron: '<path d="m6 9 6 6 6-6"/>',
+  wrap: '<path d="M3 6h18M3 12h15a3 3 0 0 1 0 6h-5"/><path d="m15 15.5-2.5 2.5 2.5 2.5"/><path d="M3 18h6"/>',
 };
 export function icon(name) {
   const s = document.createElementNS('http://www.w3.org/2000/svg', 'svg');

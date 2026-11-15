@@ -338,6 +338,8 @@ body.at-home .toolbar, body.at-home .fxbar { display: none; }
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: cell;
 }
 .gc.num { text-align: right; font-variant-numeric: tabular-nums; }
+/* 折り返して表示する列：改行もそのまま。1行なら標準の行の高さにちょうど収まる（20 + 上下 3/4 + 線 1 = 28） */
+.gc.wrap { white-space: pre-wrap; overflow-wrap: anywhere; text-overflow: clip; line-height: 20px; padding-top: 3px; padding-bottom: 4px; }
 .gc.ro { color: var(--text-2); }
 .gc.null { color: var(--text-3); font-style: italic; font-size: 11px; opacity: .7; }
 .gc.blob { color: var(--text-2); font: 11px var(--mono); line-height: inherit; }
@@ -767,6 +769,7 @@ body.dropping::after {
   /* iPhone は 16px 未満の入力欄をタップすると画面を拡大して戻さないので、入力欄の文字は 16px にする */
   input, textarea, select, [contenteditable] { font-size: 16px !important; }
   .gr { height: 34px; line-height: 33px; }
+  .gc.wrap { padding-top: 6px; padding-bottom: 7px; }
   .gh-resize { right: -10px; width: 20px; touch-action: none; }
   .gr-resize { height: 12px; touch-action: none; }
   .gh-btn { width: 28px; height: 28px; }
