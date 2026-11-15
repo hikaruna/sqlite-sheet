@@ -13,6 +13,9 @@ const RHW = 56;         // 行番号の幅
 const PAGE = 200;
 const DEFAULT_W = 150;
 const MIN_W = 20;        // 列幅の最小（1文字のデータに合わせても使えるように）
+const MIN_H = 18;        // 行の高さの最小
+const MAX_FIT_H = 300;   // 中身に合わせるときの高さの上限（画像）
+const MAX_RESIZE_ROWS = 5000; // まとめて高さを変えられる行数の上限
 // 表の拡大率（タッチ端末で二本指でつまむ）。見出しと表の中身に CSS の zoom を掛ける。
 // スクロール位置・表示の大きさは拡大後の値なので、行や列の位置と比べるときは z で割る
 const ZOOM_MIN = 0.5, ZOOM_MAX = 2;
@@ -43,6 +46,8 @@ export class Grid {
     this.editing = null;   // { mode: 'enter'|'edit', r, c, start（開いたときのフォームの文字列） }
     this.draft = null;     // 新しい行の下書き { values: [列ごとの文字列|null|undefined(未入力)], errors: {c: msg} }
     this.widths = this.loadWidths();
+    this.heights = this.loadHeights(); // 保存してある行の高さ {行の見分け方(JSON): 高さ}
+    this.rowHeights = new Map(); this.hIdx = []; this.hCum = []; // 今の並びでの {何行目: 高さ} と、位置計算用の累積
     this.z = TOUCH ? loadZoom() : 1;
     this.build();
   }
@@ -192,12 +197,15 @@ export class Grid {
     const token = (this.reloadToken = (this.reloadToken || 0) + 1);
     const count = await this.source.count();
     if (token !== this.reloadToken) return; // 後から始まった再読み込みを優先
+    // 保存してある行の高さが、今の並べ替え・絞り込みで何行目にあるか
+    const heightMap = await this.heightMap(count);
+    if (token !== this.reloadToken) return;
     this.pages.clear();
     this.loading.clear();
     this.rowCount = count;
     if (!keepSelection) { this.cur = { r: 0, c: 0 }; this.ext = { ...this.cur }; }
     this.clampCursor();
-    this.inner.style.height = (this.totalRows * RH) + 'px';
+    this.setHeightMap(heightMap);
     this.renderHeader();
     this.render();
     this.emitSelect();
@@ -351,6 +359,145 @@ export class Grid {
     return Math.ceil(w) + 2;
   }
 
+  // ---------- 行の高さ ----------
+  // 高さを変えた行だけを {何行目: 高さ} で持ち、位置は「r × 標準の高さ + それより上の行の差の合計」で求める
+  // （行がいくらあっても重くならない）。保存は行のキー（主キー、なければ rowid）ごとにして、
+  // 並べ替え・絞り込みをしても同じデータの行に付いてくるようにする。キーのないシートは何行目かで保存する
+  loadHeights() {
+    try { return JSON.parse(localStorage.getItem('h:' + this.source.widthKey) || '{}'); } catch { return {}; }
+  }
+  saveHeights() {
+    try {
+      const s = JSON.stringify(this.heights);
+      if (s === '{}') localStorage.removeItem('h:' + this.source.widthKey); else localStorage.setItem('h:' + this.source.widthKey, s);
+    } catch { /* 無視 */ }
+  }
+  /** 行 r の見分け方（保存のキー） */
+  rowId(r, row) {
+    const id = row && this.source.identOf ? this.source.identOf(row) : null;
+    return id ? JSON.stringify(id) : '#' + r;
+  }
+  /** 保存してある高さを、今の並びの {何行目: 高さ} にする */
+  async heightMap(count = this.rowCount) {
+    const map = new Map();
+    const keyed = [];
+    for (const [id, h] of Object.entries(this.heights)) {
+      if (id.startsWith('#')) { const r = +id.slice(1); if (r < count) map.set(r, h); } else keyed.push(id);
+    }
+    if (keyed.length && this.source.rowIndexesOf) {
+      try {
+        const idx = await this.source.rowIndexesOf(keyed.map((id) => JSON.parse(id)));
+        idx.forEach((r, i) => { if (r != null) map.set(r, this.heights[keyed[i]]); });
+      } catch { /* 高さが分からなくても表示はできる */ }
+    }
+    return map;
+  }
+  setHeightMap(map) {
+    this.rowHeights = map;
+    this.hIdx = [...map.keys()].sort((a, b) => a - b);
+    let sum = 0;
+    this.hCum = this.hIdx.map((r) => (sum += map.get(r) - RH));
+    this.inner.style.height = this.rowY(this.totalRows) + 'px';
+  }
+  rowH(r) { return this.rowHeights.get(r) ?? RH; }
+  /** 行 r の上端の位置 */
+  rowY(r) {
+    const a = this.hIdx;
+    if (!a.length) return r * RH;
+    let lo = 0, hi = a.length;
+    while (lo < hi) { const m = (lo + hi) >> 1; if (a[m] < r) lo = m + 1; else hi = m; }
+    return r * RH + (lo ? this.hCum[lo - 1] : 0);
+  }
+  /** 位置 y にある行 */
+  rowAtY(y) {
+    let lo = 0, hi = Math.max(0, this.totalRows - 1);
+    while (lo < hi) { const m = (lo + hi + 1) >> 1; if (this.rowY(m) <= y) lo = m; else hi = m - 1; }
+    return lo;
+  }
+
+  /** 境目を操作した行 r と一緒に変える行の範囲 [a, b]。行ごと選んでいて r がその中にあれば選んだ行すべて */
+  resizeRows(r) {
+    const { r0, r1 } = this.range();
+    if (!this.rowSelect || r < r0 || r > r1) return [r, r];
+    return [r0, Math.min(r1, this.rowCount - 1)];
+  }
+
+  /** 行の高さのドラッグ。選んだ行がすべて同じ高さになる */
+  startRowResize(e, r, kind) {
+    if (e.button !== 0) return;
+    e.preventDefault(); e.stopPropagation();
+    const [a, b] = this.resizeRows(r);
+    if (b - a + 1 > MAX_RESIZE_ROWS) { this.hooks.onError?.(new Error(`一度に高さを変えられるのは ${MAX_RESIZE_ROWS} 行までです`)); return; }
+    const startY = e.clientY, startH = this.rowH(r), base = new Map(this.rowHeights);
+    let h = startH, moved = false;
+    const move = (ev) => {
+      moved = true;
+      h = Math.max(MIN_H, Math.round(startH + (ev.clientY - startY) / this.z));
+      const m = new Map(base);
+      for (let i = a; i <= b; i++) m.set(i, h);
+      this.setHeightMap(m); this.render();
+    };
+    const up = () => {
+      removeEventListener(kind + 'move', move); removeEventListener(kind + 'up', up); removeEventListener('pointercancel', up);
+      // 動かさずに離した（ダブルクリックの1回目など）なら何もしない。描き直すとダブルクリックが届かなくなる
+      if (h === startH) { if (moved) { this.setHeightMap(base); this.render(); } return; }
+      this.commitRowHeights(a, b, () => h);
+    };
+    addEventListener(kind + 'move', move); addEventListener(kind + 'up', up); addEventListener('pointercancel', up);
+  }
+
+  /** 行番号の欄の下の境目（ドラッグで高さを変える・ダブルクリックで中身に合わせる） */
+  rowResizer(r) {
+    return el('div.gr-resize', { title: 'ドラッグで高さを変更・ダブルクリックで中身に合わせる', on: {
+      mousedown: (e) => { e.stopPropagation(); if (!this.touchRecent()) this.startRowResize(e, r, 'mouse'); },
+      dblclick: (e) => { e.preventDefault(); e.stopPropagation(); if (!this.touchRecent()) this.autoFitRows(r); },
+      pointerdown: (e) => {
+        if (e.pointerType === 'mouse') return;
+        e.stopPropagation();
+        this.lastTouch = Date.now();
+        // ダブルタップで中身に合わせる
+        const t = this.lastRowResizeTap;
+        this.lastRowResizeTap = { r, at: Date.now() };
+        if (t && t.r === r && Date.now() - t.at < 350) { e.preventDefault(); this.lastRowResizeTap = null; this.autoFitRows(r); return; }
+        this.startRowResize(e, r, 'pointer');
+      },
+    } });
+  }
+
+  /** 行の高さを中身に合わせる（境目のダブルクリック・ダブルタップ）。選んだ行が複数ならそれぞれを合わせる */
+  async autoFitRows(r) {
+    const [a, b] = this.resizeRows(r);
+    if (b - a + 1 > MAX_RESIZE_ROWS) { this.hooks.onError?.(new Error(`一度に高さを変えられるのは ${MAX_RESIZE_ROWS} 行までです`)); return; }
+    const rows = await this.rowsBetween(a, b);
+    const fits = await Promise.all(rows.map((row) => fitHeight(row)));
+    await this.commitRowHeights(a, b, (i) => fits[i - a]);
+  }
+
+  /** 行 a〜b の高さを hOf(何行目) に決めて保存し、元に戻すに積む。標準の高さは保存から消す */
+  async commitRowHeights(a, b, hOf) {
+    const rows = await this.rowsBetween(a, b);
+    const changes = [];
+    rows.forEach((row, i) => {
+      const r = a + i, id = this.rowId(r, row), h = hOf(r);
+      const before = this.heights[id], after = h === RH ? undefined : h;
+      if (before === after) return;
+      changes.push({ id, before, after });
+      if (after == null) delete this.heights[id]; else this.heights[id] = after;
+    });
+    this.saveHeights();
+    this.setHeightMap(await this.heightMap());
+    this.render();
+    if (changes.length) this.hooks.onRowHeight?.(this.source.widthKey, changes);
+  }
+
+  /** 元に戻す・やり直すから：{行の見分け方: 高さ（undefined なら標準）} */
+  async setRowHeights(map) {
+    for (const [id, h] of Object.entries(map)) { if (h == null) delete this.heights[id]; else this.heights[id] = h; }
+    this.saveHeights();
+    this.setHeightMap(await this.heightMap());
+    this.render(); this.placeSink();
+  }
+
   colW(c) { const col = this.cols[c]; return this.widths[col.name] ?? col.width ?? (col.width = autoWidth(col)); }
   colX(c) { let x = RHW; for (let i = 0; i < c; i++) x += this.colW(i); return x; }
   totalW() { return this.colX(this.cols.length) + (this.hooks.onAddColumn ? 48 : 0); }
@@ -416,7 +563,7 @@ export class Grid {
     if (this.editing) this.commitEdit({ move: null });
     this.cur = { r: 0, c: extend ? this.cur.c : c };
     this.ext = { r: Math.max(0, this.rowCount - 1), c };
-    this.colSelect = true;
+    this.colSelect = true; this.rowSelect = false;
     this.render(); this.emitSelect(); this.focus();
   }
 
@@ -480,8 +627,8 @@ export class Grid {
     if (this.pinching) return;
     const st = this.scroll.scrollTop / this.z;
     const vh = this.scroll.clientHeight / this.z;
-    const first = Math.max(0, Math.floor((st - HH) / RH) - 4);
-    const last = Math.min(this.totalRows - 1, Math.ceil((st + vh) / RH) + 4);
+    const first = Math.max(0, this.rowAtY(st - HH) - 4);
+    const last = Math.min(this.totalRows - 1, this.rowAtY(st + vh) + 4);
     const { r0, r1, c0, c1 } = this.range();
     const frag = document.createDocumentFragment();
     const widths = this.cols.map((_, c) => this.colW(c));
@@ -492,19 +639,25 @@ export class Grid {
         // 下書きを開いていないときは、行番号欄の「＋」だけ（列追加の「＋」と対になる見た目）
         const here = this.cur.r === r;
         // 行は表の幅いっぱいにする（行番号の欄と同じく、横にスクロールしても「＋」が左に残るように）
-        frag.append(el('div.gr.row-adder', { class: here ? 'cur' : '', style: { top: (r * RH) + 'px', width: this.totalW() + 'px' }, dataset: { r } },
+        frag.append(el('div.gr.row-adder', { class: here ? 'cur' : '', style: { top: this.rowY(r) + 'px', width: this.totalW() + 'px' }, dataset: { r } },
           el('div.gr-head', { style: { width: RHW + 'px' }, title: '行を追加（最後の行で ↓ でも開きます）' }, '＋')));
         continue;
       }
       const row = isNew ? null : this.rowAt(r);
       const rowSel = r >= r0 && r <= r1;
       const draft = isNew ? this.draft : null;
-      const rowEl = el('div.gr', { class: isNew ? 'new draft' : (row && this.source.isPendingRow?.(row) ? 'pending' : ''), style: { top: (r * RH) + 'px', width: this.totalW() + 'px' }, dataset: { r } });
+      const h = this.rowH(r);
+      const rowEl = el('div.gr', {
+        class: [isNew ? 'new draft' : (row && this.source.isPendingRow?.(row) ? 'pending' : ''), h > RH ? 'tall' : ''].join(' ').trim(),
+        // 行の高さを変えても文字が縦の真ん中に来るよう、行の line-height をセルが受け継ぐ
+        style: { top: this.rowY(r) + 'px', width: this.totalW() + 'px', ...(h !== RH ? { height: h + 'px', lineHeight: (h - 1) + 'px' } : {}) },
+        dataset: { r },
+      });
       rowEl.append(el('div.gr-head', {
         class: rowSel ? 'hl' : '',
         style: { width: RHW + 'px' },
         title: isNew ? '新しい行（行を離れると保存・Esc で取り消し）' : '',
-      }, isNew ? '✎' : String(r + 1)));
+      }, isNew ? '✎' : String(r + 1), isNew ? null : this.rowResizer(r)));
       for (let c = 0; c < this.cols.length; c++) {
         const cell = el('div.gc', { style: { width: widths[c] + 'px' }, dataset: { c } });
         const col = this.cols[c];
@@ -593,7 +746,7 @@ export class Grid {
   placeSink() {
     const { r, c } = this.cur;
     if (!this.cols.length) return;
-    const x = this.colX(c), y = r * RH;
+    const x = this.colX(c), y = this.rowY(r), rh = this.rowH(r);
     const cw = this.colW(c);
     let w = cw, left = x, num = false;
     if (this.editing) {
@@ -612,8 +765,8 @@ export class Grid {
       }
     }
     this.sink.classList.toggle('num', num);
-    Object.assign(this.sink.style, { left: left + 'px', top: y + 'px', width: w + 'px', height: RH + 'px' });
-    if (this.editing) this.sink.style.height = Math.max(RH, Math.min(200, this.sink.scrollHeight)) + 'px';
+    Object.assign(this.sink.style, { left: left + 'px', top: y + 'px', width: w + 'px', height: rh + 'px' });
+    if (this.editing) this.sink.style.height = Math.max(rh, Math.min(200, this.sink.scrollHeight)) + 'px';
     this.sink.classList.toggle('editing', !!this.editing);
     if (TOUCH && !this.editing) this.sink.inputMode = 'none';
     this.placeHandle();
@@ -625,7 +778,7 @@ export class Grid {
     this.handle.hidden = !show;
     if (!show) return;
     const { r1, c1 } = this.range();
-    Object.assign(this.handle.style, { left: (this.colX(c1) + this.colW(c1)) + 'px', top: ((r1 + 1) * RH) + 'px' });
+    Object.assign(this.handle.style, { left: (this.colX(c1) + this.colW(c1)) + 'px', top: this.rowY(r1 + 1) + 'px' });
   }
 
   /** 入力欄のフォントで測った、いちばん長い行の幅 */
@@ -662,7 +815,7 @@ export class Grid {
       if (fromNew && this.cur.r !== this.newRowIndex) { if (this.hasDraft) this.flushDraft(); else this.draft = null; }
       this.ext = { ...this.cur };
     }
-    this.colSelect = false;
+    this.colSelect = false; this.rowSelect = false;
     this.ensureVisible(extend ? this.ext : this.cur);
     this.render();
     this.emitSelect();
@@ -671,12 +824,14 @@ export class Grid {
   selectAll() {
     this.cur = { r: 0, c: 0 };
     this.ext = { r: Math.max(0, this.rowCount - 1), c: this.cols.length - 1 };
+    this.colSelect = this.rowSelect = true; // すべて選んでいれば、どの行・列の境目でもまとめて変えられる
     this.render(); this.emitSelect(); this.focus();
   }
 
   selectRows(r0, r1) {
     this.cur = { r: r0, c: 0 };
     this.ext = { r: r1, c: this.cols.length - 1 };
+    this.colSelect = false; this.rowSelect = true;
     this.render(); this.emitSelect();
   }
 
@@ -684,7 +839,7 @@ export class Grid {
     const { r, c } = target;
     const s = this.scroll;
     const z = this.z;
-    const top = r * RH * z, bottom = top + (RH + HH) * z;
+    const top = this.rowY(r) * z, bottom = top + (this.rowH(r) + HH) * z;
     if (top < s.scrollTop) s.scrollTop = top;
     else if (bottom > s.scrollTop + s.clientHeight) s.scrollTop = bottom - s.clientHeight;
     const x = this.colX(c) * z, w = this.colW(c) * z;
@@ -1308,6 +1463,27 @@ function autoWidth(col) {
 }
 
 function isMacCtrl() { return /Mac/.test(navigator.platform); }
+
+/**
+ * 行の中身に合う高さ。セルは折り返さないので、文字だけなら標準の高さ。
+ * 画像の BLOB があれば、その画像が原寸で見える高さ（上限 MAX_FIT_H）
+ */
+async function fitHeight(row) {
+  let h = RH;
+  for (const v of row?.values || []) {
+    if (!(v instanceof Uint8Array) || !v.length) continue;
+    const k = sniff(v);
+    if (!k.image) continue;
+    const url = URL.createObjectURL(new Blob([v], { type: k.mime }));
+    try {
+      const img = new Image();
+      img.src = url;
+      await img.decode();
+      h = Math.max(h, Math.min(MAX_FIT_H, img.naturalHeight + 6));
+    } catch { /* 読めない画像は数えない */ } finally { URL.revokeObjectURL(url); }
+  }
+  return Math.round(h);
+}
 
 /** 下書きの値を INSERT に渡す形へ（文字はフォームとして解釈し、BLOB はそのまま） */
 function draftToValue(v) {

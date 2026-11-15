@@ -270,6 +270,29 @@ export class TableSource {
     return r.rows[0] ? Number(r.rows[0][0]) : null;
   }
 
+  /** rowIndexOf をまとめて（行の高さの復元用）。keys と同じ順に、何行目か（見えなければ null）を返す */
+  async rowIndexesOf(keys) {
+    if (!keys.length) return [];
+    const w = this.where();
+    const cols = [...new Set(keys.flatMap((k) => Object.keys(k)))];
+    const sqlCols = cols.map((c) => (c === '_rowid_' ? '_rowid_' : q(c)));
+    const out = new Array(keys.length).fill(null);
+    const index = new Map(keys.map((k, i) => [JSON.stringify(cols.map((c) => k[c] ?? null)), i]));
+    // 番号付きの並びから、目的の行だけを取り出す（まとめすぎて SQL が長くならないよう分ける）
+    for (let s = 0; s < keys.length; s += 200) {
+      const part = keys.slice(s, s + 200);
+      const cond = part.map((k) => `(${cols.map((c) => `${c === '_rowid_' ? '_rowid_' : q(c)} IS ?`).join(' AND ')})`).join(' OR ');
+      const r = await db.query(
+        `SELECT rn, ${sqlCols.join(', ')} FROM (SELECT ${sqlCols.map((c) => `${this.t}.${c} AS ${c}`).join(', ')}, ROW_NUMBER() OVER (${this.orderBy().trim()}) - 1 AS rn FROM ${this.t}${w.sql}) WHERE ${cond}`,
+        [...w.bind, ...part.flatMap((k) => cols.map((c) => k[c] ?? null))]);
+      for (const [rn, ...vals] of r.rows) {
+        const i = index.get(JSON.stringify(vals));
+        if (i != null) out[i] = Number(rn);
+      }
+    }
+    return out;
+  }
+
   async fetchByKey(key) {
     const kw = this.keyWhere(key);
     const r = await db.query(`SELECT ${this.selectList()} FROM ${this.t} WHERE ${kw.sql}`, kw.bind);

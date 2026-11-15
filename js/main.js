@@ -1544,6 +1544,20 @@ function gridHooks(kind) {
       const sheet = state.key;
       undo.push({ label: `「${sheet.slice(2)}」の列幅の変更`, sheet, col: changes[0].name, undoFn: () => apply((x) => x.before), redoFn: () => apply((x) => x.after) });
     },
+    // 行の高さも同じく元に戻せる。changes: [{id: 行の見分け方, before, after}]
+    onRowHeight: (key, changes) => {
+      const apply = (pick) => {
+        const map = Object.fromEntries(changes.map((x) => [x.id, pick(x)]));
+        if (state.grid?.source.widthKey === key) { state.grid.setRowHeights(map); return; }
+        try {
+          const all = JSON.parse(localStorage.getItem('h:' + key) || '{}');
+          for (const [id, h] of Object.entries(map)) { if (h == null) delete all[id]; else all[id] = h; }
+          localStorage.setItem('h:' + key, JSON.stringify(all));
+        } catch { /* 無視 */ }
+      };
+      const sheet = state.key;
+      undo.push({ label: `「${sheet.slice(2)}」の行の高さの変更`, sheet, undoFn: () => apply((x) => x.before), redoFn: () => apply((x) => x.after) });
+    },
     onAddColumn: isTable ? (anchor) => quickAddColumn(anchor) : null,
     onContextMenu: (pos, range) => cellMenu(pos, range),
     onReadonlyEdit: (col) => toast(isTable ? (col ? `「${col.name}」は生成列のため編集できません` : '編集できません') : `${KIND_NAME[kind]}の結果は編集できません。元のテーブルで編集してください`),
