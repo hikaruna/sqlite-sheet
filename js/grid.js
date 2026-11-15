@@ -149,7 +149,9 @@ export class Grid {
     if (TOUCH) this.sink.inputMode = 'none';
     // 範囲を広げるつまみ（タッチ端末だけ。指でなぞるとスクロールになるので）
     this.handle = el('div.grid-handle', { hidden: true, on: { pointerdown: (e) => this.startHandleDrag(e) } });
-    this.inner.append(this.body, this.sink, this.handle);
+    // 列ごと選んでいるときに左右の境目に出す、選ぶ列を広げるつまみ
+    this.colHandles = TOUCH ? ['left', 'right'].map((side) => el('div.grid-handle', { hidden: true, on: { pointerdown: (e) => this.startColHandleDrag(e, side) } })) : [];
+    this.inner.append(this.body, this.sink, this.handle, ...this.colHandles);
     this.scroll.append(this.header, this.inner);
     this.host.append(this.scroll);
     this.empty = null;
@@ -892,9 +894,22 @@ export class Grid {
   /** 範囲の右下に、範囲を広げるつまみを置く（タッチ端末・編集していないときだけ） */
   placeHandle() {
     const show = TOUCH && !this.editing && this.cols.length > 0 && this.rowCount > 0 && this.cur.r !== this.newRowIndex;
-    this.handle.hidden = !show;
-    if (!show) return;
-    const { r1, c1 } = this.range();
+    // 列ごと選んでいるときは、右下のつまみの代わりに（スプレッドシートと同じ）
+    // ・選んだ列の左右の境目に、範囲を広げるつまみ（見えている範囲の縦の真ん中）
+    const head = show && this.colSelect && !this.rowSelect;
+    const { r1, c0, c1 } = this.range();
+    this.handle.hidden = !show || head;
+    this.colHandles.forEach((h) => { h.hidden = !head; });
+    if (head) {
+      const st = this.scroll.scrollTop / this.z, vh = this.scroll.clientHeight / this.z;
+      // 見えているデータの行の縦の真ん中（行が画面の下まで届かなければ、データのある所だけの真ん中）
+      const y0 = Math.min(st, this.rowY(this.rowCount)), y1 = Math.min(st + vh - HH, this.rowY(this.rowCount));
+      const top = ((y0 + y1) / 2) + 'px';
+      const [l, r] = this.colHandles;
+      Object.assign(l.style, { left: this.colX(c0) + 'px', top });
+      Object.assign(r.style, { left: (this.colX(c1) + this.colW(c1)) + 'px', top });
+    }
+    if (!show || head) return;
     Object.assign(this.handle.style, { left: (this.colX(c1) + this.colW(c1)) + 'px', top: this.rowY(r1 + 1) + 'px' });
   }
 
@@ -1096,6 +1111,25 @@ export class Grid {
       const target = document.elementFromPoint(ev.clientX, ev.clientY);
       const h = target && this.body.contains(target) ? this.cellFromEvent({ target }) : null;
       if (h && !h.head && h.r !== this.newRowIndex && (h.r !== this.ext.r || h.c !== this.ext.c)) this.moveTo(h.r, h.c, true);
+    };
+    const up = () => {
+      removeEventListener('pointermove', move); removeEventListener('pointerup', up); removeEventListener('pointercancel', up);
+      this.lastTouch = Date.now();
+    };
+    addEventListener('pointermove', move); addEventListener('pointerup', up); addEventListener('pointercancel', up);
+  }
+
+  /** 列の左右のつまみを横にドラッグして、選ぶ列を広げる・狭める。反対側の端の列はそのまま */
+  startColHandleDrag(e, side) {
+    e.preventDefault(); e.stopPropagation();
+    this.lastTouch = Date.now();
+    const { c0, c1 } = this.range();
+    this.cur.c = side === 'left' ? c1 : c0;
+    this.ext.c = side === 'left' ? c0 : c1;
+    const move = (ev) => {
+      const target = document.elementFromPoint(ev.clientX, ev.clientY);
+      const h = target && this.inner.contains(target) ? this.cellFromEvent({ target }) : null;
+      if (h && !h.head && h.c !== this.ext.c) this.selectCol(h.c, true);
     };
     const up = () => {
       removeEventListener('pointermove', move); removeEventListener('pointerup', up); removeEventListener('pointercancel', up);
