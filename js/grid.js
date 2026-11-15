@@ -160,8 +160,28 @@ export class Grid {
       if (this.editing) return;
       e.preventDefault();
       const dt = e.clipboardData;
-      const image = [...dt.files].find((f) => f.type.startsWith('image/')) || null;
-      this.pasteClipboard({ image, text: dt.getData('text/plain'), html: dt.getData('text/html') });
+      // 画像だけでなく、エクスプローラーなどでコピーしたファイルも届く
+      this.pasteClipboard({ file: dt.files[0] || null, text: dt.getData('text/plain'), html: dt.getData('text/html') });
+    });
+    // ファイルを BLOB のセルへドロップ（それ以外の場所へのドロップは main.js の .sqlite の読み込み）
+    this.body.addEventListener('dragover', (e) => {
+      const hit = e.dataTransfer?.types.includes('Files') && this.blobDropTarget(e);
+      this.markDrop(hit);
+      if (!hit) return;
+      e.preventDefault(); e.stopPropagation();
+      e.dataTransfer.dropEffect = 'copy';
+      document.body.classList.remove('dropping');
+    });
+    this.body.addEventListener('dragleave', (e) => { if (!this.body.contains(e.relatedTarget)) this.markDrop(null); });
+    this.body.addEventListener('drop', (e) => {
+      const hit = this.blobDropTarget(e);
+      this.markDrop(null);
+      const f = e.dataTransfer?.files?.[0];
+      if (!hit || !f) return;
+      e.preventDefault(); e.stopPropagation();
+      document.body.classList.remove('dropping');
+      this.moveTo(hit.r, hit.c); this.focus();
+      f.arrayBuffer().then((b) => this.pasteBlob(new Uint8Array(b), [hit.c]));
     });
     // ほかのアプリへ移ったら、そこでコピーしたかもしれないので「同じ文字なら自分のコピー」とはみなさない
     window.addEventListener('blur', () => { if (this.lastCopy) this.lastCopy.left = true; });
@@ -1079,15 +1099,27 @@ export class Grid {
    * 選択中の列が BLOB を受け付けるなら画像を、そうでなければ文字を貼る
    * （Excel などはセルのコピーに画像も付けるので、BLOB でない列では文字を優先する）
    */
-  async pasteClipboard({ image, text, html }) {
+  async pasteClipboard({ file, text, html }) {
     const own = this.ownCopy({ text, html });
     if (own) return this.paste(null, own);
     const { c0, c1 } = this.range();
     const blobCols = [];
     for (let c = c0; c <= c1; c++) if (this.acceptsBlob(c)) blobCols.push(c);
-    if (image && blobCols.length) return this.pasteBlob(new Uint8Array(await image.arrayBuffer()), blobCols);
+    if (file && blobCols.length) return this.pasteBlob(new Uint8Array(await file.arrayBuffer()), blobCols);
     if (text) return this.paste(text);
-    if (image) this.hooks.onError?.(new Error('画像は BLOB の列（または型のない列）にだけ貼り付けられます'));
+    if (file) this.hooks.onError?.(new Error('ファイルや画像は BLOB の列（または型のない列）にだけ貼り付けられます'));
+  }
+
+  /** ドロップ先が、ファイルを入れられるセルなら {r, c} */
+  blobDropTarget(e) {
+    if (!this.source.editable) return null;
+    const hit = this.cellFromEvent(e);
+    return hit && !hit.head && hit.r <= this.newRowIndex && this.acceptsBlob(hit.c) ? hit : null;
+  }
+
+  markDrop(hit) {
+    this.body.querySelector('.gc.drop')?.classList.remove('drop');
+    if (hit) this.body.querySelector(`.gr[data-r="${hit.r}"] .gc[data-c="${hit.c}"]`)?.classList.add('drop');
   }
 
   /** 選択範囲のうち cols の列に、同じバイト列を入れる */
@@ -1097,7 +1129,8 @@ export class Grid {
     const changes = [];
     for (let r = r0; r <= r1; r++) for (const c of cols) changes.push({ r, c, value: bytes });
     const ok = await this.write(changes);
-    if (ok) this.hooks.onInfo?.(changes.length > 1 ? `${changes.length} セルに画像を貼り付けました` : `画像を貼り付けました（${fmtBytes(bytes.length)}）`);
+    const what = sniff(bytes).image ? '画像' : 'ファイル';
+    if (ok) this.hooks.onInfo?.(changes.length > 1 ? `${changes.length} セルに${what}を入れました` : `${what}を入れました（${fmtBytes(bytes.length)}）`);
   }
 
   /** 文字（TSV）を貼る。values（行×列の値）を渡したときはそれをそのまま貼る */

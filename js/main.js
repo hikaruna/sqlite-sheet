@@ -1901,7 +1901,7 @@ async function pasteFromMenu(g) {
         if (item.types.includes('text/plain') && !text) text = await (await item.getType('text/plain')).text();
         if (item.types.includes('text/html') && !html) html = await (await item.getType('text/html')).text();
       }
-      if (image || text || html) return g.pasteClipboard({ image, text, html });
+      if (image || text || html) return g.pasteClipboard({ file: image, text, html });
     } catch { /* 下の readText() に任せる */ }
   }
   try { g.paste(await navigator.clipboard.readText()); } catch { toast(`${MOD}V で貼り付けてください`); }
