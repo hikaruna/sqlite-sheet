@@ -1082,7 +1082,7 @@ export class Grid {
     const hit = this.cellFromEvent(e);
     if (!hit || e.target.closest('.fk-drop')) { this.lastTouch = Date.now(); return; }
     const x = e.clientX, y = e.clientY;
-    this.tap(e, () => this.onTap(hit), () => {
+    this.tap(e, () => this.onTap(hit, { x, y }), () => {
       // 長押し：右クリックと同じ。範囲の外なら選択を移してからメニュー
       if (this.editing) this.commitEdit({ move: null });
       const { r0, r1, c0, c1 } = this.range();
@@ -1094,7 +1094,7 @@ export class Grid {
   }
 
   /** タップ：セルを選ぶ。選んでいる1つのセルをもう一度タップしたら編集（キーボードを出す） */
-  onTap(hit) {
+  onTap(hit, at) {
     const again = !hit.head && hit.r === this.cur.r && hit.c === this.cur.c
       && this.ext.r === this.cur.r && this.ext.c === this.cur.c && !this.colSelect;
     if (this.editing) {
@@ -1103,7 +1103,12 @@ export class Grid {
     }
     if (hit.r === this.newRowIndex && !this.draft) { this.focus(); this.addRow(); return; }
     if (hit.r === this.newRowIndex && hit.head) { this.moveTo(hit.r, 0); this.focus(); return; }
-    if (hit.head) { this.selectRows(hit.r, hit.r); this.focus(); return; }
+    if (hit.head) {
+      // 選んでいる1行の行番号をもう一度タップしたら、行のメニュー（長押しと同じ。スプレッドシートと同じ）
+      const sel = this.rowSelect && !this.colSelect && this.cur.r === hit.r && this.ext.r === hit.r;
+      if (sel) { this.hooks.onContextMenu?.(at, { ...this.range(), head: true }); return; }
+      this.selectRows(hit.r, hit.r); this.focus(); return;
+    }
     if (again) { this.editByTouch(); return; }
     this.moveTo(hit.r, hit.c);
     this.focus();
