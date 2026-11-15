@@ -228,6 +228,10 @@ export function download(bytes, filename, type = 'application/octet-stream') {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
+/** アプリのアイコン（icons/icon.svg）。ページの URL は /DB名 のように変わるので、このファイルからの位置で指す */
+const APP_ICON_URL = new URL('../icons/icon.svg', import.meta.url).href;
+export const appIcon = () => el('img.app-icon', { src: APP_ICON_URL, alt: '', draggable: false });
+
 /** スマホ・タブレットなど、指で操作する端末 */
 export const isTouch = matchMedia('(pointer: coarse)').matches;
 

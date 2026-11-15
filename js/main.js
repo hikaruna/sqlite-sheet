@@ -1,6 +1,6 @@
 // アプリ本体：DB・シートの管理、画面の組み立て
 import { db, q } from './db-client.js';
-import { el, toast, menu, popover, closePopover, ask, confirmDialog, choiceDialog, modal, pickFile, download, exportFile, fmtBytes, isTouch, modKey, isMac, touchHold, icon } from './ui.js';
+import { el, toast, menu, popover, closePopover, ask, confirmDialog, choiceDialog, modal, pickFile, download, exportFile, fmtBytes, isTouch, modKey, isMac, touchHold, icon, appIcon } from './ui.js';
 import { listObjects, readTable, createTableSql, migrationSql, constantDefault, TYPES, affinity } from './schema.js';
 import { Grid } from './grid.js';
 import { sniff, asText, hexDump } from './blob.js';
@@ -155,7 +155,7 @@ function buildChrome() {
   $('app').replaceChildren(
     el('header.topbar',
       // 左上：アイコン＝ホーム（DB の一覧）、DB 名＝その場で名前を変更、ファイル＝DB の操作メニュー
-      el('button#home-btn.home-btn', { title: 'ホーム（データベースの一覧）', on: { click: goHome } }, '◆'),
+      el('button#home-btn.home-btn', { title: 'ホーム（データベースの一覧）', on: { click: goHome } }, appIcon()),
       // ホームでだけ出す：アプリ名と、DB を名前で探して開く検索窓
       el('span.app-title.home-only', 'SQLiteシート'),
       el('div.db-search.home-only',
@@ -354,7 +354,7 @@ function showWelcome() {
         state.dbs.length
           ? el('div.home-list', el('div.home-cols', el('span', '名前'), el('span', '最終閲覧')), sortedDbs().map((n) => el('div.home-item',
             el('button.home-row', { title: `「${n}」を開く`, on: { click: () => openDb(n) } },
-              el('span.home-row-icon', '◆'), el('span.home-row-name', n),
+              el('span.home-row-icon', appIcon()), el('span.home-row-name', n),
               el('span.home-row-time', viewedText(n))),
             el('button.icon-btn.home-more', {
               title: `「${n}」の操作`, 'aria-label': `「${n}」の操作`,
@@ -401,7 +401,7 @@ function homeDrawer() {
   const onKey = (e) => { if (e.key === 'Escape') close(); };
   const wrap = el('div.drawer-wrap', { on: { click: (e) => { if (e.target === wrap) close(); } } },
     el('nav.drawer', { 'aria-label': 'メニュー' },
-      el('div.drawer-head', el('span.home-row-icon', '◆'), el('span', 'SQLiteシート')),
+      el('div.drawer-head', el('span.home-row-icon', appIcon()), el('span', 'SQLiteシート')),
       ...items.map((it) => el('button.drawer-item', { on: { click: () => { close(); it.run(); } } },
         el('span.mi-icon', it.icon), el('span', it.label))),
       el('div.drawer-foot', $('version').textContent)));
@@ -422,7 +422,7 @@ function renderSearch() {
     ? searchHits.map((n, i) => el('button.db-search-item' + (i === searchSel ? '.active' : ''), {
       role: 'option', 'aria-selected': String(i === searchSel), tabIndex: -1,
       on: { mousedown: (e) => e.preventDefault(), click: () => pickSearch(n) },
-    }, el('span.home-row-icon', '◆'), el('span', n)))
+    }, el('span.home-row-icon', appIcon()), el('span', n)))
     : [el('div.db-search-none', '見つかりません')]));
   list.hidden = false; input.setAttribute('aria-expanded', 'true');
 }
@@ -862,10 +862,10 @@ function dbMenu(anchor, { list = false } = {}) {
       { label: 'データベースとして取り込む…', icon: '⤒', action: importFileToBrowser },
       { label: 'ファイルを閉じる', icon: '✕', action: closeFile }, '-');
   } else if (state.dbName) {
-    items.push({ header: `◆ ${state.dbName}` }, ...dbActions(state.dbName, { anchor }), '-');
+    items.push({ header: el('span.menu-header-db', appIcon(), state.dbName) }, ...dbActions(state.dbName, { anchor }), '-');
   }
   items.push({ header: 'データベース' });
-  for (const n of state.dbs) items.push({ label: n, icon: n === state.dbName ? '✓' : '◆', action: () => { if (n !== state.dbName) openDb(n); } });
+  for (const n of state.dbs) items.push({ label: n, icon: n === state.dbName ? '✓' : appIcon(), action: () => { if (n !== state.dbName) openDb(n); } });
   items.push({ label: '新規作成…', icon: '＋', action: () => newDb(anchor) },
     { label: '.sqlite ファイルを取り込む…', icon: '⤒', action: pickSqlite },
     { label: 'サンプルを作成', icon: '✨', action: makeSample });
@@ -921,7 +921,7 @@ function allMenu(anchor) {
   ]);
 }
 
-// ◆：ホーム（DB の一覧）へ。DB の移動なので履歴に積む（「戻る」で元の DB に戻れる）
+// 左上のアプリのアイコン：ホーム（DB の一覧）へ。DB の移動なので履歴に積む（「戻る」で元の DB に戻れる）
 async function goHome() {
   if (!state.dbName) return;
   if (!(await leaveCurrent())) return;
@@ -2290,7 +2290,7 @@ function palette() {
       : [{ label: 'トランザクションを開始', icon: '⧗', run: beginTx }]),
     { label: 'CSV からテーブルを作成', icon: '⤒', run: importCsv },
     state.file ? { label: 'ファイルに保存', icon: '💾', run: () => saveFile() } : null,
-    ...state.dbs.filter((n) => n !== state.dbName).map((n) => ({ label: n, hint: 'DB を開く', icon: '◆', run: () => openDb(n) })),
+    ...state.dbs.filter((n) => n !== state.dbName).map((n) => ({ label: n, hint: 'DB を開く', icon: appIcon(), run: () => openDb(n) })),
   ].filter(Boolean);
   const input = el('input.input.palette-input', { placeholder: 'シートやコマンドを検索…', autofocus: true });
   const list = el('div.palette-list');
