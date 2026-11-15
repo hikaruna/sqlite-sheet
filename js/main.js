@@ -1633,9 +1633,14 @@ async function scalarFunctions() {
 async function exprPicker(anchor) {
   const fx = $('fx-input');
   if (!state.source) return;
+  const g = state.grid;
+  // BLOB が入っているセルは式を書けないので、BLOB の操作を出す
+  if (g && g.rowAt(g.cur.r)?.values[g.cur.c] instanceof Uint8Array) { blobMenu(g.cur.r, g.cur.c, anchor); return; }
   if (fx.readOnly) { toast('このセルは編集できません'); return; }
   const fns = await scalarFunctions();
-  const g = state.grid;
+  const fileRow = g && g.acceptsBlob(g.cur.c) && g.canEdit(g.cur.r, g.cur.c)
+    ? el('button.btn.sm.expr-file', { type: 'button', on: { mousedown: (e) => e.preventDefault(), click: () => { closePopover(); loadFileInto(g.cur.r, g.cur.c); } } }, '⤒ ファイルから読み込む…（BLOB）')
+    : null;
   const onNew = g && g.cur.r === g.newRowIndex;
   const groups = {
     '関数': [...fns.filter((n) => FN_HELP[n]), ...fns.filter((n) => !FN_HELP[n])].map((n) => ({
@@ -1691,7 +1696,7 @@ async function exprPicker(anchor) {
     if (e.key === 'Enter' && !e.isComposing && items[active]) { e.preventDefault(); insert(items[active]); }
   });
   render();
-  popover(anchor, el('div.expr-picker', search, tabs, el('div.expr-body', list, help), note), { className: 'expr-pop' });
+  popover(anchor, el('div.expr-picker', fileRow, search, tabs, el('div.expr-body', list, help), note), { className: 'expr-pop' });
   search.focus();
 }
 
@@ -1915,7 +1920,15 @@ async function cellMenu(pos, range) {
     { label: 'コピー', icon: '⧉', kbd: `${MOD}C`, action: () => g.copy() },
   ];
   const { r, c } = g.cur;
-  if (g.rowAt(r)?.values[c] instanceof Uint8Array) items.unshift({ label: 'BLOB を表示', icon: '🔍', action: () => viewBlob(r, c) }, '-');
+  const cv = r === g.newRowIndex ? g.draft?.values[c] : g.rowAt(r)?.values[c];
+  const blobItems = [];
+  if (cv instanceof Uint8Array && r !== g.newRowIndex) {
+    const a = blobActions(r, c);
+    blobItems.push({ label: 'BLOB を表示', icon: '🔍', action: () => viewBlob(r, c) }, { label: 'ダウンロード', icon: '⤓', action: a.download });
+  }
+  // BLOB 型か型のない列なら、NULL のセルや新しい行でもファイルを入れられる
+  if (g.acceptsBlob(c) && g.canEdit(r, c)) blobItems.push({ label: 'ファイルから読み込む…', icon: '⤒', action: () => loadFileInto(r, c) });
+  if (blobItems.length) items.unshift(...blobItems, '-');
   if (isTable) {
     items.push(
       { label: '貼り付け', icon: '📋', kbd: `${MOD}V`, action: () => pasteFromMenu(g) },
@@ -2055,20 +2068,24 @@ function blobActions(r, c) {
   const v = row?.values[c];
   return {
     v,
-    load: async () => {
-      const f = await pickFile('');
-      if (!f) return;
-      try { const res = await state.source.update([{ row: r, col: c, value: new Uint8Array(await f.arrayBuffer()), rowObj: row }]); if (res[0]) g.pages.get(Math.floor(r / 200))[r % 200] = res[0].rowObj; g.render(); } catch (e) { toast(friendlyError(e.message), 'error'); }
-    },
+    load: () => loadFileInto(r, c),
     download: () => { const k = sniff(v); download(v, `${state.source.columns[c].name}.${k.ext}`, k.mime); },
     clear: () => g.write([{ r, c, value: null }]),
   };
 }
 
-function blobMenu(r, c) {
+/** ファイルを選んで、そのセルに BLOB として入れる（新しい行なら下書きに入れるだけ） */
+async function loadFileInto(r, c) {
+  const f = await pickFile('');
+  if (!f) return;
+  const g = state.grid;
+  await g.pasteBlob(new Uint8Array(await f.arrayBuffer()), [c], { r0: r, r1: r });
+}
+
+function blobMenu(r, c, anchor) {
   const g = state.grid;
   const a = blobActions(r, c);
-  const cellEl = g.body.querySelector(`.gr[data-r="${r}"] .gc[data-c="${c}"]`) || g.sink;
+  const cellEl = anchor || g.body.querySelector(`.gr[data-r="${r}"] .gc[data-c="${c}"]`) || g.sink;
   menu(cellEl, [
     { label: '表示', icon: '🔍', disabled: !(a.v instanceof Uint8Array), action: () => viewBlob(r, c) },
     { label: 'ファイルから読み込む…', icon: '⤒', action: a.load },

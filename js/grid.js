@@ -73,7 +73,7 @@ export class Grid {
 
   /** フォームを開いたときの文字列。下書きは持っているフォームの文字列、未入力は空 */
   formAt(r, c) {
-    if (r === this.newRowIndex) return this.draft?.values[c] ?? '';
+    if (r === this.newRowIndex) { const v = this.draft?.values[c]; return v instanceof Uint8Array ? '' : v ?? ''; }
     return formText(this.rowAt(r)?.values[c]);
   }
 
@@ -91,7 +91,7 @@ export class Grid {
     const draftRow = this.newRowIndex;
     this.flushing = (async () => {
       try {
-        await this.source.insert([values.map((v) => (v === undefined ? undefined : form(v)))]);
+        await this.source.insert([values.map(draftToValue)]);
         this.draft = null;
         const onNew = this.cur.r === draftRow;
         const editingNew = this.editing && this.editing.r === draftRow;
@@ -500,6 +500,7 @@ export class Grid {
           const v = draft.values[c];
           // 未入力は INSERT で入るものを薄く、それ以外はフォームの文字列をそのまま
           if (v === undefined) { cell.classList.add('ph'); cell.textContent = this.placeholderFor(c); }
+          else if (v instanceof Uint8Array) this.fillCell(cell, v, col, { values: draft.values }, r, c);
           else cell.textContent = v.replaceAll('\n', ' ⏎ ');
           if (draft.errors[c]) { cell.classList.add('err'); cell.title = draft.errors[c]; }
         } else if (!row) {
@@ -888,7 +889,8 @@ export class Grid {
       return false;
     }
     const v = this.currentValue();
-    if (v instanceof Uint8Array) { this.hooks.onBlobEdit?.(r, c); this.sink.value = ''; return false; }
+    // 新しい行の下書きに入れた BLOB は、打てばそのまま文字に置き換えられる
+    if (v instanceof Uint8Array && r !== this.newRowIndex) { this.hooks.onBlobEdit?.(r, c); this.sink.value = ''; return false; }
     const start = this.formAt(r, c);
     this.editing = { mode, r, c, start };
     if (initial !== undefined) { /* 入力済みの文字をそのまま使う */ } else this.sink.value = start;
@@ -1122,14 +1124,24 @@ export class Grid {
     if (hit) this.body.querySelector(`.gr[data-r="${hit.r}"] .gc[data-c="${hit.c}"]`)?.classList.add('drop');
   }
 
-  /** 選択範囲のうち cols の列に、同じバイト列を入れる */
-  async pasteBlob(bytes, cols) {
+  /**
+   * 行 r0〜r1（省略時は選択範囲）の cols の列に、同じバイト列を入れる。
+   * 新しい行には下書きのそのセルに入れるだけで、行は確定しない（保存は行を離れたとき）
+   */
+  async pasteBlob(bytes, cols, { r0, r1 } = this.range()) {
     if (!this.source.editable) { this.hooks.onReadonlyEdit?.(); return; }
-    const { r0, r1 } = this.range();
-    const changes = [];
-    for (let r = r0; r <= r1; r++) for (const c of cols) changes.push({ r, c, value: bytes });
-    const ok = await this.write(changes);
     const what = sniff(bytes).image ? '画像' : 'ファイル';
+    const changes = [];
+    let toDraft = 0;
+    for (let r = r0; r <= r1; r++) {
+      for (const c of cols) {
+        if (r === this.newRowIndex) { this.draftSet(c, bytes); toDraft++; }
+        else if (r < this.newRowIndex) changes.push({ r, c, value: bytes });
+      }
+    }
+    if (toDraft) { this.render(); this.emitSelect(); }
+    if (!changes.length) { if (toDraft) this.hooks.onInfo?.(`${what}を新しい行に入れました（行を離れると保存されます）`); return; }
+    const ok = await this.write(changes);
     if (ok) this.hooks.onInfo?.(changes.length > 1 ? `${changes.length} セルに${what}を入れました` : `${what}を入れました（${fmtBytes(bytes.length)}）`);
   }
 
@@ -1159,7 +1171,7 @@ export class Grid {
     const draft = this.hasDraft && changes.some((ch) => ch.r === this.newRowIndex) ? this.draft : null;
     if (draft) {
       draft.values.forEach((v, c) => {
-        if (v !== undefined && !changes.some((ch) => ch.r === this.newRowIndex && ch.c === c)) changes.push({ r: this.newRowIndex, c, value: form(v) });
+        if (v !== undefined && !changes.some((ch) => ch.r === this.newRowIndex && ch.c === c)) changes.push({ r: this.newRowIndex, c, value: draftToValue(v) });
       });
     }
     const ok = await this.write(changes);
@@ -1280,6 +1292,12 @@ function autoWidth(col) {
 }
 
 function isMacCtrl() { return /Mac/.test(navigator.platform); }
+
+/** 下書きの値を INSERT に渡す形へ（文字はフォームとして解釈し、BLOB はそのまま） */
+function draftToValue(v) {
+  if (v === undefined) return undefined;
+  return v instanceof Uint8Array ? v : form(v);
+}
 
 /** コピーした範囲の HTML（ほかの表計算ソフトにも表として貼れる。data-sqlite-sheet は自分のコピーの目印） */
 function toHtmlTable(values, id) {
