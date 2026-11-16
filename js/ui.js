@@ -32,6 +32,7 @@ export function toast(message, kind = 'info', ms = 3200) {
   const t = el('div.toast', { class: kind }, message);
   box.append(t);
   setTimeout(() => { t.classList.add('out'); setTimeout(() => t.remove(), 300); }, kind === 'error' ? ms * 2 : ms);
+  return t;
 }
 
 // ---------- ポップオーバー（同時に1つ） ----------

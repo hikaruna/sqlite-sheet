@@ -2,6 +2,12 @@
 // {0} {1} … は差し込む値。単数・複数は p[0] が 1 かどうかで分ける
 const one = (p) => Number(p[0]) === 1;
 export default {
+  "読み込めない URL です：{0}": (p) => `Cannot load this URL: ${p[0]}`,
+  "URL のファイルを取り込もうとしています。": "You are about to import a file from a URL.",
+  "今あるものを開く": "Open the existing one",
+  "別の名前で取り込む": "Import under another name",
+  "読み込んでいます…": "Loading…",
+  "ファイルを取得できませんでした（{0}）。相手のサーバーが他のサイトからの読み込みを許していない（CORS）こともあります": (p) => `Could not fetch the file (${p[0]}). The server may not allow loading from other sites (CORS).`,
   ".sqlite ファイルをドロップして読み込む": "Drop a .sqlite file to load it",
   "このブラウザは OPFS（Origin Private File System）に対応していません。": "This browser does not support OPFS (Origin Private File System).",
   "別のタブで開かれています": "Open in another tab",
