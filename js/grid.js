@@ -1237,6 +1237,11 @@ export class Grid {
     if (this.touchRecent()) return; // タッチの長押しは onTouchDown で扱う
     const hit = this.cellFromEvent(e);
     if (!hit) return;
+    // 範囲の外なら選択を移してからメニュー（長押しと同じ。メニューの中身は選び方で変わるので）
+    if (this.editing) this.commitEdit({ move: null });
+    const { r0, r1, c0, c1 } = this.range();
+    const inside = hit.r >= r0 && hit.r <= r1 && (hit.head || (hit.c >= c0 && hit.c <= c1));
+    if (!inside && hit.r !== this.newRowIndex) hit.head ? this.selectRows(hit.r, hit.r) : this.moveTo(hit.r, hit.c);
     this.hooks.onContextMenu?.({ x: e.clientX, y: e.clientY }, { ...this.range(), head: hit.head });
   }
 

@@ -2170,6 +2170,23 @@ function clearEditError() {
 function headerMenu(c, anchor) {
   const col = state.source.columns[c];
   const isTable = state.key[0] === 't';
+  const at = anchor instanceof Element ? anchor : $('sheet-head');
+  // 列ごと複数選んでいて c がその中にあれば、選んだ列すべてが対象（複数列ならではの項目だけ）
+  const cols = state.grid.resizeCols(c);
+  if (cols.length > 1) {
+    const names = cols.map((i) => state.source.columns[i].name);
+    const items = [
+      { header: tr('{0} 列', [cols.length]) },
+      { label: tr('コピー'), icon: '⧉', kbd: `${MOD}C`, action: () => state.grid.copy() },
+      '-',
+      { header: tr('テキストの折り返し') }, ...wrapItems(cols),
+    ];
+    if (isTable) items.push('-',
+      { label: tr('{0} 列を保護…', [cols.length]), icon: '🔒', action: () => protect({ kind: 'cols', cols: names }, at) },
+      '-',
+      { label: tr('{0} 列を削除…', [cols.length]), icon: '🗑', danger: true, disabled: state.model.columns.length <= names.length, action: () => dropColumns(names) });
+    return menu(anchor, items);
+  }
   const items = [
     { header: col.name },
     { label: tr('昇順に並べ替え'), icon: '↑', action: () => pushSort(col.name, 'asc') },
@@ -2211,28 +2228,35 @@ async function renameColumn(name, anchor) {
   } catch (e) { toast(friendlyError(e.message), 'error'); }
 }
 
-async function dropColumn(name) {
-  if (!await confirmDialog({ title: tr('列「{0}」を削除しますか？', [name]), body: tr('この列のデータはすべて失われ、元に戻せません。'), okLabel: tr('削除'), danger: true })) return;
+function dropColumn(name) { return dropColumns([name]); }
+
+/** 列を削除する。複数なら1回の確認・1回の作り直しでまとめて */
+async function dropColumns(names) {
+  const many = names.length > 1;
+  const title = many ? tr('{0} 列（{1}）を削除しますか？', [names.length, names.join('、')]) : tr('列「{0}」を削除しますか？', [names[0]]);
+  const body = many ? tr('これらの列のデータはすべて失われ、元に戻せません。') : tr('この列のデータはすべて失われ、元に戻せません。');
+  if (!await confirmDialog({ title, body, okLabel: tr('削除'), danger: true })) return;
   const m = state.model;
+  const gone = (n) => names.includes(n);
   try {
-    // キー・制約に含まれる列は ALTER TABLE DROP COLUMN できないので作り直す
-    const inKey = m.pk.includes(name) || m.uniques.some((u) => u.includes(name)) || m.fks.some((f) => f.cols.includes(name)) || m.indexes.some((i) => i.cols.includes(name));
-    if (inKey) {
+    // キー・制約に含まれる列は ALTER TABLE DROP COLUMN できないので作り直す。複数列も1回の作り直しで
+    const inKey = names.some((name) => m.pk.includes(name) || m.uniques.some((u) => u.includes(name)) || m.fks.some((f) => f.cols.includes(name)) || m.indexes.some((i) => i.cols.includes(name)));
+    if (inKey || many) {
       const { migrationSql } = await import('./schema.js');
       const next = JSON.parse(JSON.stringify(m));
-      next.columns = next.columns.filter((c) => c.name !== name).map((c) => ({ ...c, from: c.name }));
-      next.pk = next.pk.filter((n) => n !== name);
-      next.uniques = next.uniques.map((u) => u.filter((n) => n !== name)).filter((u) => u.length);
-      next.fks = next.fks.filter((f) => !f.cols.includes(name));
+      next.columns = next.columns.filter((c) => !gone(c.name)).map((c) => ({ ...c, from: c.name }));
+      next.pk = next.pk.filter((n) => !gone(n));
+      next.uniques = next.uniques.map((u) => u.filter((n) => !gone(n))).filter((u) => u.length);
+      next.fks = next.fks.filter((f) => !f.cols.some(gone));
       if (!next.pk.length) next.withoutRowid = false;
       await db.rebuild(migrationSql(m, next).map((sql) => ({ sql })));
     } else {
-      await db.exec(`ALTER TABLE ${q(m.name)} DROP COLUMN ${q(name)}`);
+      await db.exec(`ALTER TABLE ${q(m.name)} DROP COLUMN ${q(names[0])}`);
     }
     undo.clear();
     const v = viewOf(state.key);
-    v.sorts = v.sorts.filter((s) => s.col !== name);
-    v.filters = v.filters.filter((f) => f.col !== name);
+    v.sorts = v.sorts.filter((s) => !gone(s.col));
+    v.filters = v.filters.filter((f) => !gone(f.col));
     await reloadSheet();
   } catch (e) { toast(friendlyError(e.message), 'error'); }
 }
@@ -2370,37 +2394,55 @@ async function pasteFromMenu(g) {
   try { g.paste(await navigator.clipboard.readText()); } catch { toast(tr('{0}V で貼り付けてください', [MOD])); }
 }
 
+/**
+ * 表の中の右クリック・長押しのメニュー。選び方ごとに、その対象に関することだけを出す
+ * - 列ごと選んでいる → 列のメニュー（headerMenu）
+ * - 行ごと選んでいる → 行のメニュー（1行 / n 行）
+ * - それ以外 → セルのメニュー（1つのセル / 範囲）
+ */
 async function cellMenu(pos, range) {
   const g = state.grid;
+  if (g.colSelect && !g.rowSelect) return headerMenu(range.c0, pos);
   const isTable = state.key[0] === 't';
-  const rows = Math.min(range.r1, g.rowCount - 1) - range.r0 + 1;
-  const items = [
-    { label: tr('コピー'), icon: '⧉', kbd: `${MOD}C`, action: () => g.copy() },
-  ];
-  const { r, c } = g.cur;
-  const cv = r === g.newRowIndex ? g.draft?.values[c] : g.rowAt(r)?.values[c];
-  const blobItems = [];
-  if (cv instanceof Uint8Array && r !== g.newRowIndex) {
-    const a = blobActions(r, c);
-    blobItems.push({ label: tr('BLOB を表示'), icon: '🔍', action: () => viewBlob(r, c) }, { label: tr('ダウンロード'), icon: '⤓', action: a.download });
+  const copy = { label: tr('コピー'), icon: '⧉', kbd: `${MOD}C`, action: () => g.copy() };
+  const unprotectHere = () => g.protAt(g.cur.r, g.cur.c)
+    .map((p) => ({ label: tr('保護を外す：{0}', [p.note || describe(state.model, p)]), icon: '🔓', action: () => unprotect(p) }));
+  if (g.rowSelect && !g.colSelect) {
+    const rows = Math.min(range.r1, g.rowCount - 1) - range.r0 + 1;
+    const many = rows > 1;
+    const items = [many ? { header: tr('{0} 行', [rows]) } : null, copy];
+    if (isTable) items.push('-',
+      { label: many ? tr('{0} 行を複製', [rows]) : tr('行を複製'), icon: '⧉', disabled: rows < 1, action: async () => { try { await state.source.duplicateRows(await g.rowsBetween(range.r0, range.r0 + rows - 1)); await g.reload(); } catch (e) { toast(friendlyError(e.message), 'error'); } } },
+      '-',
+      { label: many ? tr('{0} 行を保護…', [rows]) : tr('行を保護…'), icon: '🔒', disabled: rows < 1, action: () => protectSelection(pos) },
+      ...unprotectHere(),
+      '-',
+      { label: many ? tr('{0} 行を削除', [rows]) : tr('行を削除'), icon: '🗑', kbd: `${MOD}-`, danger: true, disabled: rows < 1, action: () => deleteSelectedRows() });
+    return menu(pos, items.filter(Boolean));
   }
-  // BLOB 型か型のない列なら、NULL のセルや新しい行でもファイルを入れられる
-  if (g.acceptsBlob(c) && g.canEdit(r, c)) blobItems.push({ label: tr('ファイルから読み込む…'), icon: '⤒', action: () => loadFileInto(r, c) });
-  if (blobItems.length) items.unshift(...blobItems, '-');
+  const single = range.r0 === range.r1 && range.c0 === range.c1;
+  const items = [copy];
+  const { r, c } = g.cur;
+  if (single) {
+    const cv = r === g.newRowIndex ? g.draft?.values[c] : g.rowAt(r)?.values[c];
+    const blobItems = [];
+    if (cv instanceof Uint8Array && r !== g.newRowIndex) {
+      const a = blobActions(r, c);
+      blobItems.push({ label: tr('BLOB を表示'), icon: '🔍', action: () => viewBlob(r, c) }, { label: tr('ダウンロード'), icon: '⤓', action: a.download });
+    }
+    // BLOB 型か型のない列なら、NULL のセルや新しい行でもファイルを入れられる
+    if (g.acceptsBlob(c) && g.canEdit(r, c)) blobItems.push({ label: tr('ファイルから読み込む…'), icon: '⤒', action: () => loadFileInto(r, c) });
+    if (blobItems.length) items.unshift(...blobItems, '-');
+  }
   if (isTable) {
     items.push(
       { label: tr('貼り付け'), icon: '📋', kbd: `${MOD}V`, action: () => pasteFromMenu(g) },
-      { label: tr('値をクリア（NULL）'), icon: '⌫', kbd: 'Delete', action: () => g.clearSelection() },
-      { label: tr('下へコピー'), icon: '⇣', kbd: `${MOD}D`, disabled: range.r1 <= range.r0, action: () => g.fillDown() },
-      '-',
-      { label: rows > 1 ? tr('{0} 行を複製', [rows]) : tr('行を複製'), icon: '⧉', disabled: rows < 1, action: async () => { try { await state.source.duplicateRows(await g.rowsBetween(range.r0, range.r0 + rows - 1)); await g.reload(); } catch (e) { toast(friendlyError(e.message), 'error'); } } },
-      { label: rows > 1 ? tr('{0} 行を削除', [rows]) : tr('行を削除'), icon: '🗑', kbd: `${MOD}-`, danger: true, disabled: rows < 1, action: () => deleteSelectedRows() });
-    const here = g.protAt(g.cur.r, g.cur.c);
-    items.push('-', { label: tr('範囲を保護…'), icon: '🔒', action: () => protectSelection(pos) },
-      ...here.map((p) => ({ label: tr('保護を外す：{0}', [p.note || describe(state.model, p)]), icon: '🔓', action: () => unprotect(p) })));
-    const col = state.source.columns[g.cur.c];
-    const v = g.rowAt(g.cur.r)?.values[g.cur.c];
-    if (col?.fk && v != null) items.push('-', { label: tr('参照先の行を開く（{0}）', [col.fk.table]), icon: '→', kbd: tr('{0}クリック', [MOD]), action: () => jumpToRef(col.fk, v) });
+      { label: tr('値をクリア（NULL）'), icon: '⌫', kbd: 'Delete', action: () => g.clearSelection() });
+    if (!single) items.push({ label: tr('下へコピー'), icon: '⇣', kbd: `${MOD}D`, disabled: range.r1 <= range.r0, action: () => g.fillDown() });
+    if (r !== g.newRowIndex) items.push('-', { label: single ? tr('セルを保護…') : tr('範囲を保護…'), icon: '🔒', action: () => protectSelection(pos) }, ...unprotectHere());
+    const col = state.source.columns[c];
+    const v = g.rowAt(r)?.values[c];
+    if (single && col?.fk && v != null) items.push('-', { label: tr('参照先の行を開く（{0}）', [col.fk.table]), icon: '→', kbd: tr('{0}クリック', [MOD]), action: () => jumpToRef(col.fk, v) });
   }
   menu(pos, items);
 }
