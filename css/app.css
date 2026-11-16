@@ -817,7 +817,8 @@ body.dropping::after {
   input, textarea, select, .grid-sink { font-size: 16px; }
 }
 @media (max-width: 760px) {
-  .version { display: none; }
+  /* 狭い画面ではタブの領域を優先し、行数・選択の集計と版表記は出さない */
+  .status, .version { display: none; }
   /* メニュー・ポップオーバーは画面の下から出すシート */
   .popover.as-sheet {
     left: 0 !important; right: 0; top: auto !important; bottom: var(--kb, 0px);
