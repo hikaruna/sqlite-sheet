@@ -6,7 +6,7 @@ import { affinity } from './schema.js';
 import { convertInput, formText, form, defaultToForm } from './sources.js';
 
 // タッチ端末（指で操作する）か。行を高くし、タップ・長押し・つまみで操作する
-export const TOUCH = matchMedia('(pointer: coarse)').matches;
+export const TOUCH = matchMedia('(hover: none) and (pointer: coarse)').matches;
 const RH = TOUCH ? 34 : 28; // 行の高さ
 const LONG_PRESS = 500;
 const HH = 34;          // 見出しの高さ
@@ -164,6 +164,17 @@ export class Grid {
     this.applyZoom();
     if (TOUCH) this.setupPinch();
 
+    // つまみは「直前の操作が指（またはペン）だったか」で出し分ける。タッチ画面付きPCは
+    // 端末としてはタッチと申告することがあるが、マウスで操作しているときは出さない
+    this.byTouch = TOUCH;
+    this.host.classList.toggle('grid-touch', this.byTouch);
+    this.host.addEventListener('pointerdown', (e) => {
+      const t = e.pointerType !== 'mouse';
+      if (t === this.byTouch) return;
+      this.byTouch = t;
+      this.host.classList.toggle('grid-touch', t);
+      this.placeHandle();
+    }, true);
     this.scroll.addEventListener('scroll', () => this.render(), { passive: true });
     new ResizeObserver(() => this.render()).observe(this.scroll);
     this.body.addEventListener('mousedown', (e) => this.onMouseDown(e));
@@ -889,7 +900,7 @@ export class Grid {
 
   /** 範囲の右下に、範囲を広げるつまみを置く（タッチ端末・編集していないときだけ） */
   placeHandle() {
-    const show = TOUCH && !this.editing && this.cols.length > 0 && this.rowCount > 0 && this.cur.r !== this.newRowIndex;
+    const show = TOUCH && this.byTouch && !this.editing && this.cols.length > 0 && this.rowCount > 0 && this.cur.r !== this.newRowIndex;
     // 列ごと選んでいるときは、右下のつまみの代わりに（スプレッドシートと同じ）
     // ・選んだ列の左右の境目に、範囲を広げるつまみ（見えている範囲の縦の真ん中）
     // ・見出しの右下の境目に、幅を変えるつまみ

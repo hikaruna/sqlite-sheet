@@ -627,7 +627,7 @@ audio.blob-view-media { margin: 24px auto; width: calc(100% - 24px); }
 .blob-view-hex { white-space: pre; }
 .blob-view-body > p.muted { margin: 8px 12px; }
 .blob-view .modal-actions { flex-wrap: wrap; margin-top: 12px; }
-@media (pointer: coarse) { .blob-view .modal-actions .btn { min-height: 44px; } }
+@media (hover: none) and (pointer: coarse) { .blob-view .modal-actions .btn { min-height: 44px; } }
 
 /* ---------- トースト ---------- */
 #toasts { position: fixed; bottom: 52px; left: 50%; transform: translateX(-50%); z-index: 200; display: grid; gap: 6px; justify-items: center; pointer-events: none; }
@@ -784,7 +784,7 @@ body.dropping::after {
 @media (hover: none) {
   .gh-btn { opacity: 1; }
 }
-@media (pointer: coarse) {
+@media (hover: none) and (pointer: coarse) {
   /* ダブルタップでの拡大をやめる。長押しで文字選択・吹き出しを出さない */
   html { touch-action: manipulation; }
   /* シート画面ではページ全体の拡大をさせない（表だけを二本指で拡大する） */
@@ -796,9 +796,10 @@ body.dropping::after {
   input, textarea, select, [contenteditable] { font-size: 16px !important; }
   .gr { height: 34px; line-height: 33px; }
   .gc.wrap { padding-top: 6px; padding-bottom: 7px; }
-  /* 境目の帯はタップを受け取らず、下の見出し・行番号に通す（幅・高さはつまみで、ダブルタップは grid.js が位置で見分ける） */
-  .gh-resize { pointer-events: none; }
-  .gr-resize { pointer-events: none; }
+  /* 境目の帯はタップを受け取らず、下の見出し・行番号に通す（幅・高さはつまみで、ダブルタップは grid.js が位置で見分ける）。
+     マウスで操作しているとき（grid.js が .grid-touch を外す）は帯で幅・高さを変えられるようにする */
+  .grid-touch .gh-resize { pointer-events: none; }
+  .grid-touch .gr-resize { pointer-events: none; }
   .gh-btn { width: 28px; height: 28px; }
   .icon-btn { width: 36px; height: 36px; }
   .tool-btn, .btn { height: 36px; }

@@ -251,7 +251,7 @@ const APP_ICON_URL = new URL('../icons/icon.svg', import.meta.url).href;
 export const appIcon = () => el('img.app-icon', { src: APP_ICON_URL, alt: '', draggable: false });
 
 /** スマホ・タブレットなど、指で操作する端末 */
-export const isTouch = matchMedia('(pointer: coarse)').matches;
+export const isTouch = matchMedia('(hover: none) and (pointer: coarse)').matches;
 
 /**
  * ファイルの書き出し。指で操作する端末では共有シート（「ファイルに保存」「ドライブ」など）、
