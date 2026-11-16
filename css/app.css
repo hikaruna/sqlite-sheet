@@ -801,6 +801,8 @@ body.dropping::after {
   html { touch-action: manipulation; }
   /* シート画面ではページ全体の拡大をさせない（表だけを二本指で拡大する） */
   body:not(.at-home) #app { touch-action: pan-x pan-y; }
+  /* シート画面では、横に引ききってもブラウザの「戻る・進む」にしない（Android Chrome） */
+  html:has(body:not(.at-home)), body:not(.at-home) { overscroll-behavior-x: none; }
   .grid-body, .gh-cell, .tabs { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
   /* キーボードが出たら、見える範囲に収める */
   #app { height: var(--vvh, 100%); transform: translateY(var(--vvtop, 0px)); }

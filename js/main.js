@@ -2021,6 +2021,14 @@ for (const type of ['pointerdown', 'mousedown']) {
   }, true);
 }
 
+// シート画面では、画面の左右端から始まるタッチを止めて、iPhone Safari の「端からスワイプで戻る・進む」をさせない
+const EDGE_SWIPE = 10;
+document.addEventListener('touchstart', (e) => {
+  if (document.body.classList.contains('at-home') || e.touches.length !== 1) return;
+  const x = e.touches[0].clientX;
+  if (x < EDGE_SWIPE || x > innerWidth - EDGE_SWIPE) e.preventDefault();
+}, { passive: false, capture: true });
+
 // いま打っている入力欄（最後にフォーカスした数式バーかセル）
 let lastTyping = null;
 document.addEventListener('focusin', (e) => {
