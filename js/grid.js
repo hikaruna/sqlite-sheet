@@ -914,7 +914,16 @@ export class Grid {
     this.handle.hidden = !show || head || rowHead;
     this.colHandles.forEach((h) => { h.hidden = !head; });
     this.rowHandles.forEach((h) => { h.hidden = !rowHead; });
-    if (this.heightKnob) this.heightKnob.hidden = !rowHead;
+    // 高さ・幅のつまみは、すべて選んでいるとき（行も列も選択）にも出す
+    const knobH = show && this.rowSelect, knobW = show && this.colSelect;
+    if (this.heightKnob) {
+      this.heightKnob.hidden = !knobH;
+      if (knobH) Object.assign(this.heightKnob.style, { left: (this.scroll.scrollLeft / this.z + RHW) + 'px', top: this.rowY(r1 + 1) + 'px' });
+    }
+    if (this.widthKnob) {
+      this.widthKnob.hidden = !knobW;
+      if (knobW) this.widthKnob.style.left = (this.colX(c1) + this.colW(c1)) + 'px';
+    }
     if (rowHead) {
       const sl = this.scroll.scrollLeft / this.z, vw = this.scroll.clientWidth / this.z, right = this.colX(this.cols.length);
       // 列が画面の右端まで届かなければ、データのある所だけの真ん中
@@ -923,11 +932,8 @@ export class Grid {
       const [t, b] = this.rowHandles;
       Object.assign(t.style, { left, top: this.rowY(r0) + 'px' });
       Object.assign(b.style, { left, top: this.rowY(r1 + 1) + 'px' });
-      // 行番号の欄は横にスクロールしても左に残るので、つまみもそれに合わせる
-      if (this.heightKnob) Object.assign(this.heightKnob.style, { left: (sl + RHW) + 'px', top: this.rowY(r1 + 1) + 'px' });
       return;
     }
-    if (this.widthKnob) this.widthKnob.hidden = !head;
     if (head) {
       const st = this.scroll.scrollTop / this.z, vh = this.scroll.clientHeight / this.z;
       // 見えているデータの行の縦の真ん中（行が画面の下まで届かなければ、データのある所だけの真ん中）
@@ -936,7 +942,6 @@ export class Grid {
       const [l, r] = this.colHandles;
       Object.assign(l.style, { left: this.colX(c0) + 'px', top });
       Object.assign(r.style, { left: (this.colX(c1) + this.colW(c1)) + 'px', top });
-      if (this.widthKnob) this.widthKnob.style.left = (this.colX(c1) + this.colW(c1)) + 'px';
     }
     if (!show || head) return;
     Object.assign(this.handle.style, { left: (this.colX(c1) + this.colW(c1)) + 'px', top: this.rowY(r1 + 1) + 'px' });
