@@ -23,16 +23,17 @@
 
 ビルド不要のバニラ JS（ES Modules）です。静的ファイルとして配信するだけで動きます。
 
-URL は `/<DB 名>?sheet=<シート名>` の形で、DB をパスで表します（保存クエリは `?sheet=~<名前>`。名前自体の先頭の `~` は `~~` と重ねて書きます）。存在しないパスにも `index.html` を返す（SPA フォールバック）サーバーで配信してください。ローカルでは [miniserve](https://github.com/svenstaro/miniserve) を使います（初回だけ `cargo install miniserve`。プロジェクトにはファイルを追加しません）。
+URL は `/<DB 名>?sheet=<シート名>` の形で、DB をパスで表します（保存クエリは `?sheet=~<名前>`。名前自体の先頭の `~` は `~~` と重ねて書きます）。存在しないパスにも `index.html` を返す（SPA フォールバック）サーバーで配信してください。ローカルでは `tools/dev-server.py`（Python 標準ライブラリだけで動きます）を使います。SPA フォールバックに加えて、`sw.js` と `js/version.js` を配るときに版の `dev` を「dev-ファイルの最新の更新日時」に差し替えるので、保存するたびに Service Worker が入れ直され、ホーム画面の版表示で最新を読めているか確かめられます。
 
 ```sh
-miniserve --spa --index index.html -p 8000 .
+python tools/dev-server.py --port 8000
 # → http://localhost:8000/
+# スマホから確かめるときは HTTPS で: --cert lan.crt --key lan.key
 ```
 
 ### GitHub Pages で公開
 
-リポジトリの Settings → Pages で、このブランチのルートを公開するだけです。
+`main` に push すると `.github/workflows/pages.yml` が公開します（Settings → Pages の Source は GitHub Actions）。公開する前に版をコミットハッシュに書き換えます。
 GitHub Pages は SPA フォールバックを設定できないため、`404.html` が元の URL を預けてアプリの入口へ転送し、アプリ側で元の URL に戻します。
 COOP/COEP ヘッダーは不要です（SharedArrayBuffer を使わない `opfs-sahpool` VFS を採用）。
 

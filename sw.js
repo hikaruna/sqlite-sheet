@@ -1,6 +1,6 @@
 // Service Worker：アプリのファイルを端末に保存して、電波がなくても起動できるようにする。
 // DB（OPFS）には触れない。保存先は Cache Storage
-const VERSION = 'dev';         // 公開時に .github/workflows/pages.yml がコミットハッシュに書き換える
+const VERSION = 'dev';         // 公開時は pages.yml がコミットハッシュに、検証用サーバーは dev-更新日時 に差し替える
 const APP = `app-${VERSION}`;   // 自前のファイル（ネット優先。つながらないときだけ保存分を使う）
 const CDN = 'cdn-v1';           // jsDelivr の sqlite-wasm（URL に版が入っていて中身が変わらないので保存分を優先）
 
