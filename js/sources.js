@@ -56,6 +56,12 @@ export function formText(v) {
 
 /** フォームの値の印（DBの値と区別するため、書き込みではこの形で渡す） */
 export const form = (text) => ({ form: text });
+/** バインドする値が同じか（バイト列は中身で比べる） */
+function sameValue(a, b) {
+  if (a === b) return true;
+  if (a instanceof Uint8Array && b instanceof Uint8Array) return a.length === b.length && a.every((x, i) => x === b[i]);
+  return false;
+}
 const isForm = (v) => v !== null && typeof v === 'object' && !(v instanceof Uint8Array) && 'form' in v;
 
 /** 外側の括弧が式全体を囲んでいるか（"(a) + (b)" は囲んでいない） */
@@ -364,6 +370,18 @@ export class TableSource {
     }
     const plans = [...byRow.entries()].map(([row, r]) => ({ row, ...r }));
     const allParts = plans.flatMap((p) => p.parts);
+    const uniform = this.uniformUpdate(plans);
+    if (uniform) {
+      let r;
+      try { r = await db.batchTracked(uniform.stmts); } catch (e) { throw this.exprFailure(e, allParts, false); }
+      pushChanges(tr('「{0}」の{1}', [this.model.name, changes.length > 1 ? tr('{0} セルの変更', [changes.length]) : tr('セルの変更')]), 't:' + this.model.name, r);
+      const out = [];
+      for (const p of plans) {
+        const fresh = await this.fetchByKey(p.rowObj.key);
+        if (fresh) out.push({ row: p.row, rowObj: fresh });
+      }
+      return out;
+    }
     // 式はこの UPDATE の中で計算され、RETURNING で計算結果と新しいキーを受け取る
     const stmts = plans.map(({ rowObj, cols, parts }) => {
       const kw = this.keyWhere(rowObj.key);
@@ -386,6 +404,38 @@ export class TableSource {
       if (fresh) out.push({ row: p.row, rowObj: fresh });
     }
     return out;
+  }
+
+  /**
+   * 複数行に、列ごとに同じ値を入れる変更なら、WHERE キー IN (…) の UPDATE にまとめた文を返す（行数が多ければ分ける）。
+   * キー列を変える・行ごとに値や列が違うときは null（行ごとの文にする）
+   */
+  uniformUpdate(plans) {
+    if (plans.length < 2) return null;
+    const [first] = plans;
+    const keyCols = this.keyCols();
+    if (first.cols.some((c) => this.model.pk.includes(c.name))) return null;
+    const samePart = (a, b) => a.sql === b.sql && (a.bind ?? []).length === (b.bind ?? []).length
+      && (a.bind ?? []).every((v, i) => sameValue(v, b.bind[i]));
+    for (const p of plans.slice(1)) {
+      if (p.cols.length !== first.cols.length || p.cols.some((c, i) => c !== first.cols[i])) return null;
+      if (p.parts.some((part, i) => !samePart(part, first.parts[i]))) return null;
+    }
+    const set = first.cols.map((c, i) => `${q(c.name)} = ${first.parts[i].sql}`).join(', ');
+    const setBind = first.parts.flatMap((p) => p.bind ?? []);
+    const checks = first.parts.filter((p) => p.check).map((p) => p.check);
+    const keySql = keyCols.map((k) => (k === '_rowid_' ? '_rowid_' : q(k)));
+    const CHUNK = 500;
+    const stmts = [];
+    for (let s = 0; s < plans.length; s += CHUNK) {
+      const part = plans.slice(s, s + CHUNK);
+      const keyBind = part.flatMap((p) => keyCols.map((k) => p.rowObj.key[k]));
+      const where = keyCols.length === 1
+        ? `${keySql[0]} IN (${part.map(() => '?').join(', ')})`
+        : `(${keySql.join(', ')}) IN (VALUES ${part.map(() => `(${keyCols.map(() => '?').join(', ')})`).join(', ')})`;
+      stmts.push({ sql: `UPDATE ${this.t} SET ${set} WHERE ${where}`, bind: [...setBind, ...keyBind], checks: s === 0 ? checks : [] });
+    }
+    return { stmts };
   }
 
   async insert(rows) {
