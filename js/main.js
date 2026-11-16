@@ -1531,14 +1531,43 @@ function queryEditor(kind, name, error) {
   const original = isView ? viewParts.select : obj.sql;
   const ta = el('textarea.query-input.mono', {
     value: original, spellcheck: false, readOnly: isView,
-    rows: Math.min(10, Math.max(3, original.split('\n').length)),
+    rows: 1,
     on: {
       keydown: (e) => {
         if (modKey(e) && e.key === 'Enter') { e.preventDefault(); run(); }
         if (e.key === 'Tab') { e.preventDefault(); ta.setRangeText('  ', ta.selectionStart, ta.selectionEnd, 'end'); }
         if (e.key === 'Escape') state.grid?.focus();
       },
-      input: () => { ta.rows = Math.min(14, Math.max(3, ta.value.split('\n').length)); dirtyMark.hidden = ta.value === original; },
+      input: () => { dirtyMark.hidden = ta.value === original; },
+    },
+  });
+  // 普段は1行。つまみをドラッグして高さを変える（シートごとに覚える）
+  const heights = state.queryHeights ??= new Map();
+  const sheetKey = state.key;
+  if (heights.has(sheetKey)) ta.style.height = heights.get(sheetKey) + 'px';
+  const resizer = el('div.query-resizer', {
+    title: tr('ドラッグで高さを変更・ダブルクリックで1行に戻す'),
+    on: {
+      pointerdown: (e) => {
+        e.preventDefault();
+        resizer.setPointerCapture(e.pointerId);
+        const startY = e.clientY, startH = ta.offsetHeight;
+        const move = (ev) => {
+          // 最小の高さは CSS の min-height が受け持つ
+          const h = Math.max(0, Math.min(window.innerHeight * 0.6, startH + ev.clientY - startY));
+          ta.style.height = h + 'px';
+        };
+        const up = () => {
+          resizer.removeEventListener('pointermove', move);
+          resizer.removeEventListener('pointerup', up);
+          resizer.removeEventListener('pointercancel', up);
+          if (ta.style.height) heights.set(sheetKey, ta.offsetHeight);
+        };
+        resizer.addEventListener('pointermove', move);
+        resizer.addEventListener('pointerup', up);
+        resizer.addEventListener('pointercancel', up);
+      },
+      dblclick: () => { ta.style.height = ''; heights.delete(sheetKey); },
     },
   });
   const dirtyMark = el('span.dirty-dot', { hidden: true, title: tr('未実行の変更') }, '●');
@@ -1573,7 +1602,7 @@ function queryEditor(kind, name, error) {
       el('button.btn.sm', { on: { click: () => saveAsView(name, ta.value) } }, tr('◫ ビューとして保存')),
       el('button.btn.primary.sm', { on: { click: run } }, tr('▶ 実行')));
   const saveBtn = actions.querySelector('.btn.primary');
-  return el('div.query-box', { class: isView ? 'readonly' : '' }, ta, actions, err);
+  return el('div.query-box', { class: isView ? 'readonly' : '' }, ta, resizer, actions, err);
 }
 
 async function saveAsView(queryName, sql) {

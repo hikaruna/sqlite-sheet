@@ -266,10 +266,13 @@ body.at-home .toolbar, body.at-home .fxbar { display: none; }
 
 .query-box { padding: 10px 10px 0; border-bottom: 1px solid var(--line); background: var(--surface); }
 .query-input {
-  width: 100%; resize: vertical; border: 1px solid var(--line-strong); border-radius: 8px;
+  display: block; width: 100%; min-height: calc(1.55em + 18px); resize: none; border: 1px solid var(--line-strong); border-radius: 8px;
   padding: 8px 10px; background: var(--surface); outline: none; line-height: 1.55; tab-size: 2;
 }
 .query-box.readonly .query-input:read-only { background: var(--surface-2); color: var(--text-2); }
+.query-resizer { height: 12px; cursor: ns-resize; touch-action: none; display: flex; align-items: center; justify-content: center; }
+.query-resizer::before { content: ''; width: 36px; height: 4px; border-radius: 2px; background: var(--line-strong); }
+.query-resizer:hover::before { background: var(--accent); }
 .query-actions { display: flex; align-items: center; gap: 8px; padding: 8px 0; }
 .query-error { color: var(--danger); font-size: 12px; padding-bottom: 8px; }
 .query-error:empty { display: none; }

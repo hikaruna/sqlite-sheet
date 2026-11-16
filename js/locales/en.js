@@ -5,6 +5,7 @@ export default {
   "読み込めない URL です：{0}": (p) => `Cannot load this URL: ${p[0]}`,
   "URL のファイルを取り込もうとしています。": "You are about to import a file from a URL.",
   "今あるものを開く": "Open the existing one",
+  "ドラッグで高さを変更・ダブルクリックで1行に戻す": "Drag to change the height, double-click to return to one line",
   "別の名前で取り込む": "Import under another name",
   "読み込んでいます…": "Loading…",
   "ファイルを取得できませんでした（{0}）。相手のサーバーが他のサイトからの読み込みを許していない（CORS）こともあります": (p) => `Could not fetch the file (${p[0]}). The server may not allow loading from other sites (CORS).`,
