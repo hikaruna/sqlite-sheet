@@ -1289,7 +1289,10 @@ async function newQuery(sql, base = tr('クエリ')) {
     saveQueries();
     await refreshObjects();
     await showSheet('q:' + name);
-    $('sheet-head').querySelector('textarea')?.focus();
+    // ひな形はたいてい書き換えるので全選択しておく（そのまま打てば置き換わる）
+    const ta = $('sheet-head').querySelector('textarea');
+    ta?.focus();
+    ta?.select();
   } catch (e) { toast(friendlyError(e.message), 'error'); }
 }
 
@@ -1609,7 +1612,7 @@ function queryEditor(kind, name, error) {
     ? el('div.query-actions',
       el('span.muted.sm', tr('ビューの定義')),
       el('span.grow'),
-      el('button.btn.sm', { on: { click: (e) => { ta.readOnly = false; ta.focus(); e.currentTarget.remove(); saveBtn.hidden = false; } } }, tr('✎ 編集')),
+      el('button.btn.sm', { on: { click: (e) => { ta.readOnly = false; ta.focus(); ta.select(); e.currentTarget.remove(); saveBtn.hidden = false; } } }, tr('✎ 編集')),
       el('button.btn.sm', { on: { click: () => newQuery(original, name + tr('のクエリ')) } }, tr('クエリとして複製')),
       Object.assign(el('button.btn.primary.sm', { hidden: true, on: { click: run } }, tr('ビューを更新')), {}))
     : el('div.query-actions',
