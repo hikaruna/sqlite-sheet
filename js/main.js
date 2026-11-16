@@ -337,7 +337,7 @@ function showWelcome() {
   $('db-name').hidden = true;
   $('fx-ref').textContent = ''; $('fx-input').value = ''; $('status').textContent = '';
   $('tabs').replaceChildren();
-  $('sheet-head').replaceChildren();
+  $('sheet-head').replaceChildren(); document.body.classList.remove('query-typing');
   $('panel').hidden = true;
   setUrl();
   // 操作はすべて一覧より上に置く（一覧が長くなっても埋もれない）
@@ -1325,7 +1325,7 @@ async function showSheet(key, { keepView = true } = {}) {
   if (!key) {
     state.grid = null; state.source = null; state.model = null;
     updateStatus();
-    $('sheet-head').replaceChildren();
+    $('sheet-head').replaceChildren(); document.body.classList.remove('query-typing');
     $('grid-host').replaceChildren(el('div.empty-db',
       el('h2', tr('まだシートがありません')),
       el('p.muted', tr('テーブルを作るか、SQL コンソールから CREATE TABLE を実行してください。')),
@@ -1425,6 +1425,9 @@ function queryEditor(kind, name, error) {
         if (e.key === 'Tab') { e.preventDefault(); ta.setRangeText('  ', ta.selectionStart, ta.selectionEnd, 'end'); }
         if (e.key === 'Escape') state.grid?.focus();
       },
+      // 入力している間は、狭い画面でシートタブを隠してクエリ欄に場所を譲る（CSS の body.query-typing）
+      focus: () => document.body.classList.add('query-typing'),
+      blur: () => document.body.classList.remove('query-typing'),
       input: () => { ta.rows = Math.min(14, Math.max(3, ta.value.split('\n').length)); dirtyMark.hidden = ta.value === original; },
     },
   });
