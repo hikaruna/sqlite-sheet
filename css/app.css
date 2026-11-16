@@ -544,6 +544,11 @@ body.at-home .toolbar, body.at-home .fxbar { display: none; }
 .tab:hover { background: var(--surface-3); color: var(--text); }
 .tab.on { background: var(--surface); color: var(--text); border-top-color: var(--accent); font-weight: 600; }
 .tab-icon { font-size: 12px; color: var(--text-3); }
+/* タブのドラッグで順番を入れ替える */
+.tab.armed { background: var(--surface-3); }
+.tab.dragging { position: relative; z-index: 2; cursor: grabbing; background: var(--surface); box-shadow: var(--shadow); opacity: .92; }
+.tab.drop-before { box-shadow: inset 3px 0 0 var(--accent); }
+.tabs.drop-end .tab:not(.dragging):last-child { box-shadow: inset -3px 0 0 var(--accent); }
 .tab.k-t .tab-icon { color: var(--accent); }
 .tab.k-v .tab-icon { color: var(--fk); }
 .tab.k-q .tab-icon { color: var(--warn); }

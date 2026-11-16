@@ -1,7 +1,7 @@
 // アプリ本体：DB・シートの管理、画面の組み立て
 import { t as tr, lang, LANGS, setLang, locale } from './i18n.js';
 import { db, q } from './db-client.js';
-import { el, toast, menu, popover, closePopover, ask, confirmDialog, choiceDialog, modal, pickFile, download, exportFile, fmtBytes, isTouch, modKey, isMac, touchHold, icon, appIcon } from './ui.js';
+import { el, toast, menu, popover, closePopover, ask, confirmDialog, choiceDialog, modal, pickFile, download, exportFile, fmtBytes, isTouch, modKey, isMac, icon, appIcon } from './ui.js';
 import { listObjects, readTable, createTableSql, migrationSql, constantDefault, TYPES, affinity } from './schema.js';
 import { Grid } from './grid.js';
 import { sniff, asText, hexDump } from './blob.js';
@@ -1088,7 +1088,7 @@ function renderTabs() {
           if (e.pointerType && e.pointerType !== 'mouse' && key === state.key) tabMenu(key, e.currentTarget);
           else showSheet(key);
         },
-        pointerdown: (e) => { const t = e.currentTarget; touchHold(e, () => tabMenu(key, t)); },
+        pointerdown: (e) => tabPointer(e, key),
         dblclick: (e) => renameSheet(key, e.currentTarget),
         contextmenu: (e) => { e.preventDefault(); if (e.pointerType !== 'touch') tabMenu(key, e.currentTarget); },
       },
@@ -1099,6 +1099,71 @@ function renderTabs() {
   const crumb = $('sheet-crumb'), has = !!state.key;
   crumb.hidden = $('crumb-sep').hidden = !has;
   if (has) crumb.replaceChildren(el('span.tab-icon', KIND_ICON[state.key[0]]), el('span.crumb-name', state.key.slice(2)));
+}
+
+/**
+ * タブを押したとき：ドラッグで順番を入れ替える（スプレッドシートのシートタブと同じ）。
+ * マウスは少し動かせばドラッグ。タッチは長押ししてから動かすとドラッグ、動かさずに離せばタブのメニュー
+ * （長押しせずに動かせば、ふつうにタブの列をスクロール）
+ */
+function tabPointer(e, key) {
+  if (e.button !== 0) return;
+  const tab = e.currentTarget, box = tab.parentElement, touch = e.pointerType !== 'mouse';
+  const sx = e.clientX, sy = e.clientY;
+  let armed = !touch, dragging = false, to = -1, lastX = sx;
+  const timer = touch ? setTimeout(() => { armed = true; navigator.vibrate?.(10); tab.classList.add('armed'); }, 450) : 0;
+  const others = () => [...box.querySelectorAll('.tab')].filter((t) => t !== tab);
+  // 長押しのあとは、指を動かしてもタブの列がスクロールしないようにする
+  const noScroll = (ev) => { if (armed) ev.preventDefault(); };
+  const place = () => {
+    const x = lastX, br = box.getBoundingClientRect();
+    // 端まで持っていったら、タブの列をその方向へ送る
+    if (x < br.left + 24) box.scrollLeft -= 8; else if (x > br.right - 24) box.scrollLeft += 8;
+    tab.style.transform = `translateX(${x - sx + (box.scrollLeft - sl0)}px)`;
+    const mid = tab.getBoundingClientRect().left + tab.offsetWidth / 2;
+    const rest = others();
+    to = rest.filter((t) => { const r = t.getBoundingClientRect(); return mid > r.left + r.width / 2; }).length;
+    rest.forEach((t, k) => t.classList.toggle('drop-before', k === to));
+    box.classList.toggle('drop-end', to === rest.length);
+  };
+  const sl0 = box.scrollLeft;
+  const move = (ev) => {
+    lastX = ev.clientX;
+    const d = Math.hypot(ev.clientX - sx, ev.clientY - sy);
+    if (!dragging) {
+      if (!armed) { if (d > 10) end(); return; } // 長押し前に動いた：スクロールに任せる
+      if (d < 5) return;
+      dragging = true;
+      tab.classList.add('dragging'); box.classList.add('sorting');
+    }
+    place();
+  };
+  const end = () => {
+    clearTimeout(timer);
+    removeEventListener('pointermove', move); removeEventListener('pointerup', up); removeEventListener('pointercancel', end);
+    removeEventListener('touchmove', noScroll);
+    tab.classList.remove('armed', 'dragging'); tab.style.transform = '';
+    box.classList.remove('sorting', 'drop-end');
+    box.querySelectorAll('.drop-before').forEach((t) => t.classList.remove('drop-before'));
+  };
+  const up = () => {
+    const wasArmed = armed && touch, moved = dragging;
+    end();
+    // 離したあとの click で、シートを開いたりメニューを出したりしない
+    if (moved || wasArmed) {
+      const eat = (ev) => { ev.stopPropagation(); ev.preventDefault(); };
+      addEventListener('click', eat, { capture: true, once: true });
+      setTimeout(() => removeEventListener('click', eat, { capture: true }), 300);
+    }
+    if (!moved) { if (wasArmed) tabMenu(key, tab); return; }
+    const keys = allKeys(), from = keys.indexOf(key);
+    if (from < 0 || to < 0 || to === from) return;
+    keys.splice(from, 1); keys.splice(to, 0, key);
+    saveOrder(keys);
+    renderTabs();
+  };
+  addEventListener('pointermove', move); addEventListener('pointerup', up); addEventListener('pointercancel', end);
+  addEventListener('touchmove', noScroll, { passive: false });
 }
 
 function tabMenu(key, anchor) {
