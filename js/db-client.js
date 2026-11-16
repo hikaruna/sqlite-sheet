@@ -62,6 +62,10 @@ export const db = {
   importDb: (name, bytes) => call('importDb', name, bytes),
   /** 読み取り用。ログに出さない */
   query: (sql, bind) => call('run', sql, bind),
+  /** クエリシート・ビュー用：読み取り専用の1文だけを実行する */
+  readQuery: (sql, bind) => call('readQuery', sql, bind),
+  /** ユーザーのクエリが読み取り専用の1文か確かめる（違えばエラー） */
+  checkQuery: (sql) => call('checkQuery', sql),
   /** 書き込み用。ログに出す */
   exec: (sql, bind, source = 'gui') => logged(() => call('exec', sql, bind), [{ sql, bind }], source),
   batch: (stmts, source = 'gui') => logged(() => call('batch', stmts), stmts, source),

@@ -628,4 +628,6 @@ export default {
   "URL から開く": "Open from URL",
   "URL を入力してください": "Enter a URL",
   "http(s) の URL を入力してください": "Enter an http(s) URL",
+  "クエリシートでは読み取り（SELECT）だけ使えます。データを変更する SQL は SQL コンソールで実行してください": "Query sheets can only read data (SELECT). Run SQL that changes data in the SQL console",
+  "クエリシートには SQL を1文だけ書けます": "A query sheet can contain only one SQL statement",
 };

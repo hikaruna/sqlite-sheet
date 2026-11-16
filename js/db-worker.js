@@ -207,6 +207,38 @@ function checkExpr(sql) {
   } finally { st.finalize(); }
 }
 
+// ---------- クエリシート・ビュー：読み取りだけを、1文だけ実行する ----------
+// d.exec は「;」で区切った文を全部実行するので、SELECT * FROM (<ユーザーの SQL>) で包んでも
+// 「SELECT 1); DELETE FROM t; SELECT * FROM (SELECT 1」のように閉じ括弧で抜け出されると DELETE まで走る。
+// そこで実行前に用意だけして、1文であること・読み取り専用であることを確かめる
+const READ_ONLY_MSG = 'クエリシートでは読み取り（SELECT）だけ使えます。データを変更する SQL は SQL コンソールで実行してください';
+const ONE_STMT_MSG = 'クエリシートには SQL を1文だけ書けます';
+
+function checkRead(sql, { columns = false } = {}) {
+  ensureAttached(sql);
+  const st = need().prepare(sql);
+  try {
+    // prepare は最初の文だけを用意して残りを捨てるので、余りがあれば2文目がある
+    if (sqlite3.capi.sqlite3_sql(st.pointer).trim() !== sql.trim()) throw new Error(ONE_STMT_MSG);
+    if (!sqlite3.capi.sqlite3_stmt_readonly(st.pointer)) throw new Error(READ_ONLY_MSG);
+    // BEGIN・ATTACH なども読み取り専用扱いだが、行を返さない
+    if (columns && sqlite3.capi.sqlite3_column_count(st.pointer) === 0) throw new Error(READ_ONLY_MSG);
+  } finally { st.finalize(); }
+}
+
+/** ユーザーが書いたクエリを、包む前に確かめる（分かりやすいエラーを出すため） */
+function checkQuery(sql) {
+  // 末尾の「;」は許す（クエリシートも取り除いてから使う）
+  checkRead(sql.trim().replace(/;+\s*$/, ''), { columns: true });
+  return true;
+}
+
+/** 読み取り専用の1文だけを実行する。それ以外は実行せずにエラー */
+function readQuery(sql, bind) {
+  checkRead(sql);
+  return run(sql, bind);
+}
+
 // 文の配列を1トランザクション（SAVEPOINT）で実行。失敗したら全部戻す
 function batch(stmts) {
   const d = need();
@@ -579,7 +611,7 @@ async function copy(from, to) {
   return true;
 }
 
-const api = { init, list, open, openFile, openBytes, close, save, checkFile, begin, commit, rollback, run, exec, batch, batchTracked, applyChangeset, consoleRun, rebuild, create, exportDb, importDb, remove, rename, copy };
+const api = { init, list, open, openFile, openBytes, close, save, checkFile, begin, commit, rollback, run, exec, checkQuery, readQuery, batch, batchTracked, applyChangeset, consoleRun, rebuild, create, exportDb, importDb, remove, rename, copy };
 
 // 呼び出しは1つずつ順に処理する（ファイルの読み書きを待つ間に、次の呼び出しが割り込まないように）
 let queue = Promise.resolve();

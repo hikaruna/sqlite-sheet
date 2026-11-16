@@ -113,6 +113,8 @@ export function friendlyError(msg) {
   if ((r = m.match(/no such column: (.+)/))) return tr('列 {0} がありません', [r[1]]);
   if ((r = m.match(/near "(.+?)": syntax error/))) return tr('SQL の構文エラー（"{0}" 付近）', [r[1]]);
   // Worker（db-worker.js）が出す日本語のエラーも、英語のときは訳す
+  if (m.includes('クエリシートでは読み取り（SELECT）だけ使えます。データを変更する SQL は SQL コンソールで実行してください')) return tr('クエリシートでは読み取り（SELECT）だけ使えます。データを変更する SQL は SQL コンソールで実行してください');
+  if (m.includes('クエリシートには SQL を1文だけ書けます')) return tr('クエリシートには SQL を1文だけ書けます');
   if ((r = m.match(/^「(.+)」は既にあります$/))) return tr('「{0}」は既にあります', [r[1]]);
   if ((r = m.match(/^ファイルに保存できませんでした：(.*)$/s))) return tr('ファイルに保存できませんでした：{0}', [r[1]]);
   if ((r = m.match(/^外部キー制約に違反する行が (\d+) 件あるため適用できません（例: (.+)）$/))) return tr('外部キー制約に違反する行が {0} 件あるため適用できません（例: {1}）', [r[1], r[2]]);
@@ -494,14 +496,16 @@ export class QuerySource {
   }
 
   async init() {
-    const r = await db.query(`SELECT * FROM (${this.sql}) LIMIT 0`);
+    // 包む前に、ユーザーの SQL そのものが読み取りの1文か確かめる（UPDATE などに分かりやすいエラーを出す）
+    await db.checkQuery(this.sql);
+    const r = await db.readQuery(`SELECT * FROM (${this.sql}\n) LIMIT 0`);
     this.columns = r.columns.map((name) => ({
       name, badges: [],
       sort: sortInfo(this.view.sorts, name),
       filtered: this.view.filters.some((f) => f.col === name),
     }));
     // 先頭行から数値列を推定して右寄せ
-    const s = await db.query(`SELECT * FROM (${this.sql}) LIMIT 50`);
+    const s = await db.readQuery(`SELECT * FROM (${this.sql}\n) LIMIT 50`);
     this.columns.forEach((c, i) => {
       const vals = s.rows.map((row) => row[i]).filter((v) => v != null);
       if (vals.length && vals.every((v) => typeof v === 'number' || typeof v === 'bigint')) c.align = 'right';
@@ -514,13 +518,13 @@ export class QuerySource {
 
   async count() {
     const w = this.where();
-    const r = await db.query(`SELECT count(*) FROM (${this.sql})${w.sql}`, w.bind);
+    const r = await db.readQuery(`SELECT count(*) FROM (${this.sql}\n)${w.sql}`, w.bind);
     return Number(r.rows[0][0]);
   }
 
   async fetch(offset, limit) {
     const w = this.where();
-    const r = await db.query(`SELECT * FROM (${this.sql})${w.sql}${this.orderBy()} LIMIT ? OFFSET ?`, [...w.bind, limit, offset]);
+    const r = await db.readQuery(`SELECT * FROM (${this.sql}\n)${w.sql}${this.orderBy()} LIMIT ? OFFSET ?`, [...w.bind, limit, offset]);
     return r.rows.map((values) => ({ values }));
   }
 }

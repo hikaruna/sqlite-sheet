@@ -1750,11 +1750,13 @@ function queryEditor(kind, name, error) {
     const sql = ta.value.trim().replace(/;+\s*$/, '');
     if (!sql) return;
     try {
+      // 読み取りの1文か先に確かめる（「; DELETE …」を後ろに続けられないように）
+      await db.checkQuery(sql);
       if (isView) {
         await db.rebuild([{ sql: `DROP VIEW ${q(name)}` }, { sql: `CREATE VIEW ${q(name)}${viewParts.cols} AS ${sql}` }]);
       } else {
         // 保存する前に実行できるか確かめる
-        await db.query(`SELECT * FROM (${sql}) LIMIT 0`);
+        await db.readQuery(`SELECT * FROM (${sql}\n) LIMIT 0`);
         state.queries.find((x) => x.name === name).sql = sql;
         saveQueries();
       }
@@ -1784,6 +1786,7 @@ async function saveAsView(queryName, sql) {
   const name = await ask($('sheet-head'), { title: tr('ビューの名前'), value: uniqueName(queryName, objNames()), okLabel: tr('作成'), validate: (v) => !v ? tr('名前を入力してください') : objNames().includes(v) ? tr('「{0}」は既にあります', [v]) : null });
   if (!name) return;
   try {
+    await db.checkQuery(sql); // 「; DELETE …」を後ろに続けられないように
     await db.exec(`CREATE VIEW ${q(name)} AS ${sql}`);
     // 同名ならクエリをビューに置き換える。別名なら元のクエリを残すか尋ねる
     if (name === queryName || await confirmDialog({ title: tr('ビューを作成しました'), body: tr('元のクエリ「{0}」は削除しますか？', [queryName]), okLabel: tr('削除する') })) {
