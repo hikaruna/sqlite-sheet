@@ -2,6 +2,13 @@
 // {0} {1} … は差し込む値。単数・複数は p[0] が 1 かどうかで分ける
 const one = (p) => Number(p[0]) === 1;
 export default {
+  "列の幅を変更…": "Resize column…",
+  "行の高さを変更…": "Resize row…",
+  "数値で指定…": "Enter a size…",
+  "データに合わせる": "Fit to data",
+  "列の幅（px）": "Column width (px)",
+  "行の高さ（px）": "Row height (px)",
+  "正の数を入力してください": "Enter a positive number",
   "読み込めない URL です：{0}": (p) => `Cannot load this URL: ${p[0]}`,
   "URL のファイルを取り込もうとしています。": "You are about to import a file from a URL.",
   "今あるものを開く": "Open the existing one",

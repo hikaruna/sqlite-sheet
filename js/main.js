@@ -2180,6 +2180,7 @@ function headerMenu(c, anchor) {
       { label: tr('コピー'), icon: '⧉', kbd: `${MOD}C`, action: () => state.grid.copy() },
       '-',
       { header: tr('テキストの折り返し') }, ...wrapItems(cols),
+      '-', sizeItem('col', cols, anchor),
     ];
     if (isTable) items.push('-',
       { label: tr('{0} 列を保護…', [cols.length]), icon: '🔒', action: () => protect({ kind: 'cols', cols: names }, at) },
@@ -2196,6 +2197,7 @@ function headerMenu(c, anchor) {
     '-',
     // 列ごと選んでいてこの列がその中にあれば、選んだ列すべて（列幅と同じ）
     { header: tr('テキストの折り返し') }, ...wrapItems(state.grid.resizeCols(c)),
+    '-', sizeItem('col', [c], anchor),
   ];
   if (isTable) {
     items.push('-',
@@ -2211,6 +2213,34 @@ function headerMenu(c, anchor) {
     items.push('-', { label: tr('列を削除…'), icon: '🗑', danger: true, disabled: state.model.columns.length <= 1, action: () => dropColumn(col.name) });
   }
   menu(anchor, items.filter(Boolean));
+}
+
+/**
+ * 「列の幅を変更…」「行の高さを変更…」。選ぶと同じ場所にサブメニュー（数値で指定・データに合わせる）を出す。
+ * kind が 'col' なら targets は列の番号の並び、'row' なら [基準の行]（行ごと選んでいればその範囲が対象）
+ */
+function sizeItem(kind, targets, anchor) {
+  const g = state.grid, col = kind === 'col';
+  const at = anchor instanceof Element ? anchor : (anchor?.x != null ? anchor : $('sheet-head'));
+  const askAt = anchor instanceof Element ? anchor : $('sheet-head');
+  const byNumber = async () => {
+    const cur = Math.round(col ? g.colW(targets[0]) : g.rowH(targets[0]));
+    const v = await ask(askAt, {
+      title: col ? tr('列の幅（px）') : tr('行の高さ（px）'), value: String(cur),
+      validate: (s) => /^\d+(\.\d+)?$/.test(s) && +s > 0 ? null : tr('正の数を入力してください'),
+    });
+    if (v == null) return;
+    if (col) g.setColsWidth(targets, +v); else await g.setRowsHeight(targets[0], +v);
+  };
+  const fit = () => (col ? g.autoFit(targets[0]) : g.autoFitRows(targets[0]));
+  return {
+    label: col ? tr('列の幅を変更…') : tr('行の高さを変更…'), icon: col ? '↔' : '↕',
+    // menu はクリックで閉じてから action を呼ぶので、次の描画で開き直す
+    action: () => setTimeout(() => menu(at, [
+      { label: tr('数値で指定…'), icon: '#', action: byNumber },
+      { label: tr('データに合わせる'), icon: '⤢', action: fit },
+    ]), 0),
+  };
 }
 
 async function renameColumn(name, anchor) {
@@ -2410,7 +2440,7 @@ async function cellMenu(pos, range) {
   if (g.rowSelect && !g.colSelect) {
     const rows = Math.min(range.r1, g.rowCount - 1) - range.r0 + 1;
     const many = rows > 1;
-    const items = [many ? { header: tr('{0} 行', [rows]) } : null, copy];
+    const items = [many ? { header: tr('{0} 行', [rows]) } : null, copy, rows >= 1 ? sizeItem('row', [range.r0], pos) : null];
     if (isTable) items.push('-',
       { label: many ? tr('{0} 行を複製', [rows]) : tr('行を複製'), icon: '⧉', disabled: rows < 1, action: async () => { try { await state.source.duplicateRows(await g.rowsBetween(range.r0, range.r0 + rows - 1)); await g.reload(); } catch (e) { toast(friendlyError(e.message), 'error'); } } },
       '-',

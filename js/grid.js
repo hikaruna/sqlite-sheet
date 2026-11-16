@@ -365,6 +365,15 @@ export class Grid {
     this.emitWidths(befores);
   }
 
+  /** 列 cols の幅を w にする（メニューの「数値で指定」）。元に戻すに1回分として積む */
+  setColsWidth(cols, w) {
+    w = Math.max(MIN_W, Math.round(w));
+    const befores = Object.fromEntries(cols.map((i) => [this.cols[i].name, this.widths[this.cols[i].name]]));
+    for (const i of cols) this.widths[this.cols[i].name] = w;
+    this.saveWidths(); this.renderHeader(); this.render(); this.afterWidthChange();
+    this.emitWidths(befores);
+  }
+
   /** 列 c の中身がすべて収まる幅 */
   fitWidth(c) {
     const col = this.cols[c];
@@ -507,6 +516,14 @@ export class Grid {
     const text = this.measureRows(rows);
     const fits = await Promise.all(rows.map(async (row, i) => Math.max(await fitHeight(row), text[i] ?? RH)));
     await this.commitRowHeights(a, b, (i) => fits[i - a]);
+  }
+
+  /** 行 r（行ごと選んでいればその範囲）の高さを h にする（メニューの「数値で指定」） */
+  async setRowsHeight(r, h) {
+    const [a, b] = this.resizeRows(r);
+    if (b - a + 1 > MAX_RESIZE_ROWS) { this.hooks.onError?.(new Error(tr('一度に高さを変えられるのは {0} 行までです', [MAX_RESIZE_ROWS]))); return; }
+    h = Math.max(MIN_H, Math.round(h));
+    await this.commitRowHeights(a, b, () => h);
   }
 
   /** 行 a〜b の高さを hOf(何行目) に決めて保存し、元に戻すに積む。自動の高さと同じなら、決めた高さを外して自動に戻す */
