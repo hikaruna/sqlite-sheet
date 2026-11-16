@@ -48,6 +48,7 @@ export const db = {
   open: (name) => call('open', name),
   /** 端末のファイル（FileSystemFileHandle）をメモリに読み込んで開く（読み直しにも使う） */
   openFile: (name, handle) => call('openFile', name, handle),
+  openBytes: (name, bytes) => call('openBytes', name, bytes),
   close: () => call('close'),
   /** ファイルへ保存する。ほかのアプリで変更されていれば force でない限り 'CONFLICT' で失敗する */
   save: (force = false) => call('save', force),

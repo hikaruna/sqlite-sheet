@@ -3,7 +3,7 @@ import sqlite3InitModule from 'https://cdn.jsdelivr.net/npm/@sqlite.org/sqlite-w
 import { addRegexpFunctions } from './regexp.js';
 
 let sqlite3, pool, db = null, currentName = null;
-// 開いている DB の種類。'file' は端末のファイルをメモリに読み込んだもので、保存（save）したときだけファイルへ書く
+// 開いている DB の種類。'file' はメモリに読み込んだもの（手動保存）。handle があれば保存（save）したときにそのファイルへ書く
 let kind = null, handle = null, dirty = false;
 let stamp = null; // 最後に読み書きしたときのファイルの { lastModified, size }。ほかのアプリによる変更を見つけるため
 
@@ -54,7 +54,7 @@ const stampOf = (f) => ({ lastModified: f.lastModified, size: f.size });
 
 /** 開いた（保存した）後に、ファイルがほかのアプリで変更されたか */
 async function checkFile() {
-  if (kind !== 'file') return { changed: false, dirty: false };
+  if (kind !== 'file' || !handle) return { changed: false, dirty };
   const f = await handle.getFile();
   return { changed: f.lastModified !== stamp.lastModified || f.size !== stamp.size, dirty };
 }
@@ -62,7 +62,7 @@ async function checkFile() {
 // ファイルへ書き込む。ほかのアプリで変更されていたら、force でない限り書かずに CONFLICT を返す。
 // createWritable は一時ファイルに書いて close で差し替えるので、途中で落ちても元のファイルは壊れない
 async function save(force = false) {
-  if (kind !== 'file') throw new Error('ファイルを開いていません');
+  if (kind !== 'file' || !handle) throw new Error('ファイルを開いていません');
   // 確定していない変更をファイルに書かないように
   if (inTx()) throw new Error(TX_BLOCK);
   if (!force && (await checkFile()).changed) throw new Error('CONFLICT');
@@ -103,7 +103,13 @@ async function open(name) {
 // 端末のファイルを開く（中身をメモリに読み込む。読み直しにも使う）
 async function openFile(name, h) {
   const f = await h.getFile();
-  const bytes = new Uint8Array(await f.arrayBuffer());
+  await openBytes(name, new Uint8Array(await f.arrayBuffer()));
+  handle = h; stamp = stampOf(f);
+  return true;
+}
+
+// SQLite ファイルの中身をメモリに読み込んで開く（URL から読んだもの。保存先は持たない）
+async function openBytes(name, bytes) {
   if (bytes.length && new TextDecoder().decode(bytes.subarray(0, 15)) !== 'SQLite format 3') {
     throw new Error('SQLite のデータベースファイルではありません');
   }
@@ -118,7 +124,7 @@ async function openFile(name, h) {
     }
     setup(d);
   } catch (e) { d.close(); throw e; }
-  db = d; currentName = name; kind = 'file'; handle = h; stamp = stampOf(f);
+  db = d; currentName = name; kind = 'file'; handle = null; stamp = null;
   return true;
 }
 
@@ -573,7 +579,7 @@ async function copy(from, to) {
   return true;
 }
 
-const api = { init, list, open, openFile, close, save, checkFile, begin, commit, rollback, run, exec, batch, batchTracked, applyChangeset, consoleRun, rebuild, create, exportDb, importDb, remove, rename, copy };
+const api = { init, list, open, openFile, openBytes, close, save, checkFile, begin, commit, rollback, run, exec, batch, batchTracked, applyChangeset, consoleRun, rebuild, create, exportDb, importDb, remove, rename, copy };
 
 // 呼び出しは1つずつ順に処理する（ファイルの読み書きを待つ間に、次の呼び出しが割り込まないように）
 let queue = Promise.resolve();

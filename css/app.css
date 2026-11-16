@@ -150,6 +150,7 @@ select.input { padding-right: 4px; }
 .save-state:disabled { cursor: default; }
 .save-state.dirty { border-color: var(--accent-line); background: var(--accent-soft); color: var(--accent); font-weight: 600; cursor: pointer; }
 .save-state.dirty:hover { filter: brightness(0.97); }
+.save-state { display: inline-flex; align-items: center; gap: 4px; }
 .caret { color: var(--text-3); font-size: 10px; }
 .db-icon { color: var(--accent); font-size: 12px; }
 /* パンくず：DB 名 › シート */
@@ -763,8 +764,11 @@ body.dropping::after {
   /* 上部バーを画面幅に収める */
   .topbar { gap: 4px; padding: 0 6px; }
   .home-btn { width: 28px; }
-  .db-name { max-width: 30vw; }
   .db-name { max-width: 28vw; }
+  /* 手動保存の状態：変更がなければ ✓ だけ。未保存なら押しやすい大きさで「● 未保存」 */
+  .save-state { padding: 0 6px; }
+  .save-state:not(.dirty) .ss-text { display: none; }
+  .save-state.dirty { height: 32px; }
   .crumb-name { max-width: 28vw; }
   /* 縦並び。コンソールが低くても結果・実行履歴の欄が潰れないよう、入力欄は高さの 4 割まで */
   .console { min-height: 240px; }
