@@ -73,7 +73,15 @@ export const narrow = matchMedia('(max-width: 760px)');
 if (window.visualViewport) {
   const vv = visualViewport;
   const root = document.documentElement.style;
+  // キーボードが出ているか（html.kb-open）。Android は innerHeight ごと縮むので、同じ横幅で見た一番高い高さと比べる
+  let baseW = 0, baseH = 0;
+  const syncKb = () => {
+    if (innerWidth !== baseW) { baseW = innerWidth; baseH = 0; }
+    baseH = Math.max(baseH, innerHeight, vv.height);
+    document.documentElement.classList.toggle('kb-open', vv.scale <= 1.01 && baseH - vv.height > 150);
+  };
   const sync = () => {
+    syncKb();
     // ページが拡大されているとき（iOS がアプリへ戻ったときなどに勝手に拡大する）は、見える範囲が狭いのは
     // キーボードのせいではない。それで画面全体を縮めると表示がおかしくなるので、ふつうの高さに戻す
     if (vv.scale > 1.01) { root.removeProperty('--vvh'); root.removeProperty('--kb'); return; }
