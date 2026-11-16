@@ -71,11 +71,19 @@ export const narrow = matchMedia('(max-width: 760px)');
 // ソフトキーボードが出ると見える範囲が狭まる。その高さを CSS に渡し、画面全体と下から出すシートを見える範囲に収める
 if (window.visualViewport) {
   const vv = visualViewport;
+  const root = document.documentElement.style;
   const sync = () => {
-    document.documentElement.style.setProperty('--vvh', vv.height + 'px');
-    document.documentElement.style.setProperty('--kb', Math.max(0, innerHeight - vv.height - vv.offsetTop) + 'px');
+    // ページが拡大されているとき（iOS がアプリへ戻ったときなどに勝手に拡大する）は、見える範囲が狭いのは
+    // キーボードのせいではない。それで画面全体を縮めると表示がおかしくなるので、ふつうの高さに戻す
+    if (vv.scale > 1.01) { root.removeProperty('--vvh'); root.removeProperty('--kb'); return; }
+    root.setProperty('--vvh', vv.height + 'px');
+    root.setProperty('--kb', Math.max(0, innerHeight - vv.height - vv.offsetTop) + 'px');
   };
   vv.addEventListener('resize', sync); vv.addEventListener('scroll', sync); sync();
+  // アプリへ戻った直後は見える範囲の値が落ち着くまで少しかかるので、少し待ってからも取り直す
+  const resync = () => { sync(); requestAnimationFrame(sync); setTimeout(sync, 300); };
+  addEventListener('pageshow', resync);
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) resync(); });
 }
 
 /** anchor（要素 or {x,y}）の近くに content を出す */
