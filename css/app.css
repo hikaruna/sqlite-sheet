@@ -275,7 +275,8 @@ body.at-home .toolbar, body.at-home .fxbar { display: none; }
 .dirty-dot { color: var(--warn); font-size: 10px; }
 
 /* ---------- グリッド ---------- */
-.grid-scroll { position: absolute; inset: 0; overflow: auto; outline: none; }
+/* 端まで来たときに表が跳ね返らない（iOS のバウンド・Android の引っ張り表示をやめる） */
+.grid-scroll { position: absolute; inset: 0; overflow: auto; outline: none; overscroll-behavior: none; }
 .grid-header {
   position: sticky; top: 0; z-index: 3; display: flex; height: 34px;
   background: var(--surface-2); border-bottom: 1px solid var(--line-strong);
