@@ -807,8 +807,6 @@ body.dropping::after {
   .chip { height: 30px; }
   .chip-x { padding: 0 6px; font-size: 16px; }
   .bottombar { height: 44px; }
-  /* クエリ・ビューの定義を入力している間は、狭い画面をクエリ欄に使う（シートタブは隠す） */
-  body.query-typing .bottombar { display: none; }
   .tab-add { width: 44px; }
   /* iOS は 16px 未満の入力欄にフォーカスすると画面を拡大するので、入力欄は 16px */
   input, textarea, select, .grid-sink { font-size: 16px; }
