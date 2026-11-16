@@ -231,8 +231,9 @@ body.at-home .toolbar, body.at-home .fxbar { display: none; }
 
 /* ---------- 作業領域 ---------- */
 .workspace { flex: 1; display: flex; min-height: 0; }
-.sheet { flex: 1; display: flex; flex-direction: column; min-width: 0; background: var(--surface); }
-.sheet-head { flex: none; }
+.sheet { flex: 1; display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; background: var(--surface); }
+/* キーボードで画面が縮んでも、クエリ欄が下のタブバーへはみ出さず、この中でスクロールする */
+.sheet-head { flex: 0 1 auto; min-height: 0; overflow: auto; }
 .grid-host { flex: 1; position: relative; min-height: 0; }
 
 .chips {
@@ -801,6 +802,8 @@ body.dropping::after {
   .chip { height: 30px; }
   .chip-x { padding: 0 6px; font-size: 16px; }
   .bottombar { height: 44px; }
+  /* クエリ・ビューの定義を入力している間は、狭い画面をクエリ欄に使う（シートタブは隠す） */
+  body.query-typing .bottombar { display: none; }
   .tab-add { width: 44px; }
   /* iOS は 16px 未満の入力欄にフォーカスすると画面を拡大するので、入力欄は 16px */
   input, textarea, select, .grid-sink { font-size: 16px; }
