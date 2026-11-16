@@ -2171,16 +2171,18 @@ function headerMenu(c, anchor) {
   const col = state.source.columns[c];
   const isTable = state.key[0] === 't';
   const at = anchor instanceof Element ? anchor : $('sheet-head');
+  // 「セル」の欄はこの列のセルが対象なので、列ごと選んでいる範囲の外なら、この列を選んでから（Excel と同じ）
+  const sel = state.grid.range();
+  if (!state.grid.colSelect || c < sel.c0 || c > sel.c1) state.grid.selectCol(c);
   // 列ごと複数選んでいて c がその中にあれば、選んだ列すべてが対象（複数列ならではの項目だけ）
   const cols = state.grid.resizeCols(c);
   if (cols.length > 1) {
     const names = cols.map((i) => state.source.columns[i].name);
     const items = [
       { header: tr('{0} 列', [cols.length]) },
-      { label: tr('コピー'), icon: '⧉', kbd: `${MOD}C`, action: () => state.grid.copy() },
-      '-',
       { header: tr('テキストの折り返し') }, ...wrapItems(cols),
       '-', sizeItem('col', cols, anchor),
+      ...cellSection('col'),
     ];
     if (isTable) items.push('-',
       { label: tr('{0} 列を保護…', [cols.length]), icon: '🔒', action: () => protect({ kind: 'cols', cols: names }, at) },
@@ -2198,6 +2200,7 @@ function headerMenu(c, anchor) {
     // 列ごと選んでいてこの列がその中にあれば、選んだ列すべて（列幅と同じ）
     { header: tr('テキストの折り返し') }, ...wrapItems(state.grid.resizeCols(c)),
     '-', sizeItem('col', [c], anchor),
+    ...cellSection('col'),
   ];
   if (isTable) {
     items.push('-',
@@ -2425,6 +2428,40 @@ async function pasteFromMenu(g) {
 }
 
 /**
+ * 選択範囲のセルへの書き込み（貼り付け・値のクリア・下へコピー）。テーブルのときだけ。
+ * scope が 'col' / 'row' なら、列・行のメニューの「セル」の欄として出す（ラベルで削除と区別する）
+ */
+function rangeItems(scope) {
+  if (state.key[0] !== 't') return [];
+  const g = state.grid;
+  const { r0, r1 } = g.range();
+  const n = Math.max(0, Math.min(r1, g.rowCount - 1) - r0 + 1);
+  const nc = g.range().c1 - g.range().c0 + 1;
+  const clearLabel = scope === 'col' ? (nc > 1 ? tr('{0} 列の値をクリア（NULL）', [nc]) : tr('この列の値をクリア（NULL）'))
+    : scope === 'row' ? (n > 1 ? tr('{0} 行の値をクリア（NULL）', [n]) : tr('この行の値をクリア（NULL）')) : tr('値をクリア（NULL）');
+  const clear = async () => {
+    if (n >= 1000 && !await confirmDialog({ title: tr('{0} 行の値を NULL にしますか？', [n]), body: tr('{0}Z で元に戻せます。', [MOD]), okLabel: tr('クリア'), danger: true })) return;
+    g.clearSelection();
+  };
+  const items = [
+    { label: tr('貼り付け'), icon: '📋', kbd: `${MOD}V`, action: () => pasteFromMenu(g) },
+    { label: clearLabel, icon: '⌫', kbd: 'Delete', action: clear },
+  ];
+  const { c0, c1 } = g.range();
+  // 1つのセルでは出さない。1行だけの範囲は出すが押せない（行のメニューでは意味がないので出さない）
+  if (scope !== 'row' && !(r0 === r1 && c0 === c1)) items.push({ label: tr('下へコピー'), icon: '⇣', kbd: `${MOD}D`, disabled: r1 <= r0, action: () => g.fillDown() });
+  return items;
+}
+
+/** 列・行のメニューに足す「セル」の欄（コピーはビュー・クエリでも出す） */
+function cellSection(scope) {
+  const g = state.grid;
+  return ['-', { header: tr('セル') },
+    { label: tr('コピー'), icon: '⧉', kbd: `${MOD}C`, action: () => g.copy() },
+    ...rangeItems(scope)];
+}
+
+/**
  * 表の中の右クリック・長押しのメニュー。選び方ごとに、その対象に関することだけを出す
  * - 列ごと選んでいる → 列のメニュー（headerMenu）
  * - 行ごと選んでいる → 行のメニュー（1行 / n 行）
@@ -2440,13 +2477,14 @@ async function cellMenu(pos, range) {
   if (g.rowSelect && !g.colSelect) {
     const rows = Math.min(range.r1, g.rowCount - 1) - range.r0 + 1;
     const many = rows > 1;
-    const items = [many ? { header: tr('{0} 行', [rows]) } : null, copy, rows >= 1 ? sizeItem('row', [range.r0], pos) : null];
+    const items = [many ? { header: tr('{0} 行', [rows]) } : null, rows >= 1 ? sizeItem('row', [range.r0], pos) : null];
     if (isTable) items.push('-',
       { label: many ? tr('{0} 行を複製', [rows]) : tr('行を複製'), icon: '⧉', disabled: rows < 1, action: async () => { try { await state.source.duplicateRows(await g.rowsBetween(range.r0, range.r0 + rows - 1)); await g.reload(); } catch (e) { toast(friendlyError(e.message), 'error'); } } },
       '-',
       { label: many ? tr('{0} 行を保護…', [rows]) : tr('行を保護…'), icon: '🔒', disabled: rows < 1, action: () => protectSelection(pos) },
-      ...unprotectHere(),
-      '-',
+      ...unprotectHere());
+    items.push(...cellSection('row'));
+    if (isTable) items.push('-',
       { label: many ? tr('{0} 行を削除', [rows]) : tr('行を削除'), icon: '🗑', kbd: `${MOD}-`, danger: true, disabled: rows < 1, action: () => deleteSelectedRows() });
     return menu(pos, items.filter(Boolean));
   }
@@ -2465,10 +2503,7 @@ async function cellMenu(pos, range) {
     if (blobItems.length) items.unshift(...blobItems, '-');
   }
   if (isTable) {
-    items.push(
-      { label: tr('貼り付け'), icon: '📋', kbd: `${MOD}V`, action: () => pasteFromMenu(g) },
-      { label: tr('値をクリア（NULL）'), icon: '⌫', kbd: 'Delete', action: () => g.clearSelection() });
-    if (!single) items.push({ label: tr('下へコピー'), icon: '⇣', kbd: `${MOD}D`, disabled: range.r1 <= range.r0, action: () => g.fillDown() });
+    items.push(...rangeItems());
     if (r !== g.newRowIndex) items.push('-', { label: single ? tr('セルを保護…') : tr('範囲を保護…'), icon: '🔒', action: () => protectSelection(pos) }, ...unprotectHere());
     const col = state.source.columns[c];
     const v = g.rowAt(r)?.values[c];
