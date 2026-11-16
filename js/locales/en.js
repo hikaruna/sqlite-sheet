@@ -48,6 +48,8 @@ export default {
   "コマンド（{0}K）": "Commands ({0}K)",
   "式を入力（= で始めると SQL の式として計算）": "Enter an expression (start with = to evaluate it as SQL)",
   "シートを追加": "Add sheet",
+  "前のシートへスクロール": "Scroll to previous sheets",
+  "次のシートへスクロール": "Scroll to next sheets",
   "＋": "＋",
   "データベースは、変更のたびに自動で保存されています": "Databases are saved automatically after every change",
   "元に戻す: {0}（{1}Z）": "Undo: {0} ({1}Z)",

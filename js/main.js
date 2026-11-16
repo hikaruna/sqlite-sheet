@@ -242,12 +242,17 @@ function buildChrome() {
       el('aside#panel.panel', { hidden: true })),
     el('section#console.console', { hidden: true }),
     el('footer.bottombar',
-      el('div#tabs.tabs'),
+      el('div#tabs.tabs', { on: { wheel: tabsWheel, scroll: updateTabNav } }),
+      el('span#tab-nav.tab-nav', { hidden: true },
+        el('button#tab-prev.tab-nav-btn', { title: tr('前のシートへスクロール'), on: { click: () => scrollTabs(-1) } }, '‹'),
+        el('button#tab-next.tab-nav-btn', { title: tr('次のシートへスクロール'), on: { click: () => scrollTabs(1) } }, '›')),
       el('button.tab-add', { title: tr('シートを追加'), on: { click: (e) => addSheetMenu(e.currentTarget) } }, tr('＋')),
       el('span.grow'),
       el('span#status.status'),
       el('span#version.version')),
   );
+  // タブ列の幅が変わったら（窓の大きさ・‹ › の出し入れ）ボタンの状態を合わせ直す
+  new ResizeObserver(() => updateTabNav()).observe($('tabs'));
   sqlConsole = new SqlConsole($('console'), {
     onSchemaMaybeChanged: async () => { undo.clear(); await refreshObjects(); await showSheet(state.key, { keepView: true }); },
     onDataChanged: async () => { undo.clear(); await state.grid?.reload(); },
@@ -1138,6 +1143,29 @@ const tableNames = () => state.objects.filter((o) => o.type === 'table').map((o)
 const KIND_ICON = { t: '▦', v: '◫', q: '⌕' };
 const KIND_NAME = { t: tr('テーブル'), v: tr('ビュー'), q: tr('クエリ') };
 
+// PC ではシートタブをホイールと ‹ › ボタンで左右にスクロールできるようにする（スマホは指でスライド）
+function tabsWheel(e) {
+  const tabs = e.currentTarget;
+  if (tabs.scrollWidth <= tabs.clientWidth) return;
+  const d = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY;
+  if (!d) return;
+  e.preventDefault();
+  tabs.scrollLeft += e.deltaMode === 1 ? d * 40 : d;
+  updateTabNav();
+}
+function scrollTabs(dir) {
+  const tabs = $('tabs');
+  tabs.scrollBy({ left: dir * Math.max(80, tabs.clientWidth * 0.8), behavior: 'smooth' });
+}
+function updateTabNav() {
+  const tabs = $('tabs'), nav = $('tab-nav');
+  if (!tabs || !nav) return;
+  const max = tabs.scrollWidth - tabs.clientWidth;
+  nav.hidden = max <= 1;
+  $('tab-prev').disabled = tabs.scrollLeft <= 0;
+  $('tab-next').disabled = tabs.scrollLeft >= max - 1;
+}
+
 function renderTabs() {
   const tabs = $('tabs');
   tabs.replaceChildren(...allKeys().map((key) => {
@@ -1158,6 +1186,7 @@ function renderTabs() {
     }, el('span.tab-icon', KIND_ICON[kind]), name, kind === 't' && state.lockedSheets?.has(name) ? el('span.tab-lock', { title: tr('シート全体が保護されています') }, '🔒') : null);
   }));
   tabs.querySelector('.tab.on')?.scrollIntoView({ inline: 'nearest', block: 'nearest' });
+  updateTabNav();
   // 上部のパンくず：DB 名 › 今のシート
   const crumb = $('sheet-crumb'), has = !!state.key;
   crumb.hidden = $('crumb-sep').hidden = !has;
