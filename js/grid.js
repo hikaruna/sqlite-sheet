@@ -1308,10 +1308,13 @@ export class Grid {
     const v = this.currentValue();
     // 新しい行の下書きに入れた BLOB は、打てばそのまま文字に置き換えられる
     if (v instanceof Uint8Array && r !== this.newRowIndex) { this.hooks.onBlobEdit?.(r, c); this.sink.value = ''; return false; }
-    const start = this.formAt(r, c);
-    this.editing = { mode, r, c, start };
+    // NULL のセルは空から始める。空のまま確定したら NULL のまま、一度でも打ってから空にしたら空文字列
+    const isNull = r !== this.newRowIndex && v === null;
+    const start = isNull ? '' : this.formAt(r, c);
     if (initial !== undefined) { /* 入力済みの文字をそのまま使う */ } else this.sink.value = start;
-    this.sink.placeholder = r === this.newRowIndex && v === undefined ? this.placeholderFor(c) : '';
+    this.editing = { mode, r, c, start, isNull, touched: this.sink.value !== '' };
+    this.sink.placeholder = r === this.newRowIndex && v === undefined ? this.placeholderFor(c)
+      : r !== this.newRowIndex && (this.cols[c].emptyIsNull || (isNull && !this.editing.touched)) ? 'NULL' : '';
     this.placeSink();
     if (mode === 'edit') { const n = this.sink.value.length; this.sink.setSelectionRange(n, n); }
     this.hooks.onEditState?.(true, this.sink.value);
@@ -1322,6 +1325,11 @@ export class Grid {
     if (!this.editing) {
       const typed = this.sink.value;
       if (!this.beginEdit('enter', typed)) return;
+    }
+    if (this.sink.value !== '' && !this.editing.touched) {
+      this.editing.touched = true;
+      // 空で確定すると空文字列になるので「NULL」の表示を消す（空なら NULL になる列は出したまま）
+      if (this.editing.isNull && !this.cols[this.editing.c]?.emptyIsNull) this.sink.placeholder = '';
     }
     this.placeSink();
     this.hooks.onEditState?.(true, this.sink.value);
@@ -1346,15 +1354,15 @@ export class Grid {
 
   async commitEdit({ move = 'down' } = {}) {
     if (!this.editing) return;
-    const { r, c, start } = this.editing;
+    const { r, c, start, isNull, touched } = this.editing;
     const text = this.sink.value;
     this.editing = null;
     this.sink.value = '';
     this.sink.placeholder = '';
     this.placeSink();
     this.hooks.onEditState?.(false);
-    // フォームが開いたときと同じなら何もしない
-    const unchanged = text === start;
+    // フォームが開いたときと同じなら何もしない（NULL のセルで打ってから空にしたときは空文字列を入れる）
+    const unchanged = text === start && !(isNull && touched);
     if (r === this.newRowIndex) {
       // 新しい行は下書きにためるだけ。Enter/Tab は右へ進み、最後の列で保存して次の新しい行へ
       // 下書きはフォームの文字列のまま持つ。空は未入力
@@ -1374,7 +1382,10 @@ export class Grid {
     // 先に移動してから書き込む（書き込み待ちの間の入力を取りこぼさない）。失敗したら write がセルに戻す
     // 新しい行で Enter → 確定後も次の新しい行へ。Tab など横移動 → 追加された行に留まって続けて入力
     this.afterInsert = move === 'down' ? 'newrow' : 'stay';
-    const pending = !unchanged ? this.write([{ r, c, value: form(text) }]) : null;
+    // STRICT の数値の列を空で確定したら NULL（元から NULL なら変更なし）
+    const toNull = text === '' && this.cols[c]?.emptyIsNull;
+    const skip = toNull ? isNull : unchanged;
+    const pending = !skip ? this.write([{ r, c, value: toNull ? null : form(text) }]) : null;
     // 最後の行の最後の列で Tab：入力の要らない表なら次の行を作る（Excel のテーブルと同じ）
     if (move === 'right' && r === this.rowCount - 1 && c === this.cols.length - 1 && this.canInsertEmpty) {
       if (pending) await pending;
@@ -1444,7 +1455,8 @@ export class Grid {
       }
       if (reopened) {
         this.sink.value = ch.value.form;
-        this.editing = { mode: 'edit', r: ch.r, c: ch.c, start: this.formAt(ch.r, ch.c) };
+        const wasNull = ch.r < this.rowCount && this.rowAt(ch.r)?.values[ch.c] === null;
+        this.editing = { mode: 'edit', r: ch.r, c: ch.c, start: wasNull ? '' : this.formAt(ch.r, ch.c), isNull: wasNull, touched: true };
         this.placeSink();
         this.sink.classList.add('invalid');
         this.hooks.onEditState?.(true, ch.value.form);
