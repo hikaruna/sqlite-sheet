@@ -583,4 +583,7 @@ export default {
   "変更の記録の読み取り": "reading the change log",
   "変更の記録の反転": "inverting the change log",
   "データが変わっていて元に戻せません": "The data has changed and can't be undone",
+  "やめる": "Discard",
+  "型のある": "typed",
+  "「{0}」は {1} の列です。合う値を入れてください": (p) => `"${p[0]}" is a ${p[1]} column. Enter a matching value.`,
 };

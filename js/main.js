@@ -1,7 +1,7 @@
 // アプリ本体：DB・シートの管理、画面の組み立て
 import { t as tr, lang, LANGS, setLang, locale } from './i18n.js';
 import { db, q } from './db-client.js';
-import { el, toast, menu, popover, closePopover, ask, confirmDialog, choiceDialog, modal, pickFile, download, exportFile, fmtBytes, isTouch, modKey, isMac, icon, appIcon } from './ui.js';
+import { el, toast, menu, popover, closePopover, ask, confirmDialog, choiceDialog, modal, pickFile, download, exportFile, fmtBytes, isTouch, modKey, isMac, icon, appIcon, phone } from './ui.js';
 import { listObjects, readTable, createTableSql, migrationSql, constantDefault, TYPES, affinity } from './schema.js';
 import { Grid } from './grid.js';
 import { sniff, asText, hexDump } from './blob.js';
@@ -160,7 +160,10 @@ function buildChrome() {
   $('app').replaceChildren(
     el('header.topbar',
       // 左上：アイコン＝ホーム（DB の一覧）、DB 名＝その場で名前を変更、ファイル＝DB の操作メニュー
-      el('button#home-btn.home-btn', { title: tr('ホーム（データベースの一覧）'), on: { click: goHome } }, appIcon()),
+      el('button#home-btn.home-btn', { dataset: { keepInput: '' }, title: tr('ホーム（データベースの一覧）'), on: { click: onHomeBtn } }, appIcon(),
+        // スマホのシート画面だけ：ふだんは ‹（ホームへ）、何か選んでいる間は ✓（選択を解除）
+        // 確定できなかった入力があるときは ✕（入力をやめて選択を解除）
+        el('span.home-back', '‹'), el('span.home-done', '✓'), el('span.home-cancel', '✕')),
       // ホームでだけ出す：アプリ名と、DB を名前で探して開く検索窓
       el('span.app-title.home-only', tr('SQLiteシート')),
       el('div.db-search.home-only',
@@ -194,6 +197,8 @@ function buildChrome() {
         el('button.menubar-btn', { on: { click: (e) => menu(e.currentTarget, formatItems()) } }, tr('表示形式')),
         el('button.menubar-btn', { on: { click: (e) => menu(e.currentTarget, dataItems()) } }, tr('データ')),
         el('button.menubar-btn', { on: { click: (e) => menu(e.currentTarget, toolItems()) } }, tr('ツール'))),
+      el('button#undo-btn2.tb-btn.phone-only', { title: tr('元に戻す'), disabled: true, on: { click: doUndo } }, icon('undo')),
+      el('button#redo-btn2.tb-btn.phone-only', { title: tr('やり直す'), disabled: true, on: { click: doRedo } }, icon('redo')),
       el('button.icon-btn.menubar-all', { title: tr('メニュー'), 'aria-label': tr('メニュー'), on: { click: (e) => allMenu(e.currentTarget) } }, '☰')),
     // ツールバー（シート画面だけ）：編集の取り消し・表示の操作・パネル
     el('div.toolbar',
@@ -220,8 +225,16 @@ function buildChrome() {
     el('div.fxbar',
       el('span#fx-ref.fx-ref', ''),
       // 式の入口：押すと列・関数・定数を選んで =式 を入れられる（スプレッドシートの「関数を挿入」）
-      el('button#fx-btn.fx-btn', { title: tr('式を入力（= で始めると SQL の式として計算）'), on: { mousedown: (e) => e.preventDefault(), click: (e) => exprPicker(e.currentTarget) } }, 'fx'),
-      el('input#fx-input.fx-input', { spellcheck: false, placeholder: '', on: { keydown: onFxKey, focus: (e) => e.target.select() } })),
+      el('button#fx-btn.fx-btn', { dataset: { keepInput: '' }, title: tr('式を入力（= で始めると SQL の式として計算）'), on: { click: (e) => exprPicker(e.currentTarget) } }, 'fx'),
+      el('input#fx-input.fx-input', { spellcheck: false, placeholder: '', autocomplete: 'off', autocorrect: 'off', autocapitalize: 'off', name: 'sqlite-sheet-fx', on: { keydown: onFxKey, input: onFxInput, focus: onFxFocus, blur: onFxBlur, pointerdown: onFxPointerDown } }),
+      // スマホだけ：選んだセルを編集（✎）／編集中は確定（✓）
+      el('button#fx-edit.fx-edit.phone-only', { title: tr('編集'), 'aria-label': tr('編集'), on: { click: phoneEditInFx } }, '✎'),
+      // 確定できなかったときだけ、✓ の代わりに ✕（やめる）。書き直し始めたら ✓ に戻る
+      el('button#fx-cancel.fx-cancel.phone-only', { dataset: { keepInput: '' }, title: tr('やめる'), 'aria-label': tr('やめる'), on: { click: cancelPhoneEdit } }, '✕'),
+      el('button#fx-ok.fx-ok.phone-only', { dataset: { keepInput: '' }, title: tr('確定'), 'aria-label': tr('確定'), on: { click: commitPhoneEdit } }, '✓')),
+    // スマホで編集中だけ：キーボードの上の、式でよく使う記号のキー
+    el('div.sym-row.phone-only', ['=', '+', '-', '/', '*', '.', ',', ';', '(', ')'].map((k) =>
+      el('button.sym-key', { type: 'button', dataset: { keepInput: '' }, on: { click: () => insertSym(k) } }, k))),
     el('main.workspace',
       el('section#sheet.sheet',
         el('div#sheet-head.sheet-head'),
@@ -284,11 +297,12 @@ function onGlobalKey(e) {
 }
 
 function updateUndoButtons() {
-  const u = $('undo-btn'), r = $('redo-btn');
-  if (!u) return;
-  u.disabled = !undo.canUndo(); r.disabled = !undo.canRedo();
-  u.title = undo.canUndo() ? tr('元に戻す: {0}（{1}Z）', [undo.peekUndo(), MOD]) : tr('元に戻す');
-  r.title = undo.canRedo() ? tr('やり直す: {0}（{1}Y）', [undo.peekRedo(), MOD]) : tr('やり直す');
+  for (const [u, r] of [[$('undo-btn'), $('redo-btn')], [$('undo-btn2'), $('redo-btn2')]]) {
+    if (!u) continue;
+    u.disabled = !undo.canUndo(); r.disabled = !undo.canRedo();
+    u.title = undo.canUndo() ? tr('元に戻す: {0}（{1}Z）', [undo.peekUndo(), MOD]) : tr('元に戻す');
+    r.title = undo.canRedo() ? tr('やり直す: {0}（{1}Y）', [undo.peekRedo(), MOD]) : tr('やり直す');
+  }
 }
 
 async function doUndo() {
@@ -1478,7 +1492,8 @@ async function showSheet(key, { keepView = true } = {}) {
   if (carryDraft && carryDraft.values.length === state.source.columns.length) state.grid.draft = carryDraft;
   await state.grid.reload({ keepSelection: false });
   if (view.pos) state.grid.setPos(view.pos);
-  state.grid.focus();
+  // スマホは開いた直後は何も選ばない（スプレッドシートと同じ）
+  if (phone.matches) await state.grid.deselect(); else state.grid.focus();
   updatePanel();
 }
 
@@ -1705,12 +1720,22 @@ function filterPopover(anchor, colName, index) {
 function gridHooks(kind) {
   const isTable = kind === 't';
   return {
-    onSelect: (s) => updateFx(s),
+    onSelect: (s) => {
+      document.body.classList.toggle('has-sel', !!s);
+      // 数式バーで次のセルを打っている最中（前のセルの保存が後から終わったとき）は、打った文字を上書きしない
+      if (state.grid?.editing && document.activeElement === $('fx-input')) return;
+      updateFx(s ?? undefined);
+    },
     onEditState: (editing, text) => {
+      document.body.classList.toggle('cell-editing', editing);
+      // 書き直し始めたら（セルで打った・記号キーを押した）、✕ を ✓ に戻す
+      clearEditError();
       const fx = $('fx-input');
       if (editing) { fx.value = text; fx.placeholder = state.grid.sink.placeholder; } else updateFx();
     },
     onError: (e) => toast(friendlyError(e.message), 'error'),
+    // 1セルの入力を確定できなかった。スマホは数式バーで直す（引き受けたら true。PC はこれまで通りグリッドに任せる）
+    onEditError: showEditError,
     onInfo: (m) => toast(m),
     onUndo: doUndo,
     onRedo: doRedo,
@@ -1851,6 +1876,12 @@ async function exprPicker(anchor) {
     ? el('button.btn.sm.expr-file', { type: 'button', on: { mousedown: (e) => e.preventDefault(), click: () => { closePopover(); loadFileInto(g.cur.r, g.cur.c); } } }, tr('⤒ ファイルから読み込む…（BLOB）'))
     : null;
   const onNew = g && g.cur.r === g.newRowIndex;
+  // スマホ：開く前に打っていた入力欄（数式バーかセル）とカーソル位置を覚えておく。
+  // セルで打っていたなら、検索欄へ移っても確定しない（数式バーとセルは同じ文字なので、位置はどちらのものでも使える）
+  const ae = document.activeElement;
+  const typing = phone.matches && g && (ae === fx || ae === g.sink) ? { input: ae, a: ae.selectionStart, b: ae.selectionEnd } : null;
+  if (typing?.input === g?.sink && g.editing) g.sinkFocusKeep = true;
+  let picked = false;
   const groups = {
     [tr('関数')]: [...fns.filter((n) => FN_HELP[n]), ...fns.filter((n) => !FN_HELP[n])].map((n) => ({
       // スプレッドシートと同じく関数名は大文字で見せる（SQLite は大文字小文字を区別しない）
@@ -1867,14 +1898,18 @@ async function exprPicker(anchor) {
   const help = el('div.expr-help');
   const note = el('div.expr-note', onNew ? tr('新しい行の式では列は使えません。') : tr('選ぶと数式バーに入ります。数式バーで Enter を押すと確定します。'));
   const insert = (it) => {
+    picked = true;
     closePopover();
-    let v = fx.value, a = fx.selectionStart ?? v.length, b = fx.selectionEnd ?? v.length;
+    let v = fx.value, a = typing?.a ?? fx.selectionStart ?? v.length, b = typing?.b ?? fx.selectionEnd ?? v.length;
     // 式でなければ = から始める（全体が選ばれていたら置き換え、そうでなければ今の値は残さない）
     if (!v.startsWith('=')) { v = '='; a = b = 1; }
-    fx.value = v.slice(0, a) + it.insert + v.slice(b);
+    const text = v.slice(0, a) + it.insert + v.slice(b);
     const pos = a + it.insert.length + (it.caret || 0);
+    fx.value = text;
     fx.focus();
     fx.setSelectionRange(pos, pos);
+    // スマホは数式バーの入力をそのままセルの編集に映す（✓・Enter・ほかのタップで確定）
+    if (phone.matches) fx.dispatchEvent(new Event('input', { bubbles: true }));
   };
   const render = () => {
     const s = search.value.trim().toLowerCase();
@@ -1886,7 +1921,7 @@ async function exprPicker(anchor) {
     }, t)));
     list.replaceChildren(...items.map((it, i) => el('button.expr-item', {
       class: i === active ? 'on' : '', type: 'button',
-      on: { mousedown: (e) => { e.preventDefault(); insert(it); }, mouseenter: () => { if (active !== i) { active = i; mark(); } } },
+      on: { mousedown: (e) => e.preventDefault(), click: () => insert(it), mouseenter: () => { if (active !== i) { active = i; mark(); } } },
     }, el('span.mono.expr-label', it.label))));
     if (!items.length) list.append(el('div.expr-empty', tr('見つかりません')));
     mark();
@@ -1902,23 +1937,202 @@ async function exprPicker(anchor) {
   search.addEventListener('keydown', (e) => {
     if (e.key === 'ArrowDown') { e.preventDefault(); active = Math.min(items.length - 1, active + 1); mark(); }
     if (e.key === 'ArrowUp') { e.preventDefault(); active = Math.max(0, active - 1); mark(); }
-    if (e.key === 'Enter' && !e.isComposing && items[active]) { e.preventDefault(); insert(items[active]); }
+    if (isEnter(e) && items[active]) { e.preventDefault(); insert(items[active]); }
   });
   render();
-  popover(anchor, el('div.expr-picker', fileRow, search, tabs, el('div.expr-body', list, help), note), { className: 'expr-pop' });
+  popover(anchor, el('div.expr-picker', fileRow, search, tabs, el('div.expr-body', list, help), note), {
+    className: 'expr-pop',
+    // スマホで何も選ばずに閉じたら、打っていた入力欄に戻る
+    onClose: () => {
+      if (picked || !typing) return;
+      refocus(typing.input);
+      g.sinkFocusKeep = false;
+    },
+  });
   search.focus();
+}
+
+// 確定の Enter か。日本語入力の変換を確定する Enter は除く
+// （iPhone の Safari は変換の確定でも isComposing が false の keydown を送ってくる。そのときの keyCode は 229）
+function isEnter(e) {
+  return e.key === 'Enter' && !e.isComposing && e.keyCode !== 229;
 }
 
 function onFxKey(e) {
   const g = state.grid;
   if (!g) return;
-  if (e.key === 'Enter' && !e.isComposing) {
+  if (isEnter(e)) {
     e.preventDefault();
+    if (phone.matches) { continueInFx(e.target); return; }
     if (!e.target.readOnly) {
       const onNew = g.cur.r === g.newRowIndex;
       g.setCurrent(e.target.value).then(() => { onNew ? g.moveTo(g.cur.r, g.cur.c + 1) : g.moveTo(g.cur.r + 1, g.cur.c); g.focus(); });
     }
-  } else if (e.key === 'Escape') { updateFx(); g.focus(); }
+  } else if (e.key === 'Escape') { if (g.editing) g.cancelEdit(); updateFx(); g.focus(); }
+}
+
+// ======================================================================
+// スマホの入力（狭い画面かつタッチ端末）
+// 選んだセルの値は下の数式バーで打つ。打った文字は入力中としてセルに映り、Enter・✓・ほかのタップで確定する。
+// 確定できなければ ✓ が ✕（やめる）に変わる。iPhone がキーボードを閉じないよう、カーソルの動かし方に気をつけている
+// ======================================================================
+
+// data-keep-input の付いたボタン（✓ ✕ 記号キー fx 左上）は、押しても入力欄から離れたことにしない。
+// iPhone は押した瞬間に入力欄からフォーカスを外す（pointerdown を止めても外す）ので、その離脱を「確定」に数えない
+let keepInputUntil = 0;
+const tappingKeepInput = () => performance.now() < keepInputUntil;
+for (const type of ['pointerdown', 'mousedown']) {
+  document.addEventListener(type, (e) => {
+    if (!e.target.closest?.('[data-keep-input]')) return;
+    e.preventDefault();
+    keepInputUntil = performance.now() + 1000;
+  }, true);
+}
+
+// いま打っている入力欄（最後にフォーカスした数式バーかセル）
+let lastTyping = null;
+document.addEventListener('focusin', (e) => {
+  if (e.target.id === 'fx-input' || e.target.classList?.contains('grid-sink')) lastTyping = e.target;
+}, true);
+const typingIn = () => (lastTyping?.isConnected && lastTyping) || state.grid?.sink;
+
+// 入力欄にカーソルを戻す（タップの中で呼べば、iPhone でもキーボードを閉じない）
+function refocus(input) {
+  if (input && document.activeElement !== input) input.focus({ preventScroll: true });
+}
+
+function caretToEnd(input) {
+  const n = input.value.length;
+  input.setSelectionRange(n, n);
+}
+
+// ---------- 数式バー ----------
+function onFxFocus(e) {
+  // セルの編集から移ってきたときの「確定しない」を戻す
+  if (state.grid) state.grid.sinkFocusKeep = false;
+  // スマホは続きから打てるよう末尾にカーソル。PC は今まで通り全体を選ぶ
+  if (phone.matches) caretToEnd(e.target); else e.target.select();
+}
+
+// セルで編集中に数式バーをタップしても、そこで確定せず数式バーで続ける
+function onFxPointerDown() {
+  const g = state.grid;
+  if (phone.matches && g?.editing && document.activeElement === g.sink) g.sinkFocusKeep = true;
+}
+
+// 打った文字を、入力中のセルにそのまま映す
+function onFxInput(e) {
+  const g = state.grid, fx = e.target;
+  if (!phone.matches || !g || fx.readOnly) return;
+  // 編集を始めると数式バーがセルの元の値に戻されるので、打った文字と位置を先に取っておく
+  const text = fx.value, a = fx.selectionStart, b = fx.selectionEnd;
+  clearEditError();
+  if (!g.editing && !g.beginEdit('edit')) return;
+  if (fx.value !== text) { fx.value = text; fx.setSelectionRange(a, b); }
+  g.sink.value = text;
+  g.placeSink();
+}
+
+// ほかの所へ移ったら確定（入力欄まわりのボタン・fx のメニュー・セルの入力欄へ移るときは除く）
+function onFxBlur() {
+  const g = state.grid;
+  if (!phone.matches || !g) return;
+  setTimeout(() => {
+    const a = document.activeElement, fx = $('fx-input');
+    if (!g.editing || a === fx || a === g.sink || a?.closest?.('.popover') || tappingKeepInput()) return;
+    // 確定できなかった値のままなら、離れただけでもう一度確定しようとしない（同じエラーを繰り返さない）
+    if (hasEditError()) return;
+    g.commitEdit({ move: null });
+  }, 0);
+}
+
+// Enter：確定して下のセルへ移り、数式バーのまま続けて編集する（キーボードを閉じない）。何も打っていなければ下へ移るだけ。
+// 保存を待たずに次の編集を始め（待つ間に iPhone がキーボードを閉じないように）、保存できなければ失敗したセルの編集に戻る
+function continueInFx(fx) {
+  const g = state.grid;
+  clearEditError();
+  if (g.editing) g.commitEdit({ move: 'down' });
+  else g.moveTo(g.cur.r + 1, g.cur.c);
+  if (!g.editing && g.beginEdit('edit')) { fx.value = g.sink.value; caretToEnd(fx); }
+  refocus(fx);
+}
+
+// ---------- ボタン ----------
+// ✎：選んだセルの編集を始め、数式バーで打つ
+function phoneEditInFx() {
+  const g = state.grid, fx = $('fx-input');
+  if (!g || !g.beginEdit('edit')) return;
+  fx.value = g.sink.value;
+  fx.focus();
+}
+
+// ✓：確定する。確定できたときだけ入力を終え、できなければ数式バーのまま直せるように残す
+async function commitPhoneEdit() {
+  const g = state.grid, fx = $('fx-input');
+  if (!g) return;
+  if (g.editing) {
+    if (typingIn() === fx) refocus(fx); // タップで外れたカーソルを、タップの中で戻しておく
+    await g.commitEdit({ move: null });
+    if (g.editing) return;
+  }
+  if (document.activeElement === fx) fx.blur();
+}
+
+// ✕：確定できなかった入力をやめて元の値に戻し、入力も終える
+function cancelPhoneEdit() {
+  clearEditError();
+  if (state.grid?.editing) state.grid.cancelEdit();
+  const fx = $('fx-input');
+  if (document.activeElement === fx) fx.blur();
+  updateFx();
+}
+
+// 記号キー：打っている入力欄（数式バーかセル）のカーソル位置に入れる
+function insertSym(k) {
+  const g = state.grid;
+  if (!g) return;
+  const target = typingIn();
+  if (target === g.sink && !g.editing && !g.editByTouch()) return;
+  refocus(target);
+  target.setRangeText(k, target.selectionStart, target.selectionEnd, 'end');
+  target.dispatchEvent(new Event('input', { bubbles: true }));
+}
+
+// 左上：ふだんは ‹ ホームへ。何か選んでいる間は ✓ 確定して選択を解除、
+// 確定できなかった入力があるときは ✕ 入力をやめて選択を解除（数式バーの右の ✓ / ✕ と同じ切り替え）
+function onHomeBtn() {
+  const g = state.grid;
+  if (!phone.matches || !g || !document.body.classList.contains('has-sel')) { goHome(); return; }
+  if (hasEditError()) cancelPhoneEdit();
+  g.deselect();
+}
+
+// ---------- 確定できなかったとき ----------
+// グリッドの onEditError：スマホなら知らせ方とカーソルを引き受け、✓ を ✕ に変える（PC はグリッドに任せる）
+function showEditError(err) {
+  if (!phone.matches) return false;
+  const g = state.grid, fx = $('fx-input'), col = g.cols[g.editing.c];
+  // 型が合わないときは、どの列に何を入れればよいかを伝える
+  toast(/datatype mismatch/i.test(err.message)
+    ? tr('「{0}」は {1} の列です。合う値を入れてください', [col.name, col.type || tr('型のある')])
+    : friendlyError(err.message), 'error');
+  document.body.classList.add('edit-err');
+  fx.value = g.sink.value;
+  // キーボードが出たままなら、そのまま数式バーで直せるように（閉じていれば数式バーのタップで出る）
+  if (document.documentElement.classList.contains('kb-open')) refocus(fx);
+  if (document.activeElement === fx) caretToEnd(fx);
+  return true;
+}
+
+// 確定できなかった入力を直している最中か（✓ の代わりに ✕ を出している間）
+function hasEditError() {
+  return document.body.classList.contains('edit-err');
+}
+
+function clearEditError() {
+  if (!hasEditError()) return;
+  document.body.classList.remove('edit-err');
+  state.grid?.sink.classList.remove('invalid');
 }
 
 function headerMenu(c, anchor) {
@@ -2097,7 +2311,7 @@ function fkPicker(r, c, anchor) {
   input.addEventListener('keydown', (e) => {
     if (e.key === 'ArrowDown') { e.preventDefault(); active = Math.min(items.length - 1, active + 1); renderList(); list.children[active]?.scrollIntoView({ block: 'nearest' }); }
     if (e.key === 'ArrowUp') { e.preventDefault(); active = Math.max(0, active - 1); renderList(); list.children[active]?.scrollIntoView({ block: 'nearest' }); }
-    if (e.key === 'Enter' && !e.isComposing) { e.preventDefault(); if (items[active]) choose(items[active][0]); }
+    if (isEnter(e)) { e.preventDefault(); if (items[active]) choose(items[active][0]); }
   });
   popover(anchor, el('div.fk-picker', el('div.ask-title', `→ ${fk.table}.${fk.refCol}`), input, list,
     col.readonly ? null : el('button.btn.sm.link', { on: { click: () => choose(null) } }, tr('NULL にする'))), { onClose: () => state.grid?.focus() });
@@ -2519,7 +2733,7 @@ function palette() {
   input.addEventListener('keydown', (e) => {
     if (e.key === 'ArrowDown') { e.preventDefault(); active = Math.min(items.length - 1, active + 1); render(); }
     if (e.key === 'ArrowUp') { e.preventDefault(); active = Math.max(0, active - 1); render(); }
-    if (e.key === 'Enter' && !e.isComposing && items[active]) { e.preventDefault(); closePopover(); items[active].run(); }
+    if (isEnter(e) && items[active]) { e.preventDefault(); closePopover(); items[active].run(); }
   });
   render();
   popover({ x: innerWidth / 2 - 260, y: 72 }, el('div.palette', input, list), { className: 'palette-pop', onClose: () => state.grid?.focus() });

@@ -46,6 +46,7 @@ export class Grid {
     this.rowCount = 0;
     this.cur = { r: 0, c: 0 };
     this.ext = { r: 0, c: 0 };
+    this.none = false;     // 何も選んでいない（スマホの通常時。枠・つまみを出さない）
     this.editing = null;   // { mode: 'enter'|'edit', r, c, start（開いたときのフォームの文字列） }
     this.draft = null;     // 新しい行の下書き { values: [列ごとの文字列|null|undefined(未入力)], errors: {c: msg} }
     this.widths = this.loadWidths();
@@ -682,6 +683,7 @@ export class Grid {
 
   /** カーソルは列の先頭（extend なら始めの列のまま）、範囲は最後の行まで */
   selectCol(c, extend) {
+    this.none = false;
     if (this.editing) this.commitEdit({ move: null });
     this.cur = { r: 0, c: extend ? this.cur.c : c };
     this.ext = { r: Math.max(0, this.rowCount - 1), c };
@@ -814,6 +816,7 @@ export class Grid {
       frag.append(rowEl);
     }
     this.body.replaceChildren(frag);
+    this.host.classList.toggle('no-sel', this.none);
     this.releaseBlobUrls();
     this.blobUsed = null;
     this.placeSink();
@@ -900,7 +903,7 @@ export class Grid {
 
   /** 範囲の右下に、範囲を広げるつまみを置く（タッチ端末・編集していないときだけ） */
   placeHandle() {
-    const show = TOUCH && this.byTouch && !this.editing && this.cols.length > 0 && this.rowCount > 0 && this.cur.r !== this.newRowIndex;
+    const show = TOUCH && this.byTouch && !this.none && !this.editing && this.cols.length > 0 && this.rowCount > 0 && this.cur.r !== this.newRowIndex;
     // 列ごと選んでいるときは、右下のつまみの代わりに（スプレッドシートと同じ）
     // ・選んだ列の左右の境目に、範囲を広げるつまみ（見えている範囲の縦の真ん中）
     // ・見出しの右下の境目に、幅を変えるつまみ
@@ -962,6 +965,7 @@ export class Grid {
 
   /** extend なら範囲の端（ext）だけを動かし、カーソル（cur）は選択を始めたセルに留める（スプレッドシートと同じ） */
   moveTo(r, c, extend = false) {
+    this.none = false;
     if (extend) {
       this.ext = { r, c };
       this.clampCursor();
@@ -980,6 +984,7 @@ export class Grid {
   }
 
   selectAll() {
+    this.none = false;
     this.cur = { r: 0, c: 0 };
     this.ext = { r: Math.max(0, this.rowCount - 1), c: this.cols.length - 1 };
     this.colSelect = this.rowSelect = true; // すべて選んでいれば、どの行・列の境目でもまとめて変えられる
@@ -987,6 +992,7 @@ export class Grid {
   }
 
   selectRows(r0, r1) {
+    this.none = false;
     this.cur = { r: r0, c: 0 };
     this.ext = { r: r1, c: this.cols.length - 1 };
     this.colSelect = false; this.rowSelect = true;
@@ -1005,7 +1011,18 @@ export class Grid {
     else if (x + w > s.scrollLeft + s.clientWidth) s.scrollLeft = x + w - s.clientWidth;
   }
 
+  /** 選択を解除する（スマホの上部バーの ✓）。編集中なら確定してから */
+  async deselect() {
+    if (this.editing) await this.commitEdit({ move: null });
+    this.none = true;
+    this.colSelect = this.rowSelect = false;
+    this.sink.blur();
+    this.render();
+    this.emitSelect();
+  }
+
   emitSelect() {
+    if (this.none) { this.hooks.onSelect?.(null); return; }
     const { r, c } = this.cur;
     const isNew = r === this.newRowIndex;
     const row = isNew ? (this.hasDraft ? { values: this.draft.values } : null) : this.rowAt(r);
@@ -1125,7 +1142,7 @@ export class Grid {
 
   /** タップ：セルを選ぶ。選んでいる1つのセルをもう一度タップしたら編集（キーボードを出す） */
   onTap(hit, at) {
-    const again = !hit.head && hit.r === this.cur.r && hit.c === this.cur.c
+    const again = !this.none && !hit.head && hit.r === this.cur.r && hit.c === this.cur.c
       && this.ext.r === this.cur.r && this.ext.c === this.cur.c && !this.colSelect;
     if (this.editing) {
       if (again) return; // 編集中のセルのタップ（入力欄の中のカーソル移動）はそのまま
@@ -1269,6 +1286,7 @@ export class Grid {
   }
 
   beginEdit(mode, initial) {
+    if (this.none) { this.none = false; this.render(); this.emitSelect(); }
     const { r, c } = this.cur;
     // BLOB のダブルクリック・もう一度のタップ・Enter・F2 は、中身を表示する（読み取り専用でも見られる）
     if (mode === 'edit' && this.rowAt(r)?.values[c] instanceof Uint8Array && this.hooks.onBlobView) {
@@ -1412,22 +1430,25 @@ export class Grid {
       this.render(); this.emitSelect();
       return true;
     } catch (err) {
-      this.hooks.onError?.(err);
-      // 失敗した値を残して再編集できるように
-      if (changes.length === 1) {
-        const ch = changes[0];
+      // 1セルの入力なら、失敗した値を残して再編集できるようにする
+      const ch = changes.length === 1 ? changes[0] : null;
+      const reopened = ch?.value?.form !== undefined;
+      if (ch) {
         this.cur = { r: ch.r, c: ch.c }; this.ext = { ...this.cur };
         this.render(); this.emitSelect();
-        if (ch.value?.form !== undefined) {
-          this.sink.value = ch.value.form;
-          this.editing = { mode: 'edit', r: ch.r, c: ch.c, start: this.formAt(ch.r, ch.c) };
-          this.placeSink();
-          this.sink.classList.add('invalid');
-          setTimeout(() => this.sink.classList.remove('invalid'), 1500);
-          this.hooks.onEditState?.(true, ch.value.form);
-        }
-        this.focus();
       }
+      if (reopened) {
+        this.sink.value = ch.value.form;
+        this.editing = { mode: 'edit', r: ch.r, c: ch.c, start: this.formAt(ch.r, ch.c) };
+        this.placeSink();
+        this.sink.classList.add('invalid');
+        this.hooks.onEditState?.(true, ch.value.form);
+        // 知らせ方とカーソルの置き場所を引き受けてくれたら任せる（スマホは数式バーのまま直す）
+        if (this.hooks.onEditError?.(err)) return false;
+        setTimeout(() => this.sink.classList.remove('invalid'), 1500);
+      }
+      this.hooks.onError?.(err);
+      if (ch) this.focus();
       return false;
     }
   }

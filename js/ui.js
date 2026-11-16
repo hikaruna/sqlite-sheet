@@ -68,6 +68,8 @@ export function touchHold(e, onLong, ms = 500) {
 
 /** 狭い画面（スマホ）か。CSS の @media (max-width: 760px) と揃える */
 export const narrow = matchMedia('(max-width: 760px)');
+/** スマホ用のシート画面にするか：狭い画面かつタッチ端末。CSS の同じ @media と揃える */
+export const phone = matchMedia('(max-width: 760px) and (hover: none) and (pointer: coarse)');
 
 // ソフトキーボードが出ると見える範囲が狭まる。その高さを CSS に渡し、画面全体と下から出すシートを見える範囲に収める
 if (window.visualViewport) {
@@ -84,11 +86,13 @@ if (window.visualViewport) {
     syncKb();
     // ページが拡大されているとき（iOS がアプリへ戻ったときなどに勝手に拡大する）は、見える範囲が狭いのは
     // キーボードのせいではない。それで画面全体を縮めると表示がおかしくなるので、ふつうの高さに戻す
-    if (vv.scale > 1.01) { root.removeProperty('--vvh'); root.removeProperty('--kb'); return; }
+    if (vv.scale > 1.01) { root.removeProperty('--vvh'); root.removeProperty('--kb'); root.removeProperty('--vvtop'); return; }
     root.setProperty('--vvh', vv.height + 'px');
+    // iPhone は下の方の入力欄にフォーカスすると、ページごと上へずらして見せる。画面全体をその位置に付いていかせる
+    root.setProperty('--vvtop', Math.max(0, vv.pageTop) + 'px');
     root.setProperty('--kb', Math.max(0, innerHeight - vv.height - vv.offsetTop) + 'px');
   };
-  vv.addEventListener('resize', sync); vv.addEventListener('scroll', sync); sync();
+  vv.addEventListener('resize', sync); vv.addEventListener('scroll', sync); addEventListener('scroll', sync); sync();
   // アプリへ戻った直後は見える範囲の値が落ち着くまで少しかかるので、少し待ってからも取り直す
   const resync = () => { sync(); requestAnimationFrame(sync); setTimeout(sync, 300); };
   addEventListener('pageshow', resync);

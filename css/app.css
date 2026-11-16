@@ -219,7 +219,13 @@ select.input { padding-right: 4px; }
 .expr-note { padding: 7px 14px; color: var(--text-3); font-size: 11.5px; border-top: 1px solid var(--line); background: var(--surface-2); }
 @media (max-width: 760px) {
   .expr-pop.as-sheet { width: 100%; }
-  .expr-body { grid-template-columns: 1fr; grid-template-rows: 1fr auto; height: 50vh; }
+  /* キーボードが出ても見える範囲に収め、一覧だけがスクロールする（シート全体はスクロールさせない） */
+  .popover.expr-pop.as-sheet { display: flex; flex-direction: column; overflow: hidden; max-height: min(75%, calc(var(--vvh, 100dvh) - 24px)); }
+  .expr-pop.as-sheet .expr-picker { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+  .expr-pop.as-sheet .expr-picker > * { flex: none; }
+  .expr-pop.as-sheet .expr-picker > .expr-body { flex: 0 1 auto; min-height: 0; }
+  .expr-list { overscroll-behavior: contain; }
+  .expr-body { grid-template-columns: 1fr; grid-template-rows: minmax(0, 1fr) auto; height: 50vh; }
   .expr-list { border-right: 0; }
   .expr-help { border-top: 1px solid var(--line); padding: 10px 14px; }
 }
@@ -791,7 +797,7 @@ body.dropping::after {
   body:not(.at-home) #app { touch-action: pan-x pan-y; }
   .grid-body, .gh-cell, .tabs { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
   /* キーボードが出たら、見える範囲に収める */
-  #app { height: var(--vvh, 100%); }
+  #app { height: var(--vvh, 100%); transform: translateY(var(--vvtop, 0px)); }
   /* iPhone は 16px 未満の入力欄をタップすると画面を拡大して戻さないので、入力欄の文字は 16px にする */
   input, textarea, select, [contenteditable] { font-size: 16px !important; }
   .gr { height: 34px; line-height: 33px; }
@@ -881,3 +887,75 @@ body.dropping::after {
 .drawer-item:hover, .drawer-item:active { background: var(--surface-2); }
 .drawer-item .mi-icon { width: 24px; text-align: center; }
 .drawer-foot { margin-top: auto; padding: 12px; color: var(--text-3); font-size: 11px; }
+
+/* ---------- スマホのシート画面（狭い画面かつタッチ端末。ui.js の phone と揃える） ---------- */
+/* Google スプレッドシートのスマホ版と同じ流れで、状態は3つ（body のクラスと数式バーのフォーカスで決まる）：
+   ・ふだん        … 表を広く（ツールバー・数式バーなし）。左上は ‹（ホームへ）
+   ・選んでいる    … body.has-sel。左上は ✓、下に数式バー（右に ✎）と操作の列
+   ・打っている    … セルの編集中（body.cell-editing）か数式バーにカーソル。数式バーの右は ✓、下に記号キー
+     確定できなかった（body.edit-err）ときは、左上と数式バーの右の ✓ が ✕（やめる）になる */
+.phone-only, .home-back, .home-done, .home-cancel { display: none; }
+@media (max-width: 760px) and (hover: none) and (pointer: coarse) {
+  body:not(.at-home) .phone-only { display: inline-flex; }
+
+  /* 並び：上部バー → 表 → 数式バー → 記号キー → 操作の列 → シートタブ */
+  .topbar { order: 0; } .workspace { order: 1; } .fxbar { order: 2; } .sym-row { order: 3; } .toolbar { order: 4; } .console { order: 5; } .bottombar { order: 6; }
+
+  /* 上部バー：左のボタンは ‹ / ✓ / ✕、右に元に戻す・やり直す */
+  .home-btn { width: 36px; height: 36px; }
+  body:not(.at-home) .home-btn .app-icon { display: none; }
+  .home-done, .home-cancel { font-size: 22px; font-weight: 700; }
+  .home-done { color: var(--accent); }
+  .home-cancel { color: var(--danger); }
+  body:not(.at-home):not(.has-sel) .home-back { display: block; font-size: 30px; line-height: 1; color: var(--text-2); margin-top: -4px; }
+  body:not(.at-home).has-sel:not(.edit-err) .home-done { display: block; }
+  body:not(.at-home).has-sel.edit-err .home-cancel { display: block; }
+  .topbar .tb-btn.phone-only { width: 36px; height: 36px; }
+
+  /* ふだん：表だけ。選択の枠・色も出さない */
+  body:not(.at-home):not(.has-sel) .toolbar, body:not(.at-home):not(.has-sel) .fxbar { display: none; }
+  .grid-host.no-sel .gc.sel, .grid-host.no-sel .gc.cur.sel { background: none; }
+  .grid-host.no-sel .gc.cur { box-shadow: none; background: none; }
+  .grid-host.no-sel .gr-head.hl { background: none; color: inherit; }
+
+  /* 選んでいる：下に数式バーと操作の列。シートタブは隠す */
+  body.has-sel:not(.at-home) .bottombar { display: none; }
+  .fxbar { height: 52px; border-top: 1px solid var(--line); border-bottom: 0; }
+  .fx-ref { display: none; }
+  .fx-btn { border-right: 0; font-size: 18px; padding: 0 14px; }
+  .fx-input { padding: 0 6px; }
+  .toolbar { border-top: 1px solid var(--line); border-bottom: 0; padding-bottom: env(safe-area-inset-bottom); height: auto; min-height: 48px; }
+  /* 元に戻す・やり直すは上部バーにあるので、操作の列には出さない */
+  .toolbar #undo-btn, .toolbar #redo-btn, .toolbar > .vsep:first-of-type { display: none; }
+  /* 通知は数式バー・操作の列の上に出す（入力欄に重ねない） */
+  body.has-sel:not(.at-home) #toasts { bottom: calc(112px + var(--kb, 0px)); }
+
+  /* 数式バーの右のボタン：選んでいる間は ✎、打っている間は ✓、確定できなかったら ✕ */
+  .fx-edit, .fx-ok, .fx-cancel {
+    flex: none; align-items: center; justify-content: center; width: 40px; height: 40px; margin: 0 8px;
+    border: 0; border-radius: 50%; background: none; font-size: 22px; font-weight: 700;
+  }
+  .fx-edit { background: var(--surface-2); color: var(--text-2); font-size: 18px; font-weight: 400; }
+  .fx-ok { color: var(--accent); font-size: 24px; }
+  .fx-cancel { color: var(--danger); }
+  body:not(.at-home) .fx-ok, body:not(.at-home) .fx-cancel { display: none; }
+  body:not(.at-home):is(.cell-editing, :has(.fx-input:focus)) .fx-edit { display: none; }
+  body:not(.at-home):not(.edit-err):is(.cell-editing, :has(.fx-input:focus)) .fx-ok { display: inline-flex; }
+  body:not(.at-home).edit-err .fx-cancel { display: inline-flex; }
+
+  /* 打っている：操作の列の代わりに記号キー */
+  body:is(.cell-editing, :has(.fx-input:focus)) .toolbar { display: none; }
+  body:not(.at-home) .sym-row { display: none; }
+  body:not(.at-home):is(.cell-editing, :has(.fx-input:focus)) .sym-row {
+    display: flex; flex: none; height: 44px; background: var(--surface-2); border-top: 1px solid var(--line);
+  }
+  .sym-key {
+    flex: 1; min-width: 0; border: 0; border-right: 1px solid var(--line); background: none;
+    color: var(--text); font: 18px var(--mono);
+  }
+  .sym-key:last-child { border-right: 0; }
+  .sym-key:active { background: var(--surface-3); }
+
+  /* 確定できなかった：直している間はセルの赤枠を残す */
+  .grid-sink.editing.invalid { box-shadow: 0 0 0 2px var(--danger), var(--shadow); }
+}
