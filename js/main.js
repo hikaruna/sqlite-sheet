@@ -82,13 +82,32 @@ function parseUrl() {
   let dbName = null;
   try { dbName = decodeURIComponent(path.split('/')[0]) || null; } catch { /* 壊れたエンコードは無視 */ }
   const p = new URLSearchParams(location.search);
-  return { dbName, sheet: p.get('sheet'), src: p.get('url') };
+  return { dbName, sheet: p.get('sheet'), src: p.get('db') };
 }
 
-/** URL から読んだ DB の URL（/<保存するときの名前の候補>?url=…&sheet=…） */
+/** URL から読んだ DB の URL（/<保存するときの名前の候補>?db=…&sheet=…） */
 function urlOfSrc(m, key) {
-  return BASE + (m.wanted ? encodeURIComponent(m.wanted) : '') + '?url=' + encodeURIComponent(m.url)
+  return BASE + (m.wanted ? encodeURIComponent(m.wanted) : '') + '?db=' + encodeURIComponent(m.url)
+    + (m.queryParams || []).map(([k, v]) => '&' + k + '=' + encodeURIComponent(v)).join('')
     + (key ? '&sheet=' + encodeURIComponent(sheetParam(key)) : '');
+}
+
+/**
+ * ?db= に添えた ?query1=<SQL>&query1.name=<名前>&query2=… を、番号の順に読む。
+ * 返り値: { list: [{ name, sql }], params: URL に残す [キー, 値] }。名前がなければ query1 など
+ */
+function urlQueries(p = new URLSearchParams(location.search)) {
+  const nums = [...new Set([...p.keys()].map((k) => k.match(/^query(\d+)$/)?.[1]).filter(Boolean))]
+    .sort((a, b) => a - b);
+  const list = [], params = [];
+  for (const n of nums) {
+    const sql = p.get('query' + n), name = p.get(`query${n}.name`)?.trim();
+    if (!sql?.trim()) continue;
+    params.push(['query' + n, sql]);
+    if (name) params.push([`query${n}.name`, name]);
+    list.push({ name: name || 'query' + n, sql });
+  }
+  return { list, params };
 }
 
 /** 内部キー（'t:名前' 等）→ ?sheet= の値 */
@@ -114,7 +133,7 @@ function urlOf(dbName, key) {
 
 function setUrl() {
   // ファイルを直接編集している間は URL に DB を載せない（リロードしたらホームに戻る）。
-  // URL から読んだものは ?url= を残す（リロード・共有で同じものが開く。変更は消える）
+  // URL から読んだものは ?db= を残す（リロード・共有で同じものが開く。変更は消える）
   const u = state.manual?.kind === 'url' ? urlOfSrc(state.manual, state.key)
     : state.manual ? urlOf(null) : urlOf(state.dbName, state.key);
   if (location.pathname + location.search + location.hash !== u) {
@@ -143,10 +162,12 @@ function restoreUrl() {
 
 async function route() {
   const { dbName, sheet, src } = parseUrl();
-  // ?url=<SQLite ファイルの URL>：そのファイルをメモリに読み込んで開く（手動保存）。
+  // ?db=<SQLite ファイルの URL>：そのファイルをメモリに読み込んで開く（手動保存）。
   // /<DB 名> は保存するときの名前の候補、?sheet= は開くシート
   if (src) {
-    if (state.manual?.kind === 'url' && state.manual.url === src) {
+    // 同じファイル・同じクエリならシートを切り替えるだけ。クエリが違えば読み直す
+    if (state.manual?.kind === 'url' && state.manual.url === src
+      && JSON.stringify(urlQueries().params) === JSON.stringify(state.manual.queryParams)) {
       const key = keyOfParam(sheet);
       if (key && key !== state.key) await showSheet(key);
       else setUrl();
@@ -284,7 +305,8 @@ function buildChrome() {
   undo.onChange(updateUndoButtons);
   // DB への書き込み（成功したもの）を最終更新として記録する。ローカルファイルは対象外
   db.onLog((e) => { if (!e.error && state.dbName && !state.manual) store.touch(state.dbName, 'updated'); });
-  db.onDirty(setDirty);
+  // データが元に戻っても、クエリの変更が残っていれば未保存のまま
+  db.onDirty((v) => setDirty(v || state.queriesDirty));
   db.onTx(setTx);
   // タブに戻ってきたら、ファイルがほかのアプリで変更されていないか確かめる
   document.addEventListener('visibilitychange', () => { if (!document.hidden) checkExternalChange(); });
@@ -633,6 +655,7 @@ async function settleTx() {
 
 function setDirty(v) {
   state.dirty = !!v;
+  if (!v) state.queriesDirty = false; // 読み込み・保存・破棄で、クエリの変更も済んだことになる
   const b = $('save-state');
   if (!b) return;
   b.hidden = !state.manual;
@@ -751,7 +774,7 @@ async function saveUrlAsDb({ open = true } = {}) {
     state.dbs = await db.list();
   } catch (e) { toast(friendlyError(e.message), 'error'); return false; }
   toast(tr('「{0}」としてデータベースに保存しました', [name]), 'success');
-  // 保存できたので、メモリの方は捨ててよい。URL も ?url= から保存したデータベースのものに置き換える（「戻る」で読み直さない）
+  // 保存できたので、メモリの方は捨ててよい。URL も ?db= から保存したデータベースのものに置き換える（「戻る」で読み直さない）
   await db.close(); state.manual = null; state.dbName = null; setDirty(false);
   if (open) { history.replaceState(null, '', urlOf(name)); await openDb(name, key); }
   return true;
@@ -913,7 +936,7 @@ async function importBytes(bytes, defName, sheet = null) {
 }
 
 /**
- * URL の ?url= で指定された SQLite ファイルを、メモリに読み込んで開く（手動保存。保存すると OPFS のデータベースになる）。
+ * URL の ?db= で指定された SQLite ファイルを、メモリに読み込んで開く（手動保存。保存すると OPFS のデータベースになる）。
  * wanted は URL のパスの DB 名（保存するときの名前の候補）、sheet は開く ?sheet= の値
  */
 async function loadFromUrl(src, wanted, sheet) {
@@ -942,28 +965,45 @@ async function loadFromUrl(src, wanted, sheet) {
   if (new TextDecoder().decode(bytes.slice(0, 15)) !== 'SQLite format 3') return fail(tr('SQLite のデータベースファイルではありません'));
   try { await db.openBytes('url:' + src, bytes); } catch (e) { return fail(friendlyError(e.message)); }
   // 端末側データ（列幅など）のキー。名前に「:」を含むので OPFS の DB とは重ならない
-  state.manual = { kind: 'url', url: src, name, wanted: wanted || null };
+  // ?query1= などで添えたクエリは、クエリシートとして足す（クエリシートは SELECT しか通らないので読み取り専用）。
+  // URL にも残すので、リロード・共有で同じシートが並ぶ
+  const { list, params } = urlQueries();
+  state.manual = { kind: 'url', url: src, name, wanted: wanted || null, queryParams: params };
   state.dbName = 'url:' + src;
   store.removeDb(state.dbName);
+  if (list.length) {
+    const qs = [];
+    for (const x of list) qs.push({ name: uniqueName(x.name, qs.map((y) => y.name)), sql: x.sql });
+    store.setQueries(state.dbName, qs);
+  }
   setDirty(false);
   await showDb(null, sheet);
 }
 
-// PWA として開いているか（アドレスバーがないので、?url= を打ち込めない）
+// PWA として開いているか（アドレスバーがないので、?db= を打ち込めない）
 function isPwa() { return matchMedia('(display-mode: standalone)').matches || matchMedia('(display-mode: window-controls-overlay)').matches || navigator.standalone === true; }
 
-// 「URL から開く…」：貼り付けた URL を ?url= と同じ流れで開く（メモリに読み込み、手動保存）
+// 「URL から開く…」：貼り付けた URL を開く。このアプリの URL（/<DB 名>?db=…&query1=…）ならそのとおりに、
+// それ以外は SQLite ファイルの URL とみなして ?db= と同じ流れで開く（メモリに読み込み、手動保存）
 async function openUrlDialog(anchor) {
   const v = await ask(anchor instanceof Element ? anchor : $('file-btn'), {
-    title: tr('URL から開く'), placeholder: 'https://…/data.sqlite', okLabel: tr('開く'),
+    title: tr('URL から開く'), placeholder: 'https://…?db=…', okLabel: tr('開く'),
     validate: (v) => {
       if (!v) return tr('URL を入力してください');
       try { if (/^https?:$/.test(new URL(v, location.href).protocol)) return null; } catch { /* 下で知らせる */ }
       return tr('http(s) の URL を入力してください');
     },
   });
-  if (!v || !(await leaveCurrent())) return;
-  history.pushState(null, '', BASE + '?url=' + encodeURIComponent(v));
+  if (!v) return;
+  const u = new URL(v, location.href);
+  // このアプリの URL：公開版・検証用など別のオリジンのものでも、パスと引数をこちらで開く
+  if (u.searchParams.has('db')) {
+    // パスの最後が DB 名（保存するときの名前の候補）。公開先によって手前のパスが違うので最後だけ使う
+    history.pushState(null, '', BASE + u.pathname.split('/').pop() + u.search);
+    return route();
+  }
+  if (!(await leaveCurrent())) return;
+  history.pushState(null, '', BASE + '?db=' + encodeURIComponent(v));
   await loadFromUrl(v, null, null);
 }
 
@@ -1374,7 +1414,12 @@ function uniqueName(base, taken) {
 const objNames = () => state.objects.map((o) => o.name);
 const queryNames = () => state.queries.map((x) => x.name);
 const namesFor = (kind) => (kind === 'q' ? queryNames() : objNames());
-function saveQueries() { store.setQueries(state.dbName, state.queries); }
+function saveQueries() {
+  store.setQueries(state.dbName, state.queries);
+  // URL から読んだものは、保存するまでクエリも残らないので未保存にする
+  // （ローカルファイルのクエリは端末側に保存されていて、ファイルの保存とは関係ない）
+  if (state.manual?.kind === 'url') { state.queriesDirty = true; setDirty(true); }
+}
 
 async function newTable(anchor) {
   const name = await ask(anchor, {
