@@ -963,14 +963,14 @@ function formatItems() {
 }
 
 /**
- * テキストの折り返しの選択肢。cols（列の番号）を省くと、選んでいるセルを含む列すべてが対象。
- * 今の設定に ✓（列ごとに違うときは付けない）
+ * テキストの折り返しの選択肢。選んでいるセル（読み込み済みの行のもの）が対象。
+ * 今の設定に ✓（セルごとに違うときは付けない）
  */
-function wrapItems(cols) {
+function wrapItems() {
   const g = state.grid;
-  if (!g) return [{ label: tr('折り返す'), icon: '', disabled: true }, { label: tr('切り詰める'), icon: '', disabled: true }];
-  const targets = cols ?? g.selectedCols();
-  const on = targets.filter((c) => g.isWrap(c)).length;
+  const targets = g ? g.selectedCells() : [];
+  if (!targets.length) return [{ label: tr('折り返す'), icon: '', disabled: true }, { label: tr('切り詰める'), icon: '', disabled: true }];
+  const on = targets.filter(({ r, row, c }) => g.isWrap(r, row, c)).length;
   return [
     { label: tr('折り返す'), icon: on === targets.length ? '✓' : '', action: () => g.setWrap(targets, true) },
     { label: tr('切り詰める'), icon: on === 0 ? '✓' : '', action: () => g.setWrap(targets, false) },
@@ -1786,11 +1786,11 @@ function gridHooks(kind) {
       const sheet = state.key;
       undo.push({ label: tr('「{0}」の列幅の変更', [sheet.slice(2)]), sheet, col: changes[0].name, undoFn: () => apply((x) => x.before), redoFn: () => apply((x) => x.after) });
     },
-    // テキストの折り返しも元に戻せる。before / after: 折り返す列の名前の配列
+    // テキストの折り返しも元に戻せる。before / after: 折り返すセルのキーの配列
     onWrap: (key, before, after) => {
       const apply = (names) => {
         if (state.grid?.source.widthKey === key) { state.grid.setWrapNames(names); return; }
-        try { if (names.length) localStorage.setItem('wrap:' + key, JSON.stringify(names)); else localStorage.removeItem('wrap:' + key); } catch { /* 無視 */ }
+        try { if (names.length) localStorage.setItem('wrapc:' + key, JSON.stringify(names)); else localStorage.removeItem('wrapc:' + key); } catch { /* 無視 */ }
       };
       const sheet = state.key;
       undo.push({ label: tr('「{0}」のテキストの折り返し', [sheet.slice(2)]), sheet, undoFn: () => apply(before), redoFn: () => apply(after) });
@@ -2188,7 +2188,7 @@ function headerMenu(c, anchor) {
     const names = cols.map((i) => state.source.columns[i].name);
     const items = [
       { header: tr('{0} 列', [cols.length]) },
-      { header: tr('テキストの折り返し') }, ...wrapItems(cols),
+      { header: tr('テキストの折り返し') }, ...wrapItems(),
       '-', sizeItem('col', cols, anchor),
       ...cellSection('col'),
     ];
@@ -2205,8 +2205,8 @@ function headerMenu(c, anchor) {
     viewOf(state.key).sorts.some((s) => s.col === col.name) ? { label: tr('この列の並べ替えを解除'), icon: '⇅', action: () => removeSort(col.name) } : null,
     { label: tr('絞り込み…'), icon: '⏷', action: () => filterPopover(anchor instanceof Element ? anchor : $('sheet-head'), col.name) },
     '-',
-    // 列ごと選んでいてこの列がその中にあれば、選んだ列すべて（列幅と同じ）
-    { header: tr('テキストの折り返し') }, ...wrapItems(state.grid.resizeCols(c)),
+    // 選んでいる範囲（列ごと選んだときは、その列の読み込み済みのセル）
+    { header: tr('テキストの折り返し') }, ...wrapItems(),
     '-', sizeItem('col', [c], anchor),
     ...cellSection('col'),
   ];

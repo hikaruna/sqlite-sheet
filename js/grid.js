@@ -54,7 +54,7 @@ export class Grid {
     this.manualHeights = new Map(); // 自分で決めた高さ {何行目: 高さ}
     this.autoHeights = new Map();   // 折り返した文字に合わせた自動の高さ {何行目: 高さ}（保存しない）
     this.rowHeights = new Map(); this.hIdx = []; this.hCum = []; // 両方を合わせた {何行目: 高さ} と、位置計算用の累積
-    this.wraps = this.loadWraps();  // 折り返して表示する列の名前
+    this.wraps = this.loadWraps();  // 折り返して表示するセル（[行の見分け方, 列名] の JSON）
     this.z = TOUCH ? loadZoom() : 1;
     this.build();
   }
@@ -543,54 +543,63 @@ export class Grid {
     if (changes.length) this.hooks.onRowHeight?.(this.source.widthKey, changes);
   }
 
-  // ---------- テキストの折り返し（列ごと） ----------
+  // ---------- テキストの折り返し（セルごと） ----------
+  // セルは「行のキー（主キー、なければ rowid）＋列名」で覚えるので、並べ替え・絞り込みをしても同じデータに付いてくる
   loadWraps() {
-    try { const v = JSON.parse(localStorage.getItem('wrap:' + this.source.widthKey) || '[]'); return new Set(Array.isArray(v) ? v : []); } catch { return new Set(); }
+    try { const v = JSON.parse(localStorage.getItem('wrapc:' + this.source.widthKey) || '[]'); return new Set(Array.isArray(v) ? v : []); } catch { return new Set(); }
   }
   saveWraps() {
     try {
-      if (this.wraps.size) localStorage.setItem('wrap:' + this.source.widthKey, JSON.stringify([...this.wraps]));
-      else localStorage.removeItem('wrap:' + this.source.widthKey);
+      if (this.wraps.size) localStorage.setItem('wrapc:' + this.source.widthKey, JSON.stringify([...this.wraps]));
+      else localStorage.removeItem('wrapc:' + this.source.widthKey);
     } catch { /* 無視 */ }
   }
-  isWrap(c) { const col = this.cols[c]; return !!col && this.wraps.has(col.name); }
-  /** 選んでいるセルを含む列（折り返しの対象） */
-  selectedCols() {
-    const { c0, c1 } = this.range();
-    return Array.from({ length: c1 - c0 + 1 }, (_, i) => c0 + i).filter((c) => this.cols[c]);
+  wrapKey(r, row, c) { const col = this.cols[c]; return col ? JSON.stringify([this.rowId(r, row), col.name]) : null; }
+  isWrap(r, row, c) { if (!this.wraps.size) return false; const k = this.wrapKey(r, row, c); return k != null && this.wraps.has(k); }
+  /** 選んでいるセルのうち、読み込み済みの行のもの（折り返しの対象）: [{r, row, c}] */
+  selectedCells() {
+    const { r0, r1, c0, c1 } = this.range();
+    const out = [];
+    for (let r = r0; r <= r1 && r < this.rowCount; r++) {
+      const p = Math.floor(r / PAGE), row = this.pages.get(p)?.[r - p * PAGE];
+      if (!row) continue;
+      for (let c = c0; c <= c1; c++) if (this.cols[c]) out.push({ r, row, c });
+    }
+    return out;
   }
-  /** 列 cols の折り返しを切り替える（元に戻すに積む） */
-  setWrap(cols, on) {
+  /** cells の折り返しを切り替える（元に戻すに積む） */
+  setWrap(cells, on) {
     const before = [...this.wraps];
-    for (const c of cols) { const name = this.cols[c]?.name; if (name == null) continue; if (on) this.wraps.add(name); else this.wraps.delete(name); }
-    const after = [...this.wraps];
-    if (before.length === after.length && before.every((n) => this.wraps.has(n))) return;
+    for (const { r, row, c } of cells) { const k = this.wrapKey(r, row, c); if (k == null) continue; if (on) this.wraps.add(k); else this.wraps.delete(k); }
+    if (before.length === this.wraps.size && before.every((k) => this.wraps.has(k))) return;
     this.saveWraps(); this.remeasure();
-    this.hooks.onWrap?.(this.source.widthKey, before, after);
+    this.hooks.onWrap?.(this.source.widthKey, before, [...this.wraps]);
   }
-  /** 元に戻す・やり直すから：折り返す列の名前をそのまま入れ替える */
-  setWrapNames(names) {
-    this.wraps = new Set(names);
+  /** 元に戻す・やり直すから：折り返すセルをそのまま入れ替える */
+  setWrapNames(keys) {
+    this.wraps = new Set(keys);
     this.saveWraps(); this.remeasure();
   }
 
   /**
-   * 行ごとの、折り返した列の中身が全部見える高さ（折り返す列がなければ空）。
-   * 実際と同じ CSS のセルを、見えない所に並べて測る
+   * 行ごとの、折り返したセルの中身が全部見える高さ（折り返すセルがなければ空）。
+   * 実際と同じ CSS のセルを、見えない所に並べて測る。r0: rows[0] が何行目か
    */
-  measureRows(rows) {
-    const cols = this.cols.map((_, c) => c).filter((c) => this.isWrap(c));
-    if (!cols.length || !rows.length) return [];
-    const probe = el('div.grid-measure', { style: { position: 'absolute', visibility: 'hidden', top: 0, left: 0, pointerEvents: 'none' } });
+  measureRows(rows, r0) {
+    if (!this.wraps.size || !rows.length) return [];
+    let any = false;
     const lines = rows.map((row, i) => {
       const line = el('div.gr-measure', { style: { display: 'flex', alignItems: 'flex-start' } });
-      if (row) for (const c of cols) {
+      if (row) for (let c = 0; c < this.cols.length; c++) {
+        if (!this.isWrap(r0 + i, row, c)) continue;
         const cell = el('div.gc', { style: { width: this.colW(c) + 'px', height: 'auto' } });
-        this.fillCell(cell, row.values[c], this.cols[c], row, i, c);
-        line.append(cell);
+        this.fillCell(cell, row.values[c], this.cols[c], row, r0 + i, c);
+        line.append(cell); any = true;
       }
       return line;
     });
+    if (!any) return [];
+    const probe = el('div.grid-measure', { style: { position: 'absolute', visibility: 'hidden', top: 0, left: 0, pointerEvents: 'none' } });
     probe.append(...lines);
     this.body.append(probe);
     const hs = lines.map((line) => Math.min(MAX_WRAP_H, Math.max(RH, Math.ceil(line.getBoundingClientRect().height / this.z))));
@@ -600,7 +609,7 @@ export class Grid {
 
   /** 読み込んだページの行を測って、自動の高さに入れる */
   measurePage(p, rows) {
-    const hs = this.measureRows(rows);
+    const hs = this.measureRows(rows, p * PAGE);
     let changed = false;
     rows.forEach((_, i) => {
       const r = p * PAGE + i, h = hs[i] ?? RH;
@@ -610,7 +619,7 @@ export class Grid {
     return changed;
   }
 
-  /** 列幅が変わると折り返しの位置が変わるので、折り返す列があれば測り直す */
+  /** 列幅が変わると折り返しの位置が変わるので、折り返すセルがあれば測り直す */
   afterWidthChange() { if (this.wraps.size) this.remeasure(); }
 
   /** 折り返しや列幅が変わったときに、読み込み済みの行を測り直す */
@@ -864,8 +873,8 @@ export class Grid {
     const s = String(v);
     if (s === '') { cell.classList.add('emptystr'); return; }
     const t = s.length > MAX_TEXT ? s.slice(0, MAX_TEXT) + '…' : s;
-    // 折り返す列は改行をそのまま出す。折り返さない列は1行なので、改行があることだけ ⏎ で見せる
-    if (this.isWrap(c)) { cell.classList.add('wrap'); cell.textContent = t; }
+    // 折り返すセルは改行をそのまま出す。折り返さないセルは1行なので、改行があることだけ ⏎ で見せる
+    if (this.isWrap(r, row, c)) { cell.classList.add('wrap'); cell.textContent = t; }
     else cell.textContent = t.replaceAll('\n', ' ⏎ ');
     if (col.fk) {
       cell.classList.add('fk');
