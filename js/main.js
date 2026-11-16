@@ -130,6 +130,9 @@ function restoreUrl() {
 
 async function route() {
   const { dbName, sheet } = parseUrl();
+  // ?url=<SQLite ファイルの URL>：そのファイルを取り込んでから開く（/<DB 名> と ?sheet= があれば、その名前・そのシートで）
+  const src = new URLSearchParams(location.search).get('url');
+  if (src && !state.file) return importFromUrl(src, dbName, sheet);
   // ファイルを編集中に「戻る」などで URL が変わったとき：ホームの URL ならそのまま、別の DB へなら未保存の確認をしてから
   if (state.file) {
     if (!dbName) return setUrl();
@@ -805,10 +808,14 @@ async function pickSqlite() {
 }
 
 async function importFile(file) {
-  const bytes = new Uint8Array(await file.arrayBuffer());
+  importBytes(new Uint8Array(await file.arrayBuffer()), file.name.replace(/\.(sqlite3?|db)$/i, ''));
+}
+
+/** SQLite のファイルの中身を、名前を聞いてからデータベースとして取り込んで開く（sheet は開く ?sheet= の値） */
+async function importBytes(bytes, defName, sheet = null) {
   const header = new TextDecoder().decode(bytes.slice(0, 15));
   if (header !== 'SQLite format 3') { toast(tr('SQLite のデータベースファイルではありません'), 'error'); return; }
-  let name = file.name.replace(/\.(sqlite3?|db)$/i, '') || 'imported';
+  let name = defName || 'imported';
   const base = name; let i = 2;
   while (state.dbs.includes(name)) name = `${base} (${i++})`;
   name = await ask($('file-btn'), { title: tr('このファイルを読み込む名前'), value: name, okLabel: tr('読み込む'), validate: (v) => validDbName(v) || (state.dbs.includes(v) ? tr('「{0}」は既にあります', [v]) : null) });
@@ -820,9 +827,50 @@ async function importFile(file) {
     requestPersist();
     state.dbs = await db.list();
     state.dbName = null;
-    await openDb(name);
+    await openDb(name, null, sheet);
     toast(tr('「{0}」を読み込みました', [name]), 'success');
   } catch (e) { toast(friendlyError(e.message), 'error'); }
+}
+
+/**
+ * URL の ?url= で指定された SQLite ファイルを取り込んで開く。
+ * wanted は URL のパスの DB 名（取り込む名前の候補）、sheet は取り込んだあとに開く ?sheet= の値
+ */
+async function importFromUrl(src, wanted, sheet) {
+  // 再読み込みや「戻る」で何度も取り込まないよう、先に ?url= を外しておく（開いたあとは openDb が URL を合わせる）
+  history.replaceState(null, '', BASE);
+  if (!state.dbName) showWelcome();
+  let url;
+  try { url = new URL(src, location.href); } catch { url = null; }
+  if (!url || !/^https?:$/.test(url.protocol)) { toast(tr('読み込めない URL です：{0}', [src]), 'error'); return; }
+  let file = url.pathname.split('/').pop() || '';
+  try { file = decodeURIComponent(file); } catch { /* 壊れたエンコードはそのまま */ }
+  const defName = wanted || file.replace(/\.(sqlite3?|db)$/i, '') || url.hostname;
+  // 同じ名前の DB が既にある（同じリンクをもう一度開いた等）：そのまま開くか、別の名前で取り込むか
+  if (state.dbs.includes(defName)) {
+    const c = await choiceDialog({
+      title: tr('「{0}」は既にあります', [defName]),
+      body: tr('URL のファイルを取り込もうとしています。'), code: url.href,
+      choices: [
+        { label: tr('今あるものを開く'), value: 'open', primary: true },
+        { label: tr('別の名前で取り込む'), value: 'import' },
+        { label: tr('キャンセル'), value: null },
+      ],
+    });
+    if (!c) return;
+    if (c === 'open') { await openDb(defName, null, sheet); return; }
+  }
+  const loading = toast(tr('読み込んでいます…'), 'info', 60000);
+  let bytes;
+  try {
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    bytes = new Uint8Array(await res.arrayBuffer());
+  } catch (e) {
+    toast(tr('ファイルを取得できませんでした（{0}）。相手のサーバーが他のサイトからの読み込みを許していない（CORS）こともあります', [e.message]), 'error', 8000);
+    return;
+  } finally { loading?.remove?.(); }
+  await importBytes(bytes, defName, sheet);
 }
 
 // データベースをファイルに書き出す。保存先を選べるブラウザでは選んでもらう
