@@ -12,6 +12,7 @@ import { SqlConsole } from './console.js';
 import { undo, tableSummary } from './undo.js';
 import { createSample, SAMPLE_QUERIES } from './sample.js';
 import * as store from './store.js';
+import { APP_VERSION } from './version.js';
 import * as files from './files.js';
 import { readProtections, protectSql, unprotectSql, protectionChecker, canProtectRows, describe, KIND_ICON as PROT_ICON } from './protect.js';
 
@@ -46,7 +47,7 @@ async function boot() {
   try {
     if (!navigator.storage?.getDirectory) throw new Error(tr('このブラウザは OPFS（Origin Private File System）に対応していません。'));
     const info = await db.init();
-    $('version').textContent = `SQLite ${info.version}`;
+    $('version').textContent = `SQLite ${info.version} · ${tr('版')} ${APP_VERSION}`;
   } catch (e) {
     return showFatal(e);
   }

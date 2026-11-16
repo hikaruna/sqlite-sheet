@@ -1,0 +1,38 @@
+# main に push されたら GitHub Pages へ公開する。
+# 公開する前に、アプリの版（js/version.js）と Service Worker のキャッシュ名（sw.js）をコミットハッシュに書き換える
+name: Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: 版を書き込む
+        run: |
+          v="${GITHUB_SHA::7}"
+          sed -i "s/^export const APP_VERSION = .*/export const APP_VERSION = '$v';/" js/version.js
+          sed -i "s/^const VERSION = .*/const VERSION = '$v';/" sw.js
+          grep -n "APP_VERSION =" js/version.js
+          grep -n "^const VERSION =" sw.js
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: .
+      - id: deployment
+        uses: actions/deploy-pages@v4

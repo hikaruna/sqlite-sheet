@@ -5,6 +5,7 @@ export default {
   "読み込めない URL です：{0}": (p) => `Cannot load this URL: ${p[0]}`,
   "URL のファイルを取り込もうとしています。": "You are about to import a file from a URL.",
   "今あるものを開く": "Open the existing one",
+  "版": "Build",
   "ドラッグで高さを変更・ダブルクリックで1行に戻す": "Drag to change the height, double-click to return to one line",
   "別の名前で取り込む": "Import under another name",
   "読み込んでいます…": "Loading…",

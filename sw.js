@@ -1,6 +1,6 @@
 // Service Worker：アプリのファイルを端末に保存して、電波がなくても起動できるようにする。
 // DB（OPFS）には触れない。保存先は Cache Storage
-const VERSION = 'v1';
+const VERSION = 'dev';         // 公開時に .github/workflows/pages.yml がコミットハッシュに書き換える
 const APP = `app-${VERSION}`;   // 自前のファイル（ネット優先。つながらないときだけ保存分を使う）
 const CDN = 'cdn-v1';           // jsDelivr の sqlite-wasm（URL に版が入っていて中身が変わらないので保存分を優先）
 
@@ -8,7 +8,7 @@ const SHELL = [
   './', 'index.html', 'css/app.css', 'manifest.webmanifest',
   'icons/icon.svg', 'icons/icon-192.png', 'icons/icon-512.png',
   ...['blob', 'console', 'db-client', 'db-worker', 'design-panel', 'files', 'grid', 'i18n', 'locales/en', 'main', 'protect',
-    'sample', 'schema', 'sources', 'store', 'txmarks', 'ui', 'undo'].map((f) => `js/${f}.js`),
+    'sample', 'schema', 'sources', 'store', 'txmarks', 'ui', 'undo', 'version'].map((f) => `js/${f}.js`),
 ];
 
 self.addEventListener('install', (e) => {
