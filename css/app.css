@@ -945,14 +945,16 @@ body.dropping::after {
   .fx-ok { color: var(--accent); font-size: 24px; }
   .fx-cancel { color: var(--danger); }
   body:not(.at-home) .fx-ok, body:not(.at-home) .fx-cancel { display: none; }
-  body:not(.at-home):is(.cell-editing, :has(.fx-input:focus)) .fx-edit { display: none; }
-  body:not(.at-home):not(.edit-err):is(.cell-editing, :has(.fx-input:focus)) .fx-ok { display: inline-flex; }
+  body:not(.at-home):is(.cell-editing, :has(.fx-input:focus:not([readonly]))) .fx-edit { display: none; }
+  /* 読み取り専用のセル（ビュー・クエリ・自動の列など）では ✎ を出さない */
+  body:not(.at-home):has(.fx-input[readonly]) .fx-edit { display: none; }
+  body:not(.at-home):not(.edit-err):is(.cell-editing, :has(.fx-input:focus:not([readonly]))) .fx-ok { display: inline-flex; }
   body:not(.at-home).edit-err .fx-cancel { display: inline-flex; }
 
   /* 打っている：操作の列の代わりに記号キー */
-  body:is(.cell-editing, :has(.fx-input:focus)) .toolbar { display: none; }
+  body:is(.cell-editing, :has(.fx-input:focus:not([readonly]))) .toolbar { display: none; }
   body:not(.at-home) .sym-row { display: none; }
-  body:not(.at-home):is(.cell-editing, :has(.fx-input:focus)) .sym-row {
+  body:not(.at-home):is(.cell-editing, :has(.fx-input:focus:not([readonly]))) .sym-row {
     display: flex; flex: none; height: 44px; background: var(--surface-2); border-top: 1px solid var(--line);
   }
   .sym-key {
