@@ -1370,11 +1370,16 @@ export class Grid {
     try {
       if (updates.length) {
         const res = await this.source.update(updates);
+        const touched = new Set();
         for (const { row, rowObj } of res) {
           const p = Math.floor(row / PAGE);
           const page = this.pages.get(p);
-          if (page) page[row - p * PAGE] = rowObj;
+          if (page) { page[row - p * PAGE] = rowObj; touched.add(p); }
         }
+        // 書き換えた値に合わせて、折り返した列の行の高さを測り直す
+        let grew = false;
+        for (const p of touched) if (this.measurePage(p, this.pages.get(p))) grew = true;
+        if (grew) { this.applyHeights(); this.placeSink(); }
       }
       if (inserts.size) {
         const oldCount = this.rowCount;
