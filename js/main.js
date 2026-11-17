@@ -1072,15 +1072,30 @@ async function shareDialog() {
   const copyBtn = el('button.btn.primary', { on: { click: () => copyLink() } }, tr('🔗 リンクをコピー'));
   const shareBtn = navigator.share ? el('button.btn', { on: { click: () => shareLink() } }, tr('📤 共有…')) : null;
 
-  if (fromUrl) {
-    const radio = (v, label, note) => el('label.share-radio',
-      el('input', { type: 'radio', name: 'share-mode', checked: mode === v, on: { change: () => { mode = v; update(); } } }),
-      el('span', el('b', label), el('small', note)));
-    modeBox.append(
-      radio('link', tr('元のファイルの URL を使う'), state.dirty
+  // 「置いたファイルの URL を指定する」：自分でどこかに置いたファイルの URL を ?db= に入れる
+  const srcInput = el('input.share-src.mono', {
+    type: 'url', placeholder: 'https://…/data.sqlite', 'aria-label': tr('ファイルの URL'),
+    on: { input: () => update() },
+  });
+  const srcBox = el('div.share-src-box', srcInput,
+    el('small', tr('アプリはファイルを置きません。今のデータを書き出してどこかに置き、その URL を入れてください。相手のブラウザから読めること（CORS）が必要です')));
+  const customSrc = () => {
+    const v = srcInput.value.trim();
+    try { const u = new URL(v); return /^https?:$/.test(u.protocol) ? u.href : null; } catch { return null; }
+  };
+
+  {
+    const radio = (v, label, note, extra = '') => el('label.share-radio',
+      el('input', { type: 'radio', name: 'share-mode', checked: mode === v, on: { change: () => { mode = v; update(); if (v === 'custom') srcInput.focus(); } } }),
+      el('span', el('b', label), el('small', note), extra));
+    if (fromUrl) {
+      modeBox.append(radio('link', tr('元のファイルの URL を使う'), state.dirty
         ? tr('データの未保存の変更は含まれません。相手は元のファイルを開きます')
-        : tr('相手も同じファイルを開きます。リンクは短くなります')),
-      radio('embed', tr('データごと埋め込む'), tr('今のデータをリンクに入れます。元のファイルが無くても開けます')));
+        : tr('相手も同じファイルを開きます。リンクは短くなります')));
+    }
+    modeBox.append(
+      radio('embed', tr('データごと埋め込む'), tr('今のデータをリンクに入れます。元のファイルが無くても開けます')),
+      radio('custom', tr('置いたファイルの URL を指定する'), tr('相手はその URL のファイルを開きます。リンクは短くなります'), srcBox));
   }
 
   function renderSheets() {
@@ -1098,8 +1113,9 @@ async function shareDialog() {
   renderSheets();
 
   async function update() {
-    lead.textContent = mode === 'link'
-      ? tr('このリンクを開くと、相手のブラウザで同じファイルとシートが開きます。相手の変更はこちらには届きません')
+    srcBox.hidden = mode !== 'custom';
+    lead.textContent = mode !== 'embed'
+      ?tr('このリンクを開くと、相手のブラウザで同じファイルとシートが開きます。相手の変更はこちらには届きません')
       : tr('このリンクを開くと、相手のブラウザで今のデータとシートが開きます（保存するまで相手の端末には残りません）。相手の変更はこちらには届きません');
     const qs = state.queries.filter((x) => picked.has(x.name));
     const queryParams = [];
@@ -1112,18 +1128,21 @@ async function shareDialog() {
         embedded = { raw: bytes.length, data: toBase64Url(await deflate(bytes)) };
       } catch (e) { info.textContent = friendlyError(e.message); return; }
     }
-    url = location.origin + linkUrl({
-      wanted: name, src: mode === 'link' ? state.manual.url : null, queryParams,
+    const src = mode === 'link' ? state.manual.url : mode === 'custom' ? customSrc() : null;
+    const noSrc = mode === 'custom' && !src;
+    url = noSrc ? '' : location.origin + linkUrl({
+      wanted: name, src, queryParams,
       key: sheetSel.value || null, data: mode === 'embed' ? embedded.data : null,
     });
     const len = url.length, tooLong = len > LINK_MAX;
     out.value = tooLong ? '' : url;
-    copyBtn.disabled = tooLong;
-    if (shareBtn) shareBtn.disabled = tooLong;
-    info.replaceChildren(el('span', tr('リンクの長さ：{0} 文字', [len.toLocaleString()])),
+    copyBtn.disabled = tooLong || noSrc;
+    if (shareBtn) shareBtn.disabled = tooLong || noSrc;
+    info.replaceChildren(noSrc ? '' : el('span', tr('リンクの長さ：{0} 文字', [len.toLocaleString()])),
       mode === 'embed' ? el('span.muted', ' ' + tr('（DB {0} を圧縮）', [fmtBytes(embedded.raw)])) : '');
     const notes = [];
-    if (tooLong) notes.push(tr('DB が大きすぎてリンクに入りません。「ファイルに書き出す」でファイルを渡してください'));
+    if (noSrc) notes.push(srcInput.value.trim() ? tr('http(s) の URL を入力してください') : tr('ファイルの URL を入力してください'));
+    else if (tooLong) notes.push(tr('DB が大きすぎてリンクに入りません。「ファイルに書き出す」でファイルを渡してください'));
     else if (len > LINK_WARN) notes.push(tr('リンクが長いので、チャットアプリなどで途中で切れることがあります。切れると開けません'));
     if (mode === 'embed') notes.push(tr('リンクにはデータそのものが入っています。リンクを知っている人は中身を見られます'));
     const ext = qs.filter((x) => refersOtherDb(x.sql)).map((x) => x.name);
