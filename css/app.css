@@ -806,6 +806,21 @@ body.dropping::after {
   /* シート画面ではページ全体の拡大をさせない（表だけを二本指で拡大する） */
   body:not(.at-home) #app { touch-action: pan-x pan-y; }
   /* シート画面では、横に引ききってもブラウザの「戻る・進む」にしない（Android Chrome） */
+/* 長い表を一気に移動するつまみ（指で操作しているときだけ grid.js が出す） */
+.fs-track { position: absolute; top: 40px; bottom: 16px; right: 0; width: 28px; z-index: 7; pointer-events: none; }
+.fs-thumb {
+  position: absolute; right: 2px; width: 22px; height: 44px; border-radius: 11px; touch-action: none; pointer-events: auto;
+  background: var(--surface-3); border: 1px solid var(--line-strong); box-shadow: 0 1px 4px rgb(0 0 0 / .25);
+  opacity: 0; visibility: hidden; transition: opacity .25s, visibility .25s;
+}
+.fs-thumb::after { content: ''; position: absolute; inset: 14px 7px; border-block: 2px solid var(--text-3); }
+.fs-track.show .fs-thumb, .fs-track.dragging .fs-thumb { opacity: 1; visibility: visible; transition: none; }
+.fs-track.dragging .fs-thumb { background: var(--accent); }
+.fs-label {
+  position: absolute; top: 0; right: 36px; margin-top: -18px; max-width: 60vw; padding: 6px 12px; border-radius: 8px;
+  background: var(--surface); color: var(--text); border: 1px solid var(--line-strong); box-shadow: var(--shadow);
+  font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
   html:has(body:not(.at-home)), body:not(.at-home) { overscroll-behavior-x: none; }
   .grid-body, .gh-cell, .tabs { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
   /* キーボードが出たら、見える範囲に収める */
