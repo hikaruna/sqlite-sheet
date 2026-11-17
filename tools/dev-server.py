@@ -8,7 +8,7 @@
 
 使い方:
   python tools/dev-server.py --port 8000
-  python tools/dev-server.py --port 8767 --cert lan.crt --key lan.key   # HTTPS（スマホから確かめるとき）
+  python tools/dev-server.py --port 8767 --cert lan.crt --key lan.key   # HTTPS（スマホから確かめるとき）。同じポートで http://localhost も受ける
 """
 import argparse
 import datetime
@@ -16,6 +16,7 @@ import http.server
 import io
 import os
 import re
+import socket
 import ssl
 import sys
 
@@ -74,6 +75,29 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         return io.BytesIO(body)
 
 
+class DualServer(http.server.ThreadingHTTPServer):
+    """証明書があれば、接続ごとに最初の1バイトを見て TLS（0x16）なら https、それ以外は http として受ける"""
+
+    def __init__(self, addr, handler, ctx):
+        self.ctx = ctx
+        super().__init__(addr, handler)
+
+    def finish_request(self, request, client_address):
+        if self.ctx:
+            request.settimeout(10)
+            try:
+                first = request.recv(1, socket.MSG_PEEK)
+            except OSError:
+                return
+            request.settimeout(None)
+            if first == b'\x16':
+                try:
+                    request = self.ctx.wrap_socket(request, server_side=True)
+                except (ssl.SSLError, OSError):
+                    return
+        super().finish_request(request, client_address)
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     p.add_argument('--port', type=int, default=8000)
@@ -81,14 +105,16 @@ def main():
     p.add_argument('--cert')
     p.add_argument('--key')
     a = p.parse_args()
-    server = http.server.ThreadingHTTPServer((a.bind, a.port), Handler)
-    scheme = 'http'
+    ctx = None
     if a.cert:
         ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         ctx.load_cert_chain(a.cert, a.key)
-        server.socket = ctx.wrap_socket(server.socket, server_side=True)
-        scheme = 'https'
-    print(f'{scheme}://localhost:{a.port}/ を配信中（{ROOT}）', flush=True)
+    server = DualServer((a.bind, a.port), Handler, ctx)
+    if ctx:
+        # 同じポートで http も受ける。スマホは https、手元のブラウザは http://localhost（証明書の警告なし）
+        print(f'https://<この PC の IP>:{a.port}/ と http://localhost:{a.port}/ を配信中（{ROOT}）', flush=True)
+    else:
+        print(f'http://localhost:{a.port}/ を配信中（{ROOT}）', flush=True)
     try:
         server.serve_forever()
     except KeyboardInterrupt:
