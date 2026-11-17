@@ -1888,7 +1888,7 @@ export function imageUrlOf(v) {
 /**
  * セルのプレビュー（BLOB と URL で共通）：サムネイルと付加情報の文字。
  * showInfo が false なら文字は出さない（画像が読めなかったときだけ文字に戻す）。
- * 画像の横に文字を置く余白がなければ、文字を画像の下の方に重ねる（.info-over）
+ * 置き場所（右・絵の下・絵に重ねる）は placeInfo() で決める
  */
 function preview(cell, src, text, external, showInfo) {
   const img = thumb(src, external);
@@ -1898,16 +1898,32 @@ function preview(cell, src, text, external, showInfo) {
   if (showInfo) cell.append(info);
   img.addEventListener('error', () => { if (!showInfo) cell.append(text); }, { once: true });
   if (!showInfo) return;
-  const place = () => requestAnimationFrame(() => {
-    if (!img.isConnected) return;
-    const room = cell.clientWidth - (img.offsetLeft + img.offsetWidth);
-    const over = room < INFO_ROOM;
-    cell.classList.toggle('info-over', over);
-    if (over) { info.style.left = img.offsetLeft + 'px'; info.style.width = img.offsetWidth + 'px'; }
-  });
-  if (img.complete) place(); else img.addEventListener('load', place, { once: true });
+  if (img.complete && img.naturalWidth) placeInfo(cell, img, info);
+  else img.addEventListener('load', () => placeInfo(cell, img, info), { once: true });
 }
-const INFO_ROOM = 40; // 画像の横に付加情報の文字を置くのに要る幅（これより狭ければ画像に重ねる）
+const INFO_ROOM = 40; // 画像の横に付加情報の文字を置くのに要る幅
+const INFO_LINE = 16; // 付加情報の文字1行の高さ
+
+/**
+ * 付加情報の置き場所を決める。判定は object-fit: contain で縮めたあとの、実際に描かれている絵の位置で行う。
+ * 右に余白がある → そのまま右に並べる / 絵の下に1行分の空きがある → 絵のすぐ下（.info-below）/
+ * どちらもない → 絵の下の方に黒縁取りの白文字で重ねる（.info-over。動画の字幕と同じく、どんな絵でも読める）
+ */
+function placeInfo(cell, img, info) {
+  requestAnimationFrame(() => {
+    if (!img.isConnected || !img.naturalWidth) return;
+    const W = img.offsetWidth, H = img.offsetHeight;
+    const k = Math.min(W / img.naturalWidth, H / img.naturalHeight);
+    const w = img.naturalWidth * k, h = img.naturalHeight * k;
+    const x = img.offsetLeft + (W - w) / 2, y = img.offsetTop + (H - h) / 2;
+    cell.classList.remove('info-below', 'info-over');
+    if (cell.clientWidth - (x + w) >= INFO_ROOM) { info.removeAttribute('style'); return; }
+    const below = cell.clientHeight - (y + h) >= INFO_LINE;
+    Object.assign(info.style, { left: x + 'px', width: w + 'px', top: (below ? y + h : y + h - INFO_LINE) + 'px' });
+    cell.classList.add(below ? 'info-below' : 'info-over');
+  });
+}
+
 
 /** セルのサムネイル（BLOB と URL で共通）。大きさは CSS でセルの高さに合わせる。読めなければ消して文字だけにする */
 function thumb(src, external = false) {

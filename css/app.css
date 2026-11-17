@@ -364,11 +364,16 @@ body.at-home .toolbar, body.at-home .fxbar { display: none; }
 .gr.tall .blob-thumb { max-width: 100%; }
 /* 画像で表示する URL：サムネイルは BLOB と同じ。URL の文字ははみ出た分を省略 */
 .gc.imgurl { color: var(--text-2); }
-/* プレビューの付加情報。画像の横に余白がなければ、画像の下の方に半透明の帯で重ねる（位置と幅は JS で画像に合わせる） */
-.gc.info-over .gc-info {
-  position: absolute; bottom: 3px; padding: 0 4px; border-radius: 0 0 2px 2px;
-  background: rgba(0, 0, 0, .55); color: #fff; font: 11px/16px var(--mono);
+/* プレビューの付加情報。右に余白がなければ、絵の下に空きがあればそこへ（.info-below）、なければ絵の下の方に重ねる（.info-over）。
+   位置と幅は JS で実際に描かれている絵に合わせる。重ねるときは黒縁取りの白文字（動画の字幕と同じく、どんな絵でも読める） */
+.gc.info-below .gc-info, .gc.info-over .gc-info {
+  position: absolute; padding: 0 2px; font: 11px/16px var(--mono);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; pointer-events: none;
+}
+.gc.info-below .gc-info { color: var(--text-2); text-align: center; }
+.gc.info-over .gc-info {
+  color: #fff;
+  text-shadow: -1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000, 0 -1px 0 #000, 0 1px 0 #000, -1px 0 0 #000, 1px 0 0 #000;
 }
 .gc.loading::after { content: ''; position: absolute; inset: 9px 12px; border-radius: 3px; background: var(--surface-2); }
 .gc.sel { background: var(--sel); }
