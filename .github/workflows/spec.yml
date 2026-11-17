@@ -1,0 +1,18 @@
+# 仕様書の生成物（docs/project-format.md）が、元（docs/openapi.json）と合っているかを確かめる。
+# 合っていなければ失敗する。直すときは python tools/gen-spec.py で作り直し、両方を同じコミットに入れる
+name: Spec
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: 生成物が元と合っているか
+        run: python3 tools/gen-spec.py --check

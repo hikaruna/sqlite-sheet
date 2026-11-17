@@ -1,0 +1,213 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "SQLiteシート プロジェクトの形式（ファイルと URL）",
+    "version": "1",
+    "description": "SQLiteシートの「プロジェクト」は、**DB と、その DB を見るための端末側の設定**（クエリシート・シートの並び・列の幅・行の高さ・セルの書式）をひとまとめにしたものです。同じプロジェクトを、**ファイル（`.sqlitesheet`）** と **URL** の2通りで表せます。キーの名前と構造は両方で同じです。\n\n> **安定性について**\n> - ファイルの形式は `version` で版を管理します。版 1 のファイルは、この先の版のアプリでも開けるようにします。\n> - **URL の書き方は開発中で、変わることがあります。** 長く残したいもの（保存・配布・バックアップ）はファイルを使ってください。\n> - ただし、DB を埋め込む `db_embed` の中身の読み方は変えません。\n\nこの仕様は OpenAPI 3.1 で書いています。URL は「アプリを開く GET」、ファイルは `components/schemas` の `Project` です。OpenAPI で表せないものは、次の拡張キーと説明文で補っています。\n\n| 拡張キー | 意味 |\n|---|---|\n| `x-in: fragment` | パラメーターを `?` ではなく `#` の後ろに書く |\n| `x-scope` | `project`（何を開くか）か `state`（開いたときの状態。ファイルには入らない） |\n| `x-file` | `.sqlitesheet` ファイルの決まり |\n| `x-sections` | 表で書けない決まり（一緒に書けるキー・読み込みの手順・エラー・以前の書き方など） |\n\n端末だけの記録（DB を作った・開いた時刻、SQL の実行履歴、表の拡大率、画面の言語、ホームの並べ方）は、ファイルにも URL にも入りません。"
+  },
+  "servers": [
+    { "url": "https://{host}/{base}", "description": "アプリを置いた場所。`404.html` で SPA フォールバックする GitHub Pages でも、`tools/dev-server.py` でもよい", "variables": { "host": { "default": "localhost:8000" }, "base": { "default": "" } } }
+  ],
+  "x-file": {
+    "extension": ".sqlitesheet",
+    "mediaType": "application/json",
+    "schema": "Project",
+    "description": "- 中身は UTF-8 の JSON で、最上位は [`Project`](#project) のオブジェクトです。\n- 取り込むときは、拡張子ではなく中身で判定します（JSON として読めて `format` が `\"sqlite-sheet\"` なら、プロジェクトのファイル）。\n- `format` と `version` は必須です。`db` と `db_embed` は、どちらか一方だけが必須です。\n- ファイルには、URL だけのキー（`db_name`・`project`・`sheet`・`sort`・`filter`・`range`）は書けません。書いてあれば無視して知らせます。\n- 知らないキーは無視します（新しい版で増えたキーを古いアプリで開いても壊れないように）。`version` が知っている版より大きいときは、知らせてから、わかる範囲で開きます。\n- `db` が相対パスなら、**そのファイルの場所**を基準にします（`https://example.com/a/shop.sqlitesheet` の中の `\"db\": \"shop.sqlite\"` は `https://example.com/a/shop.sqlite`）。\n- 開いたときの「保存するときの名前の候補」は、ファイル名から拡張子を除いたものです（`売上2025.sqlitesheet` → `売上2025`）。",
+    "example": {
+      "format": "sqlite-sheet",
+      "version": 1,
+      "db": "shop.sqlite",
+      "sheets": [
+        {
+          "type": "table",
+          "name": "商品",
+          "widths": { "名前": 180, "画像": 120 },
+          "heights": [[[42], 96]],
+          "format": { "wrap": [[[42], "説明"]], "image": [[[42], "画像"]] }
+        },
+        { "type": "query", "name": "高い順", "sql": "SELECT * FROM 商品 ORDER BY 価格 DESC" },
+        { "type": "view", "name": "月別" }
+      ]
+    }
+  },
+  "paths": {
+    "/{db_name}": {
+      "get": {
+        "operationId": "open",
+        "summary": "アプリを開く",
+        "description": "URL は、ファイルの JSON を **ブラケット記法** で平たくしたものです。アプリの場所（`servers`）の後ろに、パス・`?`・`#` を付けます。\n\n```\n/<db_name>?db=…&sheets[0][type]=query&sheets[0][name]=高い順&sheets[0][sql]=SELECT…&sheet=~高い順#range=B3\n```\n\nパラメーターは、どれも省略できます。何も書かなければホーム（DB の一覧）を開きます。",
+        "parameters": [
+          {
+            "name": "db_name", "in": "path", "required": true, "x-scope": "project",
+            "description": "DB の名前。省くときはパスを空にする（`/?db=…`）。`db`・`db_embed`・`project` のどれも無ければ、**端末にあるその名前の DB** を開く。どれかがあれば、保存するときの名前の候補。`project` と一緒なら、ファイル名からの候補より優先する",
+            "schema": { "type": "string" }, "example": "家計簿"
+          },
+          {
+            "name": "db", "in": "query", "x-scope": "project",
+            "description": "SQLite ファイルの URL。メモリで開く。相対パスならアプリの場所が基準。ブラウザから読めること（ほかのサイトなら CORS で許されていること）が必要",
+            "schema": { "type": "string", "format": "uri-reference" }, "example": "https://example.com/shop.sqlite"
+          },
+          {
+            "name": "db_embed", "in": "query", "x-in": "fragment", "x-scope": "project",
+            "description": "埋め込んだ DB。中身は [`Project`](#project) の `db_embed` と同じ。長く、サーバーに送る必要がないので `#` の後ろに置く。URL を知っている人なら中身を見られる",
+            "schema": { "type": "string" }
+          },
+          {
+            "name": "project", "in": "query", "x-scope": "project",
+            "description": "`.sqlitesheet` ファイルの URL。相対パスならアプリの場所が基準",
+            "schema": { "type": "string", "format": "uri-reference" }, "example": "https://example.com/shop.sqlitesheet"
+          },
+          {
+            "name": "sheets", "in": "query", "style": "deepObject", "explode": true, "x-scope": "project",
+            "description": "シートの設定。[`Sheet`](#sheet) の配列をブラケット記法で書く（[ブラケット記法](#ブラケット記法)）。例：`sheets[0][type]=query&sheets[0][name]=高い順&sheets[0][sql]=SELECT…`",
+            "schema": { "type": "array", "items": { "$ref": "#/components/schemas/Sheet" } }
+          },
+          {
+            "name": "sheet", "in": "query", "x-scope": "state",
+            "description": "開いているシート。テーブル・ビューは名前そのまま、クエリは先頭に `~`。名前そのものが `~` で始まるときは、その `~` を `~~` と重ねる。書かなければ、プロジェクトの1つ目のシート（端末の DB なら前回開いていたシート）。無ければ知らせて1つ目のシートを開く",
+            "schema": { "type": "string" }, "example": "~高い順"
+          },
+          {
+            "name": "sort", "in": "query", "x-in": "fragment", "x-scope": "state",
+            "description": "並べ替え。`列名:asc` か `列名:desc`。いくつでも並べられ、前ほど優先。`sheet` があるときだけ効く",
+            "schema": { "type": "array", "items": { "type": "string", "pattern": "^.+:(asc|desc)$" } }, "example": "日付:desc"
+          },
+          {
+            "name": "filter", "in": "query", "x-in": "fragment", "x-scope": "state",
+            "description": "絞り込み。`[\"列名\",\"条件\",\"値\"]`（JSON）。いくつでも並べられ、すべて満たす行に絞る。`sheet` があるときだけ効く",
+            "schema": { "type": "array", "items": { "type": "string" } }, "example": "[\"分類\",\"eq\",\"食費\"]"
+          },
+          {
+            "name": "range", "in": "query", "x-in": "fragment", "x-scope": "state",
+            "description": "選んでいる範囲。位置で（`B3:D7`・`B`・`3:5`・`all`）か、列名・主キーで（`R[42]C[\"price\"]`）。書き方の詳細は README の「選んだ範囲へのリンク」。`sheet` があるときだけ効く",
+            "schema": { "type": "string" }, "example": "B3:D7"
+          },
+          {
+            "name": "data", "in": "query", "x-in": "fragment", "deprecated": true, "x-scope": "project",
+            "description": "以前の `db_embed`。読み込みだけ受け付ける",
+            "schema": { "type": "string" }
+          },
+          {
+            "name": "query{n}", "in": "query", "deprecated": true, "x-scope": "project",
+            "description": "以前のクエリシートの SQL（`query1`・`query2`…）。読み込みだけ受け付け、番号の順に `sheets` の後ろへ足す",
+            "schema": { "type": "string" }
+          },
+          {
+            "name": "query{n}.name", "in": "query", "deprecated": true, "x-scope": "project",
+            "description": "以前のクエリシートの名前。省くと `query{n}`",
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": {
+          "200": { "description": "プロジェクトを開いた。`db`・`db_embed`・`project` で開いたものはメモリにあり、保存するまで端末には残らない" },
+          "default": { "description": "開けなかった。エラーを知らせてホームを開く（[エラーの扱い](#エラーの扱い)）" }
+        },
+        "x-examples": [
+          {
+            "summary": "Web 上の DB に、クエリシートを1つ足して開く",
+            "value": "/売上2025?db=https://example.com/shop.sqlite&sheets[0][type]=query&sheets[0][name]=高い順&sheets[0][sql]=SELECT * FROM 商品 ORDER BY 価格 DESC&sheet=~高い順",
+            "description": "見やすいようにエンコードしていません。実際は SQL などの値を `encodeURIComponent()` でエンコードします"
+          },
+          {
+            "summary": "置いたプロジェクトファイルを開き、範囲を選んだ状態にする",
+            "value": "/?project=https://example.com/shop.sqlitesheet&sheet=商品#range=B3:D7"
+          },
+          {
+            "summary": "埋め込んだ DB を、並べ替えて開く",
+            "value": "/?sheet=支出#db_embed=7VdLbxs3EF5Jlh9xHk3S5tADwVOBAk…&sort=日付:desc"
+          },
+          {
+            "summary": "端末の DB のシートを開く",
+            "value": "/家計簿?sheet=支出"
+          }
+        ]
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "Project": {
+        "type": "object",
+        "description": "プロジェクト。`.sqlitesheet` ファイルの中身そのもの。URL ではブラケット記法で同じキーを書く",
+        "required": ["format", "version"],
+        "properties": {
+          "format": { "const": "sqlite-sheet", "description": "形式の名前。ファイルでは必須、URL では省略可" },
+          "version": { "type": "integer", "const": 1, "description": "形式の版。ファイルでは必須、URL では省略可（省いたら、そのアプリの最新版とみなす）" },
+          "db": { "type": "string", "format": "uri-reference", "description": "SQLite ファイルの URL。相対パスなら、ファイルではそのファイルの場所を、URL ではアプリの場所を基準にする" },
+          "db_embed": { "type": "string", "contentEncoding": "base64url", "description": "DB そのもの。SQLite ファイルのバイト列を **deflate-raw**（RFC 1951、zlib ヘッダーなし）で圧縮し、**base64url**（RFC 4648 §5、`=` の埋め草なし）にしたもの。展開した先頭が `SQLite format 3` でなければエラー。**この読み方は変えない**" },
+          "sheets": { "type": "array", "items": { "$ref": "#/components/schemas/Sheet" }, "description": "シートの設定。配列の順番がシートの並び順" }
+        },
+        "oneOf": [
+          { "required": ["db"], "not": { "required": ["db_embed"] } },
+          { "required": ["db_embed"], "not": { "required": ["db"] } }
+        ],
+        "additionalProperties": true
+      },
+      "Sheet": {
+        "type": "object",
+        "description": "シート1つの設定。`widths`・`heights`・`format` は、既定と違うものだけを書く。\n\n- `table`・`view` は DB の中のものに名前で対応させる。その名前のものが DB に無ければ、その要素は無視する\n- `sheets` に書いていないテーブル・ビューも開ける。それらは `sheets` のものの後ろに並ぶ\n- 同じ `type` と `name` の要素が2つ以上あれば、最初の1つだけを使う。クエリの名前は、テーブル・ビューと同じでもよい\n- クエリシートは読み取り専用。`SELECT`（`WITH … SELECT` を含む）の1文だけが実行でき、それ以外はエラーになる。書き換えの SQL が書かれていても、データは変わらない",
+        "required": ["type", "name"],
+        "properties": {
+          "type": { "type": "string", "enum": ["table", "view", "query"], "description": "シートの種類" },
+          "name": { "type": "string", "description": "シートの名前。`table`・`view` は DB の中の名前と一致させる" },
+          "sql": { "type": "string", "description": "クエリシートの SQL。`type` が `query` のときだけ書き、そのときは必須" },
+          "widths": { "type": "object", "additionalProperties": { "type": "number", "exclusiveMinimum": 0 }, "description": "列の幅。`{ 列名: 幅(px) }`", "example": { "名前": 180 } },
+          "heights": { "type": "array", "items": { "$ref": "#/components/schemas/RowHeight" }, "description": "行の高さ" },
+          "format": { "$ref": "#/components/schemas/CellFormats" }
+        },
+        "example": { "type": "query", "name": "高い順", "sql": "SELECT * FROM 商品 ORDER BY 価格 DESC", "widths": { "価格": 90 } }
+      },
+      "RowKey": {
+        "description": "行の見分け方。並べ替え・絞り込みをしても、同じデータの行に付いてくる。数値と文字列は区別する（`[42]` と `[\"42\"]` は別の行）\n\n| シート | 行キー | 例 |\n|---|---|---|\n| 主キーのあるテーブル | 主キーの値の配列 | `[42]`・`[\"abc\"]`・`[4, \"F-010\"]`（複合主キー） |\n| 主キーのないテーブル | rowid の配列 | `[17]` |\n| ビュー・クエリ | 何行目か（0 から数える整数） | `0`・`12` |",
+        "oneOf": [
+          { "type": "array", "items": { "type": ["string", "number", "null"] }, "minItems": 1 },
+          { "type": "integer", "minimum": 0 }
+        ],
+        "example": [4, "F-010"]
+      },
+      "RowHeight": {
+        "type": "array",
+        "description": "`[行キー, 高さ(px)]` の組",
+        "prefixItems": [ { "$ref": "#/components/schemas/RowKey" }, { "type": "number", "exclusiveMinimum": 0 } ],
+        "items": false,
+        "example": [[42], 96]
+      },
+      "CellRef": {
+        "type": "array",
+        "description": "`[行キー, 列名]` の組。セル1つを指す",
+        "prefixItems": [ { "$ref": "#/components/schemas/RowKey" }, { "type": "string" } ],
+        "items": false,
+        "example": [[42], "説明"]
+      },
+      "CellFormats": {
+        "type": "object",
+        "description": "セルごとの書式。`{ 書式名: [セル, …] }`。書いたセルは、何もしないときと逆になる。書式は今後増えることがあり、知らない書式名は無視する",
+        "properties": {
+          "wrap": { "type": "array", "items": { "$ref": "#/components/schemas/CellRef" }, "description": "テキストを折り返す（何もしなければ折り返さない）" },
+          "image": { "type": "array", "items": { "$ref": "#/components/schemas/CellRef" }, "description": "URL だけの文字列を画像で表示する（何もしなければ文字で表示）" },
+          "info": { "type": "array", "items": { "$ref": "#/components/schemas/CellRef" }, "description": "プレビューの付加情報（URL・種類・大きさ）を**出さない**（何もしなければ出す）" }
+        },
+        "additionalProperties": { "type": "array", "items": { "$ref": "#/components/schemas/CellRef" } },
+        "example": { "wrap": [[[42], "説明"]] }
+      }
+    }
+  },
+  "x-sections": [
+    {
+      "title": "ブラケット記法",
+      "body": "URL のキーは、JSON でのたどり方をそのまま書いたものです。`sheets[1].widths.名前` は `sheets[1][widths][名前]` です。\n\n- 配列の要素は番号 `[n]`（0 以上の整数）で指します。**番号は並び順に使うだけ**なので、飛んでいてもかまいません（`sheets[0]`・`sheets[5]`・`sheets[10]` は、この順の3つの要素）。番号のない `[]` は使えません\n- オブジェクトのメンバーは名前 `[名前]` で指します。名前に `[` や `]` が入るときや、数字だけの名前は、JSON の文字列にして書きます：`sheets[0][widths][\"a[1]\"]=120`\n- 読むときは、`[` `]` がそのままでも `%5B` `%5D` にエンコードされていても受け付けます。アプリが作る URL では、そのまま書きます\n\n値の書き方：\n\n- **型が文字列のキー**（`type`・`name`・`sql`・`db`・`db_embed`・`project`・`format`）の値は、そのまま書きます（URL のエンコードだけをします）\n- **それ以外**（数値・配列・オブジェクト）は JSON で書きます\n- 道筋はどの深さで止めてもかまいません。止めた所から下は、まとめて JSON で書きます。次の2行は同じ意味です\n\n```\nsheets[0][heights][0]=[[42],96]&sheets[0][heights][1]=[[43],60]\nsheets[0][heights]=[[[42],96],[[43],60]]\n```\n\n- 同じ所を2通りに書いたとき（`sheets[0][widths]=…` と `sheets[0][widths][名前]=…` の両方など）や、同じキーを2回書いたときはエラーにします\n- アプリの共有ダイアログが作る URL では、短くするために `format`・`version`、クエリシート以外の要素、`widths`・`heights`・`format`（書式）を省くことがあります。省かずに手で書いたものも、そのとおりに読みます"
+    },
+    {
+      "title": "一緒に書けるキー",
+      "body": "DB の指し方は、`db`・`db_embed`・`project` のどれか1つか、どれも書かない（端末の DB を名前で開く）かです。\n\n| 書いたもの | 開くもの | `db_name` | `sheets` |\n|---|---|---|---|\n| `db_name` だけ | 端末にある、その名前の DB | 必須 | × |\n| `db` | その URL の SQLite ファイル（メモリで開く） | 任意：保存するときの名前の候補 | ○ |\n| `db_embed` | 埋め込んだ DB（メモリで開く） | 任意：同上 | ○ |\n| `project` | その URL の `.sqlitesheet` ファイル | 任意：同上（ファイル名からの候補より優先） | × |\n\n- `db`・`db_embed`・`project` は、2つ以上一緒に書けません\n- `project` と一緒に書けるのは、`db_name`・`sheet`・`#` の後ろの `sort`・`filter`・`range` だけです\n- 端末の DB を開くとき（`db_name` だけ）は、`sheets` は書けません。端末の DB の設定は、その端末にあるものを使います\n- `sort`・`filter`・`range` は、**`sheet` があるときだけ**効きます。`sheet` が無ければ無視して知らせます。プロジェクトに入っている設定より優先します\n- `#` の後ろでは、`db_embed` と状態を `&` でつなぎます：`#db_embed=…&range=B3`\n- 以前の書き方（`#data=`・`query{n}=`）と新しい書き方を一緒に書いたときは、エラーにします"
+    },
+    {
+      "title": "読み込みの手順",
+      "body": "1. URL を読み、DB の指し方（`db`・`db_embed`・`project`・`db_name` だけ）を決める。一緒に書けないキーがあればエラー\n2. `project` なら、そのファイルを取得して JSON として読み、ファイルの決まりで検査する。`db` の相対パスはそのファイルの場所を基準に解決する\n3. DB を読み込む。`db` なら取得、`db_embed` なら base64url を戻して deflate-raw を展開する。先頭が `SQLite format 3` でなければエラー\n4. `sheets` を当てる：クエリシートを足し、シートの並びと列の幅・行の高さ・セルの書式を、その DB の端末側の設定に入れる\n5. `sheet` のシートを開き、`sort`・`filter`・`range` を当てる"
+    },
+    {
+      "title": "エラーの扱い",
+      "body": "| こんなとき | どうなるか |\n|---|---|\n| 一緒に書けないキーがある、JSON が壊れている、`format` が違う、必須のキーが無い | エラーを知らせてホームを開く |\n| ファイルや DB を取得できない（見つからない・CORS で拒まれた） | 同上 |\n| `version` が知っている版より大きい | 知らせて、わかる範囲で開く |\n| `sheets` の要素が壊れている（`type` が無い・型が違うなど） | その要素だけ無視して知らせる |\n| 無いテーブル・ビュー、無い列、無い行キー | 黙って無視する |\n| `sheet` のシートが無い | 知らせて、1つ目のシートを開く |"
+    }
+  ]
+}

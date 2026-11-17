@@ -1,0 +1,42 @@
+{
+  "format": "sqlite-sheet",
+  "version": 1,
+  "db": "sample.sqlite",
+  "sheets": [
+    {
+      "type": "table",
+      "name": "商品",
+      "widths": {
+        "名前": 120,
+        "説明": 220
+      },
+      "heights": [
+        [
+          [
+            1
+          ],
+          72
+        ]
+      ],
+      "format": {
+        "wrap": [
+          [
+            [
+              1
+            ],
+            "説明"
+          ]
+        ]
+      }
+    },
+    {
+      "type": "query",
+      "name": "高い順",
+      "sql": "SELECT 名前, 分類, 価格 FROM 商品 ORDER BY 価格 DESC"
+    },
+    {
+      "type": "view",
+      "name": "分類別"
+    }
+  ]
+}

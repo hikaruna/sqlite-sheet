@@ -14,6 +14,7 @@ import { createSample, SAMPLE_QUERIES } from './sample.js';
 import * as store from './store.js';
 import { APP_VERSION } from './version.js';
 import * as files from './files.js';
+import * as project from './project.js';
 import { readProtections, protectSql, unprotectSql, protectionChecker, canProtectRows, describe, KIND_ICON as PROT_ICON } from './protect.js';
 
 const MOD = isMac ? '⌘' : 'Ctrl+';
@@ -77,15 +78,9 @@ function showFatal(e) {
 const BASE = new URL('../', import.meta.url).pathname;
 const REDIRECT = 'redirect-url'; // 404.html が元の URL を預ける sessionStorage のキー
 
-function parseUrl() {
-  const path = location.pathname.startsWith(BASE) ? location.pathname.slice(BASE.length) : '';
-  let dbName = null;
-  try { dbName = decodeURIComponent(path.split('/')[0]) || null; } catch { /* 壊れたエンコードは無視 */ }
-  const p = new URLSearchParams(location.search);
-  // #data=<圧縮した DB>：共有リンクに埋め込まれたデータ（# 以降はサーバーに送られない）
-  const data = hashParams().get('data');
-  return { dbName, sheet: p.get('sheet'), src: p.get('db'), data };
-}
+// プロジェクトの URL の読み方は js/project.js（仕様は docs/openapi.json）。
+// ?db=・#db_embed=・?project= のどれかで DB を指し、?sheets[n][…]= でシートの設定を添える
+const parseUrl = () => project.parseLink(location, BASE);
 
 // ---------- # 以降：選択を渡すリンク（「🔗 リンクをコピー」で作る。選んだだけでは URL は変えない） ----------
 // #data=…&sort=列:desc&filter=["列","op","値"]&range=B3:D7
@@ -99,9 +94,13 @@ function hashParams() {
   return new URLSearchParams(!h || h.startsWith('#/') ? '' : h.slice(1));
 }
 
-/** # から並べ替え・絞り込み・選択を読む */
+/** # から並べ替え・絞り込み・選択を読む。?sheet= が無ければ当てない（どのシートに当てるか決まらないので） */
 function readHashView() {
   const p = hashParams();
+  if (project.hasViewHash(p) && !new URLSearchParams(location.search).has('sheet')) {
+    toast(tr('リンクの並べ替え・絞り込み・選択は、開くシート（sheet）が書かれていないので当てませんでした'), 'info', 6000);
+    return { sorts: [], filters: [], sel: null, raw: [] };
+  }
   const sorts = p.getAll('sort').map((v) => {
     const i = v.lastIndexOf(':'), dir = v.slice(i + 1);
     return i > 0 && (dir === 'asc' || dir === 'desc') ? { col: v.slice(0, i), dir } : { col: v, dir: 'asc' };
@@ -114,7 +113,7 @@ function readHashView() {
   }).filter(Boolean);
   const sel = p.get('range') ? { range: p.get('range') } : null;
   // 開いたあと、並べ替え・絞り込み・選択を変えるまでは URL に残す
-  const raw = [...p.entries()].filter(([k]) => k !== 'data');
+  const raw = [...p.entries()].filter(([k]) => k !== 'data' && k !== 'db_embed');
   return { sorts, filters, sel, raw };
 }
 
@@ -136,8 +135,8 @@ function viewParams(key = state.key) {
   return out;
 }
 
-function hashOf(data, params = []) {
-  const parts = [...(data ? ['data=' + data] : []), ...params.map(hashParam)];
+function hashOf(embed, params = []) {
+  const parts = [...(embed ? ['db_embed=' + embed] : []), ...params.map(hashParam)];
   return parts.length ? '#' + parts.join('&') : '';
 }
 
@@ -318,45 +317,20 @@ function linkItems() {
   return ['-', { label: tr('🔗 リンクを作る…'), disabled: !rangeParam() && !namedRange(), action: () => shareDialog({ withSelection: true }) }];
 }
 
-/** URL から読んだ DB の URL（/<保存するときの名前の候補>?db=…&sheet=…） */
+/** URL から読んだ DB の URL（/<保存するときの名前の候補>?db=…&sheets[0][…]=…&sheet=…#db_embed=…）。ファイルから開いたものは URL に載せない */
 function urlOfSrc(m, key) {
-  return linkUrl({ wanted: m.wanted, src: m.embed ? null : m.url, queryParams: m.queryParams, key, data: m.embed, hash: key && key === state.key ? viewHashParams() : [] });
+  if (m.noUrl) return BASE;
+  const params = m.project ? [['project', m.project]] : [...(m.embed ? [] : [['db', m.url]]), ...m.keep];
+  return linkUrl({ wanted: m.wanted, params, key, embed: m.embed, hash: key && key === state.key ? viewHashParams() : [] });
 }
 
-/** /<名前>?db=…&query1=…&sheet=…#data=… を組み立てる（src・data はどちらか一方） */
-function linkUrl({ wanted, src, queryParams = [], key, data, hash = [] }) {
-  const params = [];
-  if (src) params.push(['db', src]);
-  params.push(...queryParams);
-  if (key) params.push(['sheet', sheetParam(key)]);
+/** /<名前>?<params>&sheet=…#db_embed=…&<hash> を組み立てる。キーの [ ] はそのまま書く */
+function linkUrl({ wanted, params = [], key, embed, hash = [] }) {
+  const all = [...params, ...(key ? [['sheet', sheetParam(key)]] : [])];
+  const encKey = (k) => encodeURIComponent(k).replace(/%5B/g, '[').replace(/%5D/g, ']');
   return BASE + (wanted ? encodeURIComponent(wanted) : '')
-    + (params.length ? '?' + params.map(([k, v]) => k + '=' + encodeURIComponent(v)).join('&') : '')
-    + hashOf(data, hash);
-}
-
-/** 文字列の短い指紋（埋め込みデータの端末側データのキーに使う。長いデータをそのままキーにしない） */
-function fingerprint(str) {
-  let h = 0x811c9dc5;
-  for (let i = 0; i < str.length; i++) h = Math.imul(h ^ str.charCodeAt(i), 0x01000193);
-  return (h >>> 0).toString(36) + '-' + str.length.toString(36);
-}
-
-/**
- * ?db= に添えた ?query1=<SQL>&query1.name=<名前>&query2=… を、番号の順に読む。
- * 返り値: { list: [{ name, sql }], params: URL に残す [キー, 値] }。名前がなければ query1 など
- */
-function urlQueries(p = new URLSearchParams(location.search)) {
-  const nums = [...new Set([...p.keys()].map((k) => k.match(/^query(\d+)$/)?.[1]).filter(Boolean))]
-    .sort((a, b) => a - b);
-  const list = [], params = [];
-  for (const n of nums) {
-    const sql = p.get('query' + n), name = p.get(`query${n}.name`)?.trim();
-    if (!sql?.trim()) continue;
-    params.push(['query' + n, sql]);
-    if (name) params.push([`query${n}.name`, name]);
-    list.push({ name: name || 'query' + n, sql });
-  }
-  return { list, params };
+    + (all.length ? '?' + all.map(([k, v]) => encKey(k) + '=' + encodeURIComponent(v)).join('&') : '')
+    + hashOf(embed, hash);
 }
 
 /** 内部キー（'t:名前' 等）→ ?sheet= の値 */
@@ -388,8 +362,8 @@ function setUrl() {
     : state.manual ? urlOf(null) : urlOf(state.dbName, state.key);
   if (location.pathname + location.search + location.hash !== u) {
     const was = parseUrl();
-    const same = state.manual?.kind === 'url' ? (state.manual.embed ? was.data === state.manual.embed : was.src === state.manual.url)
-      : !was.src && was.dbName === (state.manual ? null : state.dbName);
+    const same = state.manual?.kind === 'url' ? (state.manual.noUrl || was.sig === state.manual.sig)
+      : !was.sig && was.dbName === (state.manual ? null : state.dbName);
     if (same) history.replaceState(null, '', u);
     else history.pushState(null, '', u);
   }
@@ -417,26 +391,32 @@ async function route() {
 }
 
 async function routeInner() {
-  const { dbName, sheet, src, data } = parseUrl();
-  // ?db=<SQLite ファイルの URL>：そのファイルをメモリに読み込んで開く（手動保存）。
-  // /<DB 名> は保存するときの名前の候補、?sheet= は開くシート
-  // #data=<圧縮した DB>：共有リンクに埋め込まれたデータを、?db= と同じようにメモリで開く
-  if (src || data) {
-    // 同じファイル・同じクエリならシートを切り替えるだけ。クエリが違えば読み直す
-    if (state.manual?.kind === 'url' && (data ? state.manual.embed === data : !state.manual.embed && state.manual.url === src)
-      && JSON.stringify(urlQueries().params) === JSON.stringify(state.manual.queryParams)) {
+  const link = parseUrl();
+  const { dbName, sheet } = link;
+  if (link.error) {
+    toast(link.error, 'error', 8000);
+    if ((state.manual || state.dbName) && !(await leaveCurrent())) { setUrl(); return; }
+    history.replaceState(null, '', BASE);
+    return showWelcome();
+  }
+  // ?db=<SQLite ファイルの URL>・#db_embed=<埋め込んだ DB>・?project=<.sqlitesheet の URL>：メモリに読み込んで開く（手動保存）。
+  // /<DB 名> は保存するときの名前の候補、?sheet= は開くシート、?sheets[n][…]= はシートの設定
+  if (link.sig) {
+    // 同じものならシートを切り替えるだけ。シートの設定が違えば読み直す
+    if (state.manual?.kind === 'url' && state.manual.sig === link.sig) {
       const key = keyOfParam(sheet);
       if (key && key !== state.key) await showSheet(key);
       else if (!(await syncFromHash())) setUrl();
       return;
     }
     if (!(await leaveCurrent())) { if (state.dbName) setUrl(); else history.replaceState(null, '', BASE); return; }
-    return data ? loadEmbedded(data, dbName, sheet) : loadFromUrl(src, dbName, sheet);
+    for (const w of link.warnings) toast(w, 'info', 6000);
+    return link.project ? loadProjectUrl(link) : link.embed ? loadEmbedded(link) : loadFromUrl(link.db, link);
   }
   // 手動保存のものを開いているときに「戻る」などで URL が変わったとき：
   // ファイルを編集中でホームの URL ならそのまま、ほかへなら未保存の確認をしてから
   if (state.manual) {
-    if (!dbName && state.manual.kind === 'file') return setUrl();
+    if (!dbName && (state.manual.kind === 'file' || state.manual.noUrl)) return setUrl();
     if (!(await leaveCurrent())) { setUrl(); return; }
   }
   // / は最初の画面。前回の DB を勝手には開かない
@@ -577,7 +557,7 @@ function buildChrome() {
   // ファイルに保存していない変更があるときも確認
   addEventListener('beforeunload', (e) => { if (state.grid?.hasDraft || state.inTx || (state.manual && state.dirty)) { e.preventDefault(); e.returnValue = ''; } });
   // .sqlite ファイルのドラッグ＆ドロップ
-  document.documentElement.style.setProperty('--drop-label', JSON.stringify(tr('.sqlite ファイルをドロップして読み込む')));
+  document.documentElement.style.setProperty('--drop-label', JSON.stringify(tr('.sqlite・.sqlitesheet ファイルをドロップして読み込む')));
   addEventListener('dragover', (e) => { if (e.dataTransfer?.types.includes('Files')) { e.preventDefault(); document.body.classList.add('dropping'); } });
   addEventListener('dragleave', (e) => { if (!e.relatedTarget) document.body.classList.remove('dropping'); });
   addEventListener('drop', (e) => {
@@ -673,7 +653,7 @@ function showWelcome() {
         el('p.lead', tr('スプレッドシートの手軽さで、SQLite データベースを。'))),
       el('div.home-tools',
         el('button.btn.primary', { title: tr('空のデータベースを作る'), on: { click: newDb } }, tr('＋ 新規作成')),
-        el('button.btn', { title: tr('.sqlite ファイルをデータベースとして取り込む（ドラッグ＆ドロップでも可）'), on: { click: pickSqlite } }, tr('⤒ 取り込む')),
+        el('button.btn', { title: tr('.sqlite ファイルをデータベースとして取り込む・.sqlitesheet ファイルを開く（ドラッグ＆ドロップでも可）'), on: { click: pickSqlite } }, tr('⤒ 取り込む')),
         el('button.btn', { title: tr('サンプルのデータベースを作る'), on: { click: makeSample } }, tr('✨ サンプル')),
         files.supported ? el('button.btn', { title: tr('パソコンの .sqlite ファイルをそのまま開いて編集する'), on: { click: fileModeDialog } }, tr('📂 ローカルファイルを直接編集…')) : null,
         isPwa() ? el('button.btn', { title: tr('Web 上の .sqlite ファイルを URL で開く（保存するまで何も残らない）'), on: { click: (e) => openUrlDialog(e.currentTarget) } }, tr('🌐 URL から開く…')) : null),
@@ -837,6 +817,8 @@ async function showDb(key, param) {
   Object.assign($('db-name'), {
     value: dbLabel(), hidden: false, readOnly: !!state.manual,
     title: state.manual?.embed ? tr('リンクに埋め込まれたデータを開いています（保存すると、データベースとして残ります）')
+      : state.manual?.project ? tr('プロジェクトのファイルから読み込んでいます（保存すると、データベースとして残ります）：{0}', [state.manual.project])
+      : state.manual?.noUrl ? tr('手元のプロジェクトのファイルから開いています（保存すると、データベースとして残ります）')
       : state.manual?.kind === 'url' ? tr('URL から読み込んでいます（保存すると、データベースとして残ります）：{0}', [state.manual.url])
       : state.manual ? tr('ローカルファイルを直接編集しています') : tr('クリックして名前を変更'),
   });
@@ -1164,12 +1146,15 @@ async function makeSample() {
 
 // スマホのファイル選択は、知らない拡張子（.sqlite など）を選べなくすることがあるので絞らない。中身は importFile が確かめる
 async function pickSqlite() {
-  const f = await pickFile(isTouch ? '' : '.sqlite,.sqlite3,.db,application/x-sqlite3');
+  const f = await pickFile(isTouch ? '' : `.sqlite,.sqlite3,.db,${project.EXT},application/x-sqlite3`);
   if (f) importFile(f);
 }
 
 async function importFile(file) {
-  importBytes(new Uint8Array(await file.arrayBuffer()), file.name.replace(/\.(sqlite3?|db)$/i, ''));
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  // プロジェクト（.sqlitesheet）は、中身で見分けてメモリで開く
+  if (project.looksLikeProject(bytes)) return openProjectFile(bytes, file.name);
+  importBytes(bytes, file.name.replace(/\.(sqlite3?|db)$/i, ''));
 }
 
 /** SQLite のファイルの中身を、名前を聞いてからデータベースとして取り込んで開く（sheet は開く ?sheet= の値） */
@@ -1193,67 +1178,155 @@ async function importBytes(bytes, defName, sheet = null) {
   } catch (e) { toast(friendlyError(e.message), 'error'); }
 }
 
-/**
- * URL の ?db= で指定された SQLite ファイルを、メモリに読み込んで開く（手動保存。保存すると OPFS のデータベースになる）。
- * wanted は URL のパスの DB 名（保存するときの名前の候補）、sheet は開く ?sheet= の値
- */
-async function loadFromUrl(src, wanted, sheet) {
-  const fail = (msg) => {
-    history.replaceState(null, '', BASE);
-    if (state.manual?.kind === 'url' || !state.dbName) showWelcome();
-    toast(msg, 'error', 8000);
-  };
-  let url;
-  try { url = new URL(src, location.href); } catch { url = null; }
-  if (!url || !/^https?:$/.test(url.protocol)) return fail(tr('読み込めない URL です：{0}', [src]));
-  let file = url.pathname.split('/').pop() || '';
-  try { file = decodeURIComponent(file); } catch { /* 壊れたエンコードはそのまま */ }
-  const name = file.replace(/\.(sqlite3?|db)$/i, '') || url.hostname;
+/** 読み込みに失敗したとき：知らせてホームへ（ほかのものを開いていればそのまま） */
+function loadFail(msg) {
+  if (state.manual?.kind === 'url' || !state.dbName) { history.replaceState(null, '', BASE); showWelcome(); }
+  else setUrl();
+  toast(msg, 'error', 8000);
+}
+
+/** URL のファイルを取得する。失敗したら知らせて null */
+async function fetchUrl(url) {
   const loading = toast(tr('読み込んでいます…'), 'info', 60000);
-  let bytes;
   try {
     const res = await fetch(url);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    bytes = new Uint8Array(await res.arrayBuffer());
+    return new Uint8Array(await res.arrayBuffer());
   } catch (e) {
     loading?.remove?.();
-    return fail(tr('ファイルを取得できませんでした（{0}）。相手のサーバーが他のサイトからの読み込みを許していない（CORS）こともあります', [e.message]));
+    loadFail(tr('ファイルを取得できませんでした（{0}）。相手のサーバーが他のサイトからの読み込みを許していない（CORS）こともあります', [e.message]));
+    return null;
+  } finally { loading?.remove?.(); }
+}
+
+/** http(s) の URL にする（base は相対パスの基準）。できなければ null */
+function httpUrl(src, base = location.href) {
+  try { const u = new URL(src, base); return /^https?:$/.test(u.protocol) ? u : null; } catch { return null; }
+}
+
+/** URL のパスの最後のファイル名から拡張子を除いたもの（保存するときの名前の候補） */
+function nameOfUrl(url, ext) {
+  let file = url.pathname.split('/').pop() || '';
+  try { file = decodeURIComponent(file); } catch { /* 壊れたエンコードはそのまま */ }
+  return file.replace(ext, '') || url.hostname;
+}
+
+const isSqlite = (bytes) => new TextDecoder().decode(bytes.slice(0, 15)) === 'SQLite format 3';
+
+/** db_embed（deflate-raw して base64url にしたもの）を戻す。読めなければ null */
+async function decodeEmbed(str) {
+  try { return await inflate(fromBase64Url(str)); } catch { return null; }
+}
+
+/**
+ * URL の ?db= で指定された SQLite ファイルを、メモリに読み込んで開く（手動保存。保存すると OPFS のデータベースになる）。
+ * link は parseUrl() の結果（dbName は保存するときの名前の候補、sheet は開くシート、sheets はシートの設定）
+ */
+async function loadFromUrl(src, link) {
+  const url = httpUrl(src);
+  if (!url) return loadFail(tr('読み込めない URL です：{0}', [src]));
+  const bytes = await fetchUrl(url);
+  if (!bytes) return;
+  if (!isSqlite(bytes)) return loadFail(tr('SQLite のデータベースファイルではありません'));
+  await openLoaded(bytes, { url: src, key: 'url:' + src, name: nameOfUrl(url, /\.(sqlite3?|db)$/i), link });
+}
+
+/** #db_embed= に埋め込まれた DB をメモリで開く */
+async function loadEmbedded(link) {
+  const bytes = await decodeEmbed(link.embed);
+  if (!bytes) return loadFail(tr('リンクに埋め込まれたデータを読めませんでした。リンクが途中で切れているかもしれません'));
+  if (!isSqlite(bytes)) return loadFail(tr('SQLite のデータベースファイルではありません'));
+  await openLoaded(bytes, { embed: link.embed, key: 'url:#' + project.fingerprint(link.embed), name: link.dbName || tr('共有されたデータ'), link });
+}
+
+/** ?project=<.sqlitesheet の URL>：ファイルを取得して、中の db（相対パスならファイルの場所が基準）か db_embed を開く */
+async function loadProjectUrl(link) {
+  const url = httpUrl(link.project);
+  if (!url) return loadFail(tr('読み込めない URL です：{0}', [link.project]));
+  const bytes = await fetchUrl(url);
+  if (!bytes) return;
+  const r = project.parseProjectFile(new TextDecoder().decode(bytes));
+  if (r.error) return loadFail(r.error);
+  for (const w of r.warnings) toast(w, 'info', 6000);
+  const name = link.dbName || nameOfUrl(url, /\.sqlitesheet$/i);
+  await openProject(r.project, { base: url.href, key: 'url:project:' + url.href, name, link, projectUrl: link.project });
+}
+
+/** 手元の .sqlitesheet ファイルを開く。ファイルの場所はわからないので、db は絶対 URL でなければならない。URL には載せない */
+async function openProjectFile(bytes, filename) {
+  const text = new TextDecoder().decode(bytes);
+  const r = project.parseProjectFile(text);
+  if (r.error) { toast(r.error, 'error', 8000); return; }
+  if (r.project.db && !/^[a-z][a-z0-9+.-]*:/i.test(r.project.db)) {
+    toast(tr('手元のファイルから開くプロジェクトでは、db に相対パスは使えません（ファイルの場所がわからないため）：{0}', [r.project.db]), 'error', 8000);
+    return;
   }
-  loading?.remove?.();
-  if (new TextDecoder().decode(bytes.slice(0, 15)) !== 'SQLite format 3') return fail(tr('SQLite のデータベースファイルではありません'));
-  await openLoaded(bytes, { url: src, key: 'url:' + src, name, wanted, sheet }, fail);
+  if (!(await leaveCurrent())) return;
+  for (const w of r.warnings) toast(w, 'info', 6000);
+  const name = filename.replace(/\.sqlitesheet$/i, '') || tr('プロジェクト');
+  await openProject(r.project, { base: location.href, key: 'url:file:' + project.fingerprint(text), name, link: null, noUrl: true });
 }
 
-/** #data= に埋め込まれた DB（deflate で圧縮して base64url にしたもの）をメモリで開く */
-async function loadEmbedded(data, wanted, sheet) {
-  const fail = (msg) => {
-    history.replaceState(null, '', BASE);
-    if (state.manual?.kind === 'url' || !state.dbName) showWelcome();
-    toast(msg, 'error', 8000);
+/** 読んだプロジェクトの DB を読み込んで開く（?project= と手元のファイルで共通） */
+async function openProject(p, { base, key, name, link, projectUrl = null, noUrl = false }) {
+  let bytes, dbUrl = null;
+  if (p.db) {
+    const url = httpUrl(p.db, base);
+    if (!url) return loadFail(tr('読み込めない URL です：{0}', [p.db]));
+    dbUrl = url.href;
+    bytes = await fetchUrl(url);
+    if (!bytes) return;
+  } else {
+    bytes = await decodeEmbed(p.db_embed);
+    if (!bytes) return loadFail(tr('プロジェクトに埋め込まれた DB（db_embed）を読めませんでした'));
+  }
+  if (!isSqlite(bytes)) return loadFail(tr('SQLite のデータベースファイルではありません'));
+  await openLoaded(bytes, { url: dbUrl, key, name, link, sheets: p.sheets, projectUrl, noUrl });
+}
+
+/**
+ * 読み込んだ DB をメモリで開き、シートの設定（sheets）を端末側に入れて表示する（?db=・#db_embed=・?project=・手元のファイル共通）。
+ * link は開いた URL（parseUrl() の結果。手元のファイルなら null）、sheets はシートの設定（省けば link のもの）
+ */
+async function openLoaded(bytes, { url = null, embed = null, key, name, link, sheets = link?.sheets || [], projectUrl = null, noUrl = false }) {
+  try { await db.openBytes(key, bytes); } catch (e) { return loadFail(friendlyError(e.message)); }
+  // 端末側データ（列幅など）のキー。名前に「:」を含むので OPFS の DB とは重ならない。
+  // シートの設定（クエリシート・並び・列幅など）を入れる（クエリシートは SELECT しか通らないので読み取り専用）。
+  // ?db= などは URL にも残すので、リロード・共有で同じものが開く
+  state.manual = {
+    kind: 'url', url, embed, project: projectUrl, name, wanted: link?.dbName || null,
+    keep: link?.keep || [], sig: noUrl ? null : link?.sig ?? null, noUrl,
   };
-  let bytes;
-  try { bytes = await inflate(fromBase64Url(data)); } catch { return fail(tr('リンクに埋め込まれたデータを読めませんでした。リンクが途中で切れているかもしれません')); }
-  if (new TextDecoder().decode(bytes.slice(0, 15)) !== 'SQLite format 3') return fail(tr('SQLite のデータベースファイルではありません'));
-  await openLoaded(bytes, { url: null, embed: data, key: 'url:#' + fingerprint(data), name: wanted || tr('共有されたデータ'), wanted, sheet }, fail);
-}
-
-/** 読み込んだ DB をメモリで開き、URL の ?query1= などのクエリシートを足して表示する（?db= と #data= 共通） */
-async function openLoaded(bytes, { url, embed = null, key, name, wanted, sheet }, fail) {
-  try { await db.openBytes(key, bytes); } catch (e) { return fail(friendlyError(e.message)); }
-  // 端末側データ（列幅など）のキー。名前に「:」を含むので OPFS の DB とは重ならない
-  // ?query1= などで添えたクエリは、クエリシートとして足す（クエリシートは SELECT しか通らないので読み取り専用）。
-  // URL にも残すので、リロード・共有で同じシートが並ぶ
-  const { list, params } = urlQueries();
-  state.manual = { kind: 'url', url, embed, name, wanted: wanted || null, queryParams: params };
   state.dbName = key;
   store.removeDb(state.dbName);
-  if (list.length) {
-    const qs = [];
-    for (const x of list) qs.push({ name: uniqueName(x.name, qs.map((y) => y.name)), sql: x.sql });
-    store.setQueries(state.dbName, qs);
-  }
+  await project.applySheets(state.dbName, sheets, async (t) => {
+    try { return (await readTable(t)).pk; } catch { return null; }
+  });
   setDirty(false);
-  await showDb(null, sheet);
+  await showDb(null, link?.sheet ?? null);
+}
+
+/** プロジェクトとして書き出す（.sqlitesheet）。?db= で開いて変更が無ければ db にその URL を、それ以外は DB を埋め込む */
+async function exportProject() {
+  if (!state.dbName) return;
+  if (state.grid && !(await state.grid.flushDraft())) return;
+  const m = state.manual;
+  const filename = `${(m ? (m.wanted || m.name) : state.dbName).replace(/\.(sqlite3?|db)$/i, '')}${project.EXT}`;
+  try {
+    const dbUrl = m?.kind === 'url' && m.url && !state.dirty ? new URL(m.url, location.href).href : null;
+    const embed = dbUrl ? null : toBase64Url(await deflate(await db.exportDb(state.dbName)));
+    const text = project.projectText({ db: dbUrl, embed, sheets: project.collectSheets(state.dbName, allKeys(), state.queries) });
+    const bytes = new TextEncoder().encode(text);
+    if (typeof window.showSaveFilePicker !== 'function') { await exportFile(bytes, filename, 'application/json'); return; }
+    let handle;
+    try { handle = await window.showSaveFilePicker({ suggestedName: filename, types: project.PICKER_TYPES, id: 'sqlite-sheet-project' }); } catch (e) {
+      if (e.name === 'AbortError') return;
+      throw e;
+    }
+    const w = await handle.createWritable();
+    await w.write(bytes); await w.close();
+    toast(dbUrl ? tr('「{0}」に書き出しました（DB は元のファイルの URL を指します）', [handle.name]) : tr('「{0}」に書き出しました（DB を埋め込みました）', [handle.name]), 'success');
+  } catch (e) { toast(friendlyError(e.message), 'error'); }
 }
 
 // ---------- 共有 ----------
@@ -1289,12 +1362,13 @@ function refersOtherDb(sql) {
 /**
  * 「🔗 共有…」と、右クリックの「🔗 リンクを作る…」（withSelection：今の選択も入れる）。
  * DB の渡し方・選択の指し方・並べ替えと絞り込みを選ぶと、下のリンクがすぐ変わる。
- * DB は「含めない」（端末の DB を名前で開く）・元のファイルの URL（?db= で開いたとき）・置いたファイルの URL・#data= に埋め込む
+ * DB は「含めない」（端末の DB を名前で開く）・元のファイルの URL（?db= で開いたとき）・置いたファイルの URL・#db_embed= に埋め込む・
+ * 置いたプロジェクトのファイルの URL（?project=）
  */
 async function shareDialog({ withSelection = false } = {}) {
   if (!state.dbName) return;
   if (state.grid && !(await state.grid.flushDraft())) return;
-  const fromUrl = state.manual?.kind === 'url' && !state.manual.embed;
+  const fromUrl = state.manual?.kind === 'url' && !!state.manual.url;
   const local = !state.manual;
   const name = state.manual ? (state.manual.wanted || state.manual.name) : state.dbName;
   const picked = new Set(state.queries.map((x) => x.name)); // 含めるクエリシート（はじめは全部）
@@ -1303,7 +1377,7 @@ async function shareDialog({ withSelection = false } = {}) {
   const posRange = withSelection ? rangeParam() : null;
   const keyRange = withSelection ? namedRange() : null;
   let selMode = posRange ? 'pos' : keyRange ? 'key' : null;
-  let mode = fromUrl ? 'link' : 'embed';
+  let mode = state.manual?.project ? 'project' : fromUrl ? 'link' : 'embed';
   let embedded = null; // 圧縮した DB（作るのに時間がかかるので一度だけ）
   let url = '';
 
@@ -1328,10 +1402,18 @@ async function shareDialog({ withSelection = false } = {}) {
   });
   const srcBox = el('div.share-src-box', srcInput,
     el('small', tr('アプリはファイルを置きません。今のデータを書き出してどこかに置き、その URL を入れてください。相手のブラウザから読めること（CORS）が必要です')));
-  const customSrc = () => {
-    const v = srcInput.value.trim();
+  const customSrc = (input = srcInput) => {
+    const v = input.value.trim();
     try { const u = new URL(v); return /^https?:$/.test(u.protocol) ? u.href : null; } catch { return null; }
   };
+  // 「置いたプロジェクトのファイルの URL を指定する」：?project= に入れる。シートの設定はそのファイルのものになる
+  const projInput = el('input.share-src.mono', {
+    type: 'url', placeholder: 'https://…/data.sqlitesheet', 'aria-label': tr('プロジェクトのファイルの URL'),
+    value: state.manual?.project ? new URL(state.manual.project, location.href).href : '',
+    on: { input: () => update() },
+  });
+  const projBox = el('div.share-src-box', projInput,
+    el('small', tr('「プロジェクトとして書き出す」で作ったファイルをどこかに置き、その URL を入れてください。クエリシートや列の幅は、そのファイルのものになります。相手のブラウザから読めること（CORS）が必要です')));
 
   const radio = (group, v, cur, onPick, label, note, { extra = '', disabled = false } = {}) => {
     const input = el('input', { type: 'radio', name: group, checked: cur === v, on: { change: () => onPick(v) } });
@@ -1339,7 +1421,7 @@ async function shareDialog({ withSelection = false } = {}) {
     return el('label.share-radio' + (disabled ? '.disabled' : ''), input, el('span', el('b', label), el('small', note), extra));
   };
   {
-    const pick = (v) => { mode = v; update(); if (v === 'custom') srcInput.focus(); };
+    const pick = (v) => { mode = v; update(); if (v === 'custom') srcInput.focus(); if (v === 'project') projInput.focus(); };
     const items = [];
     if (local) items.push(radio('share-mode', 'none', mode, pick, tr('DB を含めない'), tr('DB の名前だけを入れます。この端末か、同じ名前の DB がある端末で開くとき向けです')));
     if (fromUrl) {
@@ -1349,7 +1431,8 @@ async function shareDialog({ withSelection = false } = {}) {
     }
     items.push(
       radio('share-mode', 'embed', mode, pick, tr('データごと埋め込む'), tr('今のデータをリンクに入れます。元のファイルが無くても開けます')),
-      radio('share-mode', 'custom', mode, pick, tr('置いたファイルの URL を指定する'), tr('相手はその URL のファイルを開きます。リンクは短くなります'), { extra: srcBox }));
+      radio('share-mode', 'custom', mode, pick, tr('置いたファイルの URL を指定する'), tr('相手はその URL のファイルを開きます。リンクは短くなります'), { extra: srcBox }),
+      radio('share-mode', 'project', mode, pick, tr('置いたプロジェクトのファイルの URL を指定する'), tr('相手はその .sqlitesheet ファイルの DB とシートの設定で開きます'), { extra: projBox }));
     modeBox.append(el('div.share-label', tr('DB')), ...items);
   }
   if (withSelection) {
@@ -1363,7 +1446,7 @@ async function shareDialog({ withSelection = false } = {}) {
 
   function renderSheets() {
     const cur = sheetSel.value || state.key;
-    const keys = allKeys().filter((k) => k[0] !== 'q' || picked.has(k.slice(2)) || mode === 'none');
+    const keys = allKeys().filter((k) => k[0] !== 'q' || picked.has(k.slice(2)) || mode === 'none' || mode === 'project');
     sheetSel.replaceChildren(...keys.map((k) => el('option', { value: k, selected: k === cur }, `${KIND_ICON[k[0]]} ${k.slice(2)}`)));
     if (!keys.includes(cur) && keys.length) sheetSel.value = keys[0];
   }
@@ -1380,7 +1463,8 @@ async function shareDialog({ withSelection = false } = {}) {
 
   async function update() {
     srcBox.hidden = mode !== 'custom';
-    queryBox.hidden = mode === 'none';
+    projBox.hidden = mode !== 'project';
+    queryBox.hidden = mode === 'none' || mode === 'project';
     renderSheets();
     const key = withSelection ? state.key : sheetSel.value || null;
     const sel = selMode === 'pos' ? posRange : selMode === 'key' ? keyRange : null;
@@ -1392,12 +1476,16 @@ async function shareDialog({ withSelection = false } = {}) {
     viewNote.textContent = view.length && viewCheck.disabled ? tr('位置で指すときは必ず含めます') : '';
     lead.textContent = mode === 'none'
       ? tr('このリンクに DB は入りません。開いた端末にある同じ名前の DB で、同じシートを開きます')
+      : mode === 'project'
+        ? tr('このリンクを開くと、相手のブラウザでそのプロジェクトのファイルが開きます。相手の変更はこちらには届きません')
       : mode !== 'embed'
         ? tr('このリンクを開くと、相手のブラウザで同じファイルとシートが開きます。相手の変更はこちらには届きません')
         : tr('このリンクを開くと、相手のブラウザで今のデータとシートが開きます（保存するまで相手の端末には残りません）。相手の変更はこちらには届きません');
-    const qs = mode === 'none' ? [] : state.queries.filter((x) => picked.has(x.name));
-    const queryParams = [];
-    qs.forEach((x, i) => queryParams.push(['query' + (i + 1), x.sql], [`query${i + 1}.name`, x.name]));
+    const qs = mode === 'none' || mode === 'project' ? [] : state.queries.filter((x) => picked.has(x.name));
+    // シートの並びと、含めるクエリシート（列の幅などは長くなるので入れない。書き出したプロジェクトのファイルには入る）
+    const sheets = mode === 'none' || mode === 'project' ? []
+      : project.collectSheets(state.dbName, allKeys().filter((k) => k[0] !== 'q' || picked.has(k.slice(2))), state.queries)
+        .map(({ type, name: n, sql }) => (sql == null ? { type, name: n } : { type, name: n, sql }));
     if (mode === 'embed' && !embedded) {
       info.textContent = tr('データを圧縮しています…');
       copyBtn.disabled = true;
@@ -1407,10 +1495,12 @@ async function shareDialog({ withSelection = false } = {}) {
       } catch (e) { info.textContent = friendlyError(e.message); return; }
     }
     const src = mode === 'link' ? state.manual.url : mode === 'custom' ? customSrc() : null;
-    const noSrc = mode === 'custom' && !src;
+    const proj = mode === 'project' ? customSrc(projInput) : null;
+    const noSrc = (mode === 'custom' && !src) || (mode === 'project' && !proj);
     const hash = [...(viewCheck.checked ? view : []), ...(sel ? [['range', sel]] : [])];
+    const params = proj ? [['project', proj]] : [...(src ? [['db', src]] : []), ...project.sheetsToParams(sheets)];
     url = noSrc ? '' : location.origin + linkUrl({
-      wanted: name, src, queryParams, key, hash, data: mode === 'embed' ? embedded.data : null,
+      wanted: name, params, key, hash, embed: mode === 'embed' ? embedded.data : null,
     });
     const len = url.length, tooLong = len > LINK_MAX;
     out.value = tooLong ? '' : url;
@@ -1419,7 +1509,7 @@ async function shareDialog({ withSelection = false } = {}) {
     info.replaceChildren(noSrc ? '' : el('span', tr('リンクの長さ：{0} 文字', [len.toLocaleString()])),
       mode === 'embed' ? el('span.muted', ' ' + tr('（DB {0} を圧縮）', [fmtBytes(embedded.raw)])) : '');
     const notes = [];
-    if (noSrc) notes.push(srcInput.value.trim() ? tr('http(s) の URL を入力してください') : tr('ファイルの URL を入力してください'));
+    if (noSrc) notes.push((mode === 'project' ? projInput : srcInput).value.trim() ? tr('http(s) の URL を入力してください') : tr('ファイルの URL を入力してください'));
     else if (tooLong) notes.push(tr('DB が大きすぎてリンクに入りません。「ファイルに書き出す」でファイルを渡してください'));
     else if (len > LINK_WARN) notes.push(tr('リンクが長いので、チャットアプリなどで途中で切れることがあります。切れると開けません'));
     if (mode === 'embed') notes.push(tr('リンクにはデータそのものが入っています。リンクを知っている人は中身を見られます'));
@@ -1450,8 +1540,8 @@ async function shareDialog({ withSelection = false } = {}) {
 // PWA として開いているか（アドレスバーがないので、?db= を打ち込めない）
 function isPwa() { return matchMedia('(display-mode: standalone)').matches || matchMedia('(display-mode: window-controls-overlay)').matches || navigator.standalone === true; }
 
-// 「URL から開く…」：貼り付けた URL を開く。このアプリの URL（/<DB 名>?db=…&query1=…）ならそのとおりに、
-// それ以外は SQLite ファイルの URL とみなして ?db= と同じ流れで開く（メモリに読み込み、手動保存）
+// 「URL から開く…」：貼り付けた URL を開く。このアプリの URL（/<DB 名>?db=…&sheets[0][…]=…）ならそのとおりに、
+// .sqlitesheet で終わるなら ?project= と、それ以外は SQLite ファイルの URL とみなして ?db= と同じ流れで開く（メモリに読み込み、手動保存）
 async function openUrlDialog(anchor) {
   const v = await ask(anchor instanceof Element ? anchor : $('file-btn'), {
     title: tr('URL から開く'), placeholder: 'https://…?db=…', okLabel: tr('開く'),
@@ -1464,22 +1554,21 @@ async function openUrlDialog(anchor) {
   if (!v) return;
   const u = new URL(v, location.href);
   // このアプリの URL：公開版・検証用など別のオリジンのものでも、パスと引数をこちらで開く。
-  // ?db=・?sheet=・queryN=、# の data・range・sort・filter のどれかがあるか、同じオリジンで拡張子のないパスならアプリの URL。
+  // ?db=・?project=・?sheet=・sheets[…]・queryN=、# の db_embed・data・range・sort・filter のどれかがあるか、同じオリジンで拡張子のないパスならアプリの URL。
   // DB の入っていないリンク（/<DB 名>?sheet=…#range=…）は、この端末の同じ名前の DB を開く
   const hp = new URLSearchParams(u.hash.startsWith('#/') ? '' : u.hash.slice(1));
   const last = u.pathname.split('/').pop();
-  const isApp = ['db', 'sheet'].some((k) => u.searchParams.has(k))
-    || [...u.searchParams.keys()].some((k) => /^query\d+$/.test(k))
-    || ['data', 'range', 'sort', 'filter'].some((k) => hp.has(k))
+  const isApp = ['db', 'project', 'sheet'].some((k) => u.searchParams.has(k))
+    || [...u.searchParams.keys()].some((k) => /^query\d+$|^sheets\[/.test(k))
+    || ['db_embed', 'data', 'range', 'sort', 'filter'].some((k) => hp.has(k))
     || (u.origin === location.origin && u.pathname.startsWith(BASE) && !last.includes('.'));
   if (isApp) {
     // パスの最後が DB 名（保存するときの名前の候補）。公開先によって手前のパスが違うので最後だけ使う
     history.pushState(null, '', BASE + u.pathname.split('/').pop() + u.search + u.hash);
     return route();
   }
-  if (!(await leaveCurrent())) return;
-  history.pushState(null, '', BASE + '?db=' + encodeURIComponent(v));
-  await loadFromUrl(v, null, null);
+  history.pushState(null, '', BASE + (/\.sqlitesheet$/i.test(u.pathname) ? '?project=' : '?db=') + encodeURIComponent(v));
+  return route();
 }
 
 // データベースをファイルに書き出す。保存先を選べるブラウザでは選んでもらう
@@ -1511,6 +1600,7 @@ function dbActions(name, { anchor, home = false } = {}) {
   return [
     home ? { label: tr('開く'), icon: '↗', action: () => openDb(name) } : null,
     { label: tr('ファイルに書き出す…'), icon: '⤓', action: () => exportCurrent(name) },
+    { label: tr('プロジェクトとして書き出す…'), icon: '📦', action: async () => { if (home) await openDb(name); if (state.dbName === name) exportProject(); } },
     { label: tr('名前を変更…'), icon: '✎', action: () => (home ? renameDbAsk(name, anchor) : (() => { $('db-name').focus(); $('db-name').select(); })()) },
     { label: tr('複製…'), icon: '⧉', action: () => copyDb(name, anchor) },
     // 共有はシートやクエリシートを選ぶので、ホームからは開いてから
@@ -1526,12 +1616,14 @@ function dbMenu(anchor, { list = false } = {}) {
     items.push({ header: tr('🌐 {0}（URL から読み込み中）', [state.manual.name]) },
       { label: tr('データベースとして保存…'), icon: '💾', kbd: `${MOD}S`, action: () => saveFile() },
       { label: tr('ファイルに書き出す…'), icon: '⤓', action: () => exportCurrent() },
+      { label: tr('プロジェクトとして書き出す…'), icon: '📦', action: exportProject },
       { label: tr('共有…'), icon: '🔗', action: shareDialog },
       { label: tr('閉じる'), icon: '✕', action: closeFile }, '-');
   } else if (state.manual) {
     items.push({ header: tr('📄 {0}（ローカルファイルを直接編集中）', [state.manual.name]) },
       { label: tr('保存'), icon: '💾', kbd: `${MOD}S`, disabled: !state.dirty, action: () => saveFile() },
       { label: tr('データベースとして取り込む…'), icon: '⤒', action: importFileToBrowser },
+      { label: tr('プロジェクトとして書き出す…'), icon: '📦', action: exportProject },
       { label: tr('共有…'), icon: '🔗', action: shareDialog },
       { label: tr('ファイルを閉じる'), icon: '✕', action: closeFile }, '-');
   } else if (state.dbName) {
@@ -3536,6 +3628,7 @@ function palette() {
       : [{ label: tr('トランザクションを開始'), icon: '⧗', run: beginTx }]),
     { label: tr('CSV からテーブルを作成'), icon: '⤒', run: importCsv },
     { label: tr('共有…'), icon: '🔗', run: shareDialog },
+    { label: tr('プロジェクトとして書き出す…'), icon: '📦', run: exportProject },
     state.manual ? { label: state.manual.kind === 'url' ? tr('データベースとして保存') : tr('ファイルに保存'), icon: '💾', run: () => saveFile() } : null,
     ...state.dbs.filter((n) => n !== state.dbName).map((n) => ({ label: n, hint: tr('DB を開く'), icon: appIcon(), run: () => openDb(n) })),
   ].filter(Boolean);
