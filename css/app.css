@@ -362,6 +362,8 @@ body.at-home .toolbar, body.at-home .fxbar { display: none; }
 }
 /* 高さを変えた行では、画像を優先して幅いっぱいまで使う（種類名は入りきらなければ隠れる） */
 .gr.tall .blob-thumb { max-width: 100%; }
+/* 画像で表示する URL：サムネイルは BLOB と同じ。URL の文字ははみ出た分を省略 */
+.gc.imgurl { color: var(--text-2); }
 .gc.loading::after { content: ''; position: absolute; inset: 9px 12px; border-radius: 3px; background: var(--surface-2); }
 .gc.sel { background: var(--sel); }
 .gc.cur { box-shadow: inset 0 0 0 2px var(--accent); background: var(--surface); }

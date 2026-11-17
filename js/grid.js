@@ -15,7 +15,6 @@ const PAGE = 200;
 const DEFAULT_W = 150;
 const MIN_W = 20;        // 列幅の最小（1文字のデータに合わせても使えるように）
 const MIN_H = 18;        // 行の高さの最小
-const MAX_FIT_H = 300;   // 中身に合わせるときの高さの上限（画像）
 const MAX_WRAP_H = 600;  // 折り返した文字に合わせて伸ばす高さの上限
 const MAX_TEXT = 5000;   // セルに表示する文字数の上限（表示を軽くするため）
 const MAX_RESIZE_ROWS = 5000; // まとめて高さを変えられる行数の上限
@@ -55,6 +54,7 @@ export class Grid {
     this.autoHeights = new Map();   // 折り返した文字に合わせた自動の高さ {何行目: 高さ}（保存しない）
     this.rowHeights = new Map(); this.hIdx = []; this.hCum = []; // 両方を合わせた {何行目: 高さ} と、位置計算用の累積
     this.wraps = this.loadWraps();  // 折り返して表示するセル（[行の見分け方, 列名] の JSON）
+    this.images = this.loadCellSet('imgc:'); // URL を画像で表示するセル（キーは折り返しと同じ）
     this.z = TOUCH ? loadZoom() : 1;
     this.build();
   }
@@ -517,9 +517,9 @@ export class Grid {
     const [a, b] = this.resizeRows(r);
     if (b - a + 1 > MAX_RESIZE_ROWS) { this.hooks.onError?.(new Error(tr('一度に高さを変えられるのは {0} 行までです', [MAX_RESIZE_ROWS]))); return; }
     const rows = await this.rowsBetween(a, b);
-    // 画像が原寸で見える高さと、折り返した文字が全部見える高さの大きいほう
-    const text = this.measureRows(rows);
-    const fits = await Promise.all(rows.map(async (row, i) => Math.max(await fitHeight(row), text[i] ?? RH)));
+    // 折り返した文字が全部見える高さ。画像（BLOB・URL）は対象外で、セルの高さに合わせて縮めて出すだけ
+    const text = this.measureRows(rows, a);
+    const fits = rows.map((_, i) => text[i] ?? RH);
     await this.commitRowHeights(a, b, (i) => fits[i - a]);
   }
 
@@ -550,17 +550,33 @@ export class Grid {
 
   // ---------- テキストの折り返し（セルごと） ----------
   // セルは「行のキー（主キー、なければ rowid）＋列名」で覚えるので、並べ替え・絞り込みをしても同じデータに付いてくる
-  loadWraps() {
-    try { const v = JSON.parse(localStorage.getItem('wrapc:' + this.source.widthKey) || '[]'); return new Set(Array.isArray(v) ? v : []); } catch { return new Set(); }
+  loadWraps() { return this.loadCellSet('wrapc:'); }
+  saveWraps() { this.saveCellSet('wrapc:', this.wraps); }
+  /** セルごとの書式（折り返し・画像）を localStorage から読む・書く。prefix: 'wrapc:' など */
+  loadCellSet(prefix) {
+    try { const v = JSON.parse(localStorage.getItem(prefix + this.source.widthKey) || '[]'); return new Set(Array.isArray(v) ? v : []); } catch { return new Set(); }
   }
-  saveWraps() {
+  saveCellSet(prefix, set) {
     try {
-      if (this.wraps.size) localStorage.setItem('wrapc:' + this.source.widthKey, JSON.stringify([...this.wraps]));
-      else localStorage.removeItem('wrapc:' + this.source.widthKey);
+      if (set.size) localStorage.setItem(prefix + this.source.widthKey, JSON.stringify([...set]));
+      else localStorage.removeItem(prefix + this.source.widthKey);
     } catch { /* 無視 */ }
   }
   wrapKey(r, row, c) { const col = this.cols[c]; return col ? JSON.stringify([this.rowId(r, row), col.name]) : null; }
   isWrap(r, row, c) { if (!this.wraps.size) return false; const k = this.wrapKey(r, row, c); return k != null && this.wraps.has(k); }
+  isImage(r, row, c) { if (!this.images.size) return false; const k = this.wrapKey(r, row, c); return k != null && this.images.has(k); }
+  /** 折り返しを付けられるセルか（空でない文字列だけ） */
+  canWrap(row, c) { const v = row?.values?.[c]; return typeof v === 'string' && v !== ''; }
+  /** 画像で表示できるセルか（値全体が1つの画像の URL の文字列だけ） */
+  canImage(row, c) { return imageUrlOf(row?.values?.[c]) != null; }
+  /**
+   * セルに出す画像の URL。BLOB の画像なら Object URL、画像の書式を付けた URL の文字列ならその URL。
+   * どちらでもなければ null（BLOB と URL で表示も高さ合わせも同じ仕組みを使う）
+   */
+  imageSrc(v, r, row, c) {
+    if (v instanceof Uint8Array) { const k = sniff(v); return k.image && v.length ? this.blobUrl(v, k.mime) : null; }
+    return this.isImage(r, row, c) ? imageUrlOf(v) : null;
+  }
   /** 選んでいるセルのうち、読み込み済みの行のもの（折り返しの対象）: [{r, row, c}] */
   selectedCells() {
     const { r0, r1, c0, c1 } = this.range();
@@ -580,10 +596,23 @@ export class Grid {
     this.saveWraps(); this.remeasure();
     this.hooks.onWrap?.(this.source.widthKey, before, [...this.wraps]);
   }
+
   /** 元に戻す・やり直すから：折り返すセルをそのまま入れ替える */
   setWrapNames(keys) {
     this.wraps = new Set(keys);
     this.saveWraps(); this.remeasure();
+  }
+  /** cells の「URL を画像で表示」を切り替える（元に戻すに積む）。行の高さは BLOB と同じく自動では変えない */
+  setImage(cells, on) {
+    const before = [...this.images];
+    for (const { r, row, c } of cells) { const k = this.wrapKey(r, row, c); if (k == null) continue; if (on) this.images.add(k); else this.images.delete(k); }
+    if (before.length === this.images.size && before.every((k) => this.images.has(k))) return;
+    this.saveCellSet('imgc:', this.images); this.remeasure();
+    this.hooks.onImage?.(this.source.widthKey, before, [...this.images]);
+  }
+  setImageNames(keys) {
+    this.images = new Set(keys);
+    this.saveCellSet('imgc:', this.images); this.remeasure();
   }
 
   /**
@@ -929,8 +958,8 @@ export class Grid {
     if (v instanceof Uint8Array) {
       const k = sniff(v);
       cell.classList.add('blob');
-      // 大きさは CSS でセルの高さに合わせる（行の高さが変わっても追従する）
-      if (k.image && v.length) cell.append(el('img.blob-thumb', { src: this.blobUrl(v, k.mime), alt: '', draggable: false }));
+      const src = this.imageSrc(v, r, row, c);
+      if (src) cell.append(thumb(src));
       cell.append(`${v.length ? k.label : 'BLOB'} ${fmtBytes(v.length)}`);
       return;
     }
@@ -938,6 +967,9 @@ export class Grid {
     const s = String(v);
     if (s === '') { cell.classList.add('emptystr'); return; }
     const t = s.length > MAX_TEXT ? s.slice(0, MAX_TEXT) + '…' : s;
+    // 画像で表示する URL：BLOB と同じサムネイルの横に URL の文字（読めなければ文字だけに戻る）
+    const src = this.imageSrc(v, r, row, c);
+    if (src) { cell.classList.add('imgurl'); cell.append(thumb(src, true), t); return; }
     // 折り返すセルは改行をそのまま出す。折り返さないセルは1行なので、改行があることだけ ⏎ で見せる
     if (this.isWrap(r, row, c)) { cell.classList.add('wrap'); cell.textContent = t; }
     else cell.textContent = t.replaceAll('\n', ' ⏎ ');
@@ -1826,26 +1858,28 @@ function autoWidth(col) {
 
 function isMacCtrl() { return /Mac/.test(navigator.platform); }
 
-/**
- * 行の中身に合う高さ。セルは折り返さないので、文字だけなら標準の高さ。
- * 画像の BLOB があれば、その画像が原寸で見える高さ（上限 MAX_FIT_H）
- */
-async function fitHeight(row) {
-  let h = RH;
-  for (const v of row?.values || []) {
-    if (!(v instanceof Uint8Array) || !v.length) continue;
-    const k = sniff(v);
-    if (!k.image) continue;
-    const url = URL.createObjectURL(new Blob([v], { type: k.mime }));
-    try {
-      const img = new Image();
-      img.src = url;
-      await img.decode();
-      h = Math.max(h, Math.min(MAX_FIT_H, img.naturalHeight + 6));
-    } catch { /* 読めない画像は数えない */ } finally { URL.revokeObjectURL(url); }
-  }
-  return Math.round(h);
+/** 値全体が1つの画像の URL（http(s) か data:image/）ならその URL。前後の空白は無視する */
+export function imageUrlOf(v) {
+  if (typeof v !== 'string') return null;
+  const s = v.trim();
+  // data: の URL は中に空白があってもブラウザが読める（SVG を直接書いたものなど）
+  if (/^data:image\//i.test(s)) return s;
+  if (/\s/.test(s)) return null;
+  if (!/^https?:\/\//i.test(s)) return null;
+  try { new URL(s); return s; } catch { return null; }
 }
+
+/** セルのサムネイル（BLOB と URL で共通）。大きさは CSS でセルの高さに合わせる。読めなければ消して文字だけにする */
+function thumb(src, external = false) {
+  if (external && failedImages.has(src)) return '';
+  const img = el('img.blob-thumb', { src, alt: '', draggable: false });
+  if (external) { img.loading = 'lazy'; img.referrerPolicy = 'no-referrer'; }
+  img.addEventListener('error', () => { if (external) failedImages.add(src); img.remove(); }, { once: true });
+  return img;
+}
+// 読めなかった URL（描画のたびに読み直さない。ページを開き直せば試し直す）
+const failedImages = new Set();
+
 
 /** 下書きの値を INSERT に渡す形へ（文字はフォームとして解釈し、BLOB はそのまま） */
 function draftToValue(v) {
