@@ -160,7 +160,11 @@ export class Grid {
     } }) : null;
     this.inner.append(this.body, this.sink, this.handle, ...this.colHandles, ...this.rowHandles, ...(this.heightKnob ? [this.heightKnob] : []));
     this.scroll.append(this.header, this.inner);
-    this.host.append(this.scroll);
+    // 長い表を一気に移動するつまみ（指で操作しているときだけ。電話帳の右端のつまみのようなもの）
+    this.fastThumb = el('div.fs-thumb', { on: { pointerdown: (e) => this.startFastScroll(e) } });
+    this.fastLabel = el('div.fs-label', { hidden: true });
+    this.fast = el('div.fs-track', { hidden: true }, this.fastThumb, this.fastLabel);
+    this.host.append(this.scroll, this.fast);
     this.empty = null;
     this.applyZoom();
     if (TOUCH) this.setupPinch();
@@ -175,8 +179,9 @@ export class Grid {
       this.byTouch = t;
       this.host.classList.toggle('grid-touch', t);
       this.placeHandle();
+      this.syncFast(false);
     }, true);
-    this.scroll.addEventListener('scroll', () => this.render(), { passive: true });
+    this.scroll.addEventListener('scroll', () => { this.render(); this.syncFast(true); }, { passive: true });
     new ResizeObserver(() => this.render()).observe(this.scroll);
     this.body.addEventListener('mousedown', (e) => this.onMouseDown(e));
     this.body.addEventListener('pointerdown', (e) => this.onTouchDown(e));
@@ -736,6 +741,66 @@ export class Grid {
       this.emitWidths(befores);
     };
     addEventListener(kind + 'move', move); addEventListener(kind + 'up', up); addEventListener('pointercancel', up);
+  }
+
+  // ---------- 一気に移動するつまみ ----------
+  /** つまみの位置を今のスクロール位置に合わせる。wake なら表示して、しばらく触らなければ消す */
+  syncFast(wake) {
+    const s = this.scroll, max = s.scrollHeight - s.clientHeight;
+    // 画面の 4 倍に満たない表では出さない（普通のスクロールで足りる）
+    const on = this.byTouch && max > s.clientHeight * 3;
+    this.fast.hidden = !on;
+    this.host.classList.toggle('fs-on', on); // つまみを出すときはブラウザのスクロールバーを隠す（二重に見えないように）
+    if (!on) return;
+    const track = this.fast.clientHeight - this.fastThumb.offsetHeight;
+    if (!this.fastDragging) this.fastThumb.style.transform = `translateY(${(max ? s.scrollTop / max : 0) * track}px)`;
+    if (!wake) return;
+    this.fast.classList.add('show');
+    clearTimeout(this.fastTimer);
+    if (!this.fastDragging) this.fastTimer = setTimeout(() => this.fast.classList.remove('show'), 1500);
+  }
+  startFastScroll(e) {
+    e.preventDefault(); e.stopPropagation();
+    const t = this.fastThumb, top = this.fast.getBoundingClientRect().top, grab = e.clientY - t.getBoundingClientRect().top;
+    try { t.setPointerCapture(e.pointerId); } catch { /* 指がもう離れている */ }
+    this.fastDragging = true; this.fast.classList.add('dragging');
+    const move = (ev) => {
+      const s = this.scroll, track = this.fast.clientHeight - t.offsetHeight;
+      const y = Math.min(track, Math.max(0, ev.clientY - top - grab)), ratio = track ? y / track : 0;
+      t.style.transform = `translateY(${y}px)`;
+      s.scrollTop = ratio * (s.scrollHeight - s.clientHeight);
+      this.fastLabel.style.transform = `translateY(${y + t.offsetHeight / 2}px)`;
+      // 一番上で先頭、一番下で最後の行になるよう、つまみの位置の割合から行を出す
+      this.fastRow = Math.round(ratio * Math.max(0, this.rowCount - 1));
+      this.showFastLabel(this.fastRow);
+    };
+    const up = () => {
+      t.removeEventListener('pointermove', move); t.removeEventListener('pointerup', up); t.removeEventListener('pointercancel', up);
+      this.fastDragging = false; this.fast.classList.remove('dragging'); this.fastLabel.hidden = true;
+      this.syncFast(true);
+    };
+    t.addEventListener('pointermove', move); t.addEventListener('pointerup', up); t.addEventListener('pointercancel', up);
+    move(e);
+  }
+  /** 吹き出し：並べ替えているならその第1基準の列の値、そうでなければ何行目か */
+  showFastLabel(r) {
+    const total = this.rowCount;
+    r = Math.min(r, Math.max(0, total - 1));
+    const c = this.cols.findIndex((col) => col.sort && (col.sort.rank ?? 1) === 1);
+    let text = `${(r + 1).toLocaleString()} / ${total.toLocaleString()}`;
+    if (c >= 0) {
+      const row = this.rowAt(r); // 読み込んでいなければ読み込みを始める
+      if (row) {
+        const v = row.values[c];
+        text = v == null ? NULL_LABEL : v instanceof Uint8Array ? 'BLOB' : String(v).replace(/\s+/g, ' ').slice(0, 40);
+      } else {
+        const p = Math.floor(r / PAGE);
+        this.loadPage(p)?.then(() => { if (this.fastDragging && !this.fastLabel.hidden) this.showFastLabel(this.fastRow); });
+        text = '…';
+      }
+    }
+    this.fastLabel.textContent = text;
+    this.fastLabel.hidden = false;
   }
 
   // ---------- データ取得 ----------

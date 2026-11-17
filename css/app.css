@@ -806,6 +806,23 @@ body.dropping::after {
   content: ''; position: absolute; inset: 5px; border-radius: 50%;
   background: var(--accent); border: 2px solid var(--surface); box-shadow: 0 1px 3px rgb(0 0 0 / .3);
 }
+/* 長い表を一気に移動するつまみ（指で操作しているときだけ grid.js が出す） */
+.fs-on .grid-scroll { scrollbar-width: none; }
+.fs-on .grid-scroll::-webkit-scrollbar { display: none; }
+.fs-track { position: absolute; top: 40px; bottom: 16px; right: 0; width: 28px; z-index: 7; pointer-events: none; }
+.fs-thumb {
+  position: absolute; right: 2px; width: 22px; height: 44px; border-radius: 11px; touch-action: none; pointer-events: auto;
+  background: var(--surface-3); border: 1px solid var(--line-strong); box-shadow: 0 1px 4px rgb(0 0 0 / .25);
+  opacity: 0; visibility: hidden; transition: opacity .25s, visibility .25s;
+}
+.fs-thumb::after { content: ''; position: absolute; inset: 14px 7px; border-block: 2px solid var(--text-3); }
+.fs-track.show .fs-thumb, .fs-track.dragging .fs-thumb { opacity: 1; visibility: visible; transition: none; }
+.fs-track.dragging .fs-thumb { background: var(--accent); }
+.fs-label {
+  position: absolute; top: 0; right: 36px; margin-top: -18px; max-width: 60vw; padding: 6px 12px; border-radius: 8px;
+  background: var(--surface); color: var(--text); border: 1px solid var(--line-strong); box-shadow: var(--shadow);
+  font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
 /* 列ごと選んでいるときの、見出しの右下の境目に出す幅を変えるつまみ（タッチ端末だけ） */
 .gh-knob {
   position: absolute; top: 100%; z-index: 6; width: 30px; height: 30px; margin: -15px 0 0 -15px; touch-action: none;
