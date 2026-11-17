@@ -82,14 +82,32 @@ function parseUrl() {
   let dbName = null;
   try { dbName = decodeURIComponent(path.split('/')[0]) || null; } catch { /* 壊れたエンコードは無視 */ }
   const p = new URLSearchParams(location.search);
-  return { dbName, sheet: p.get('sheet'), src: p.get('db') };
+  // #data=<圧縮した DB>：共有リンクに埋め込まれたデータ（# 以降はサーバーに送られない）
+  const data = location.hash.startsWith('#data=') ? location.hash.slice(6) : null;
+  return { dbName, sheet: p.get('sheet'), src: p.get('db'), data };
 }
 
 /** URL から読んだ DB の URL（/<保存するときの名前の候補>?db=…&sheet=…） */
 function urlOfSrc(m, key) {
-  return BASE + (m.wanted ? encodeURIComponent(m.wanted) : '') + '?db=' + encodeURIComponent(m.url)
-    + (m.queryParams || []).map(([k, v]) => '&' + k + '=' + encodeURIComponent(v)).join('')
-    + (key ? '&sheet=' + encodeURIComponent(sheetParam(key)) : '');
+  return linkUrl({ wanted: m.wanted, src: m.embed ? null : m.url, queryParams: m.queryParams, key, data: m.embed });
+}
+
+/** /<名前>?db=…&query1=…&sheet=…#data=… を組み立てる（src・data はどちらか一方） */
+function linkUrl({ wanted, src, queryParams = [], key, data }) {
+  const params = [];
+  if (src) params.push(['db', src]);
+  params.push(...queryParams);
+  if (key) params.push(['sheet', sheetParam(key)]);
+  return BASE + (wanted ? encodeURIComponent(wanted) : '')
+    + (params.length ? '?' + params.map(([k, v]) => k + '=' + encodeURIComponent(v)).join('&') : '')
+    + (data ? '#data=' + data : '');
+}
+
+/** 文字列の短い指紋（埋め込みデータの端末側データのキーに使う。長いデータをそのままキーにしない） */
+function fingerprint(str) {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < str.length; i++) h = Math.imul(h ^ str.charCodeAt(i), 0x01000193);
+  return (h >>> 0).toString(36) + '-' + str.length.toString(36);
 }
 
 /**
@@ -138,7 +156,7 @@ function setUrl() {
     : state.manual ? urlOf(null) : urlOf(state.dbName, state.key);
   if (location.pathname + location.search + location.hash !== u) {
     const was = parseUrl();
-    const same = state.manual?.kind === 'url' ? was.src === state.manual.url
+    const same = state.manual?.kind === 'url' ? (state.manual.embed ? was.data === state.manual.embed : was.src === state.manual.url)
       : !was.src && was.dbName === (state.manual ? null : state.dbName);
     if (same) history.replaceState(null, '', u);
     else history.pushState(null, '', u);
@@ -161,12 +179,13 @@ function restoreUrl() {
 }
 
 async function route() {
-  const { dbName, sheet, src } = parseUrl();
+  const { dbName, sheet, src, data } = parseUrl();
   // ?db=<SQLite ファイルの URL>：そのファイルをメモリに読み込んで開く（手動保存）。
   // /<DB 名> は保存するときの名前の候補、?sheet= は開くシート
-  if (src) {
+  // #data=<圧縮した DB>：共有リンクに埋め込まれたデータを、?db= と同じようにメモリで開く
+  if (src || data) {
     // 同じファイル・同じクエリならシートを切り替えるだけ。クエリが違えば読み直す
-    if (state.manual?.kind === 'url' && state.manual.url === src
+    if (state.manual?.kind === 'url' && (data ? state.manual.embed === data : !state.manual.embed && state.manual.url === src)
       && JSON.stringify(urlQueries().params) === JSON.stringify(state.manual.queryParams)) {
       const key = keyOfParam(sheet);
       if (key && key !== state.key) await showSheet(key);
@@ -174,7 +193,7 @@ async function route() {
       return;
     }
     if (!(await leaveCurrent())) { if (state.dbName) setUrl(); else history.replaceState(null, '', BASE); return; }
-    return loadFromUrl(src, dbName, sheet);
+    return data ? loadEmbedded(data, dbName, sheet) : loadFromUrl(src, dbName, sheet);
   }
   // 手動保存のものを開いているときに「戻る」などで URL が変わったとき：
   // ファイルを編集中でホームの URL ならそのまま、ほかへなら未保存の確認をしてから
@@ -579,7 +598,8 @@ async function showDb(key, param) {
   undo.clear();
   Object.assign($('db-name'), {
     value: dbLabel(), hidden: false, readOnly: !!state.manual,
-    title: state.manual?.kind === 'url' ? tr('URL から読み込んでいます（保存すると、データベースとして残ります）：{0}', [state.manual.url])
+    title: state.manual?.embed ? tr('リンクに埋め込まれたデータを開いています（保存すると、データベースとして残ります）')
+      : state.manual?.kind === 'url' ? tr('URL から読み込んでいます（保存すると、データベースとして残ります）：{0}', [state.manual.url])
       : state.manual ? tr('ローカルファイルを直接編集しています') : tr('クリックして名前を変更'),
   });
   await refreshObjects();
@@ -963,13 +983,31 @@ async function loadFromUrl(src, wanted, sheet) {
   }
   loading?.remove?.();
   if (new TextDecoder().decode(bytes.slice(0, 15)) !== 'SQLite format 3') return fail(tr('SQLite のデータベースファイルではありません'));
-  try { await db.openBytes('url:' + src, bytes); } catch (e) { return fail(friendlyError(e.message)); }
+  await openLoaded(bytes, { url: src, key: 'url:' + src, name, wanted, sheet }, fail);
+}
+
+/** #data= に埋め込まれた DB（deflate で圧縮して base64url にしたもの）をメモリで開く */
+async function loadEmbedded(data, wanted, sheet) {
+  const fail = (msg) => {
+    history.replaceState(null, '', BASE);
+    if (state.manual?.kind === 'url' || !state.dbName) showWelcome();
+    toast(msg, 'error', 8000);
+  };
+  let bytes;
+  try { bytes = await inflate(fromBase64Url(data)); } catch { return fail(tr('リンクに埋め込まれたデータを読めませんでした。リンクが途中で切れているかもしれません')); }
+  if (new TextDecoder().decode(bytes.slice(0, 15)) !== 'SQLite format 3') return fail(tr('SQLite のデータベースファイルではありません'));
+  await openLoaded(bytes, { url: null, embed: data, key: 'url:#' + fingerprint(data), name: wanted || tr('共有されたデータ'), wanted, sheet }, fail);
+}
+
+/** 読み込んだ DB をメモリで開き、URL の ?query1= などのクエリシートを足して表示する（?db= と #data= 共通） */
+async function openLoaded(bytes, { url, embed = null, key, name, wanted, sheet }, fail) {
+  try { await db.openBytes(key, bytes); } catch (e) { return fail(friendlyError(e.message)); }
   // 端末側データ（列幅など）のキー。名前に「:」を含むので OPFS の DB とは重ならない
   // ?query1= などで添えたクエリは、クエリシートとして足す（クエリシートは SELECT しか通らないので読み取り専用）。
   // URL にも残すので、リロード・共有で同じシートが並ぶ
   const { list, params } = urlQueries();
-  state.manual = { kind: 'url', url: src, name, wanted: wanted || null, queryParams: params };
-  state.dbName = 'url:' + src;
+  state.manual = { kind: 'url', url, embed, name, wanted: wanted || null, queryParams: params };
+  state.dbName = key;
   store.removeDb(state.dbName);
   if (list.length) {
     const qs = [];
@@ -978,6 +1016,138 @@ async function loadFromUrl(src, wanted, sheet) {
   }
   setDirty(false);
   await showDb(null, sheet);
+}
+
+// ---------- 共有 ----------
+// 共有リンクの長さの目安：これを超えるとチャットアプリなどで切れることがある／ブラウザが受け付けない
+const LINK_WARN = 8000;
+const LINK_MAX = 2_000_000;
+
+async function pipeBytes(bytes, stream) {
+  return new Uint8Array(await new Response(new Blob([bytes]).stream().pipeThrough(stream)).arrayBuffer());
+}
+const deflate = (bytes) => pipeBytes(bytes, new CompressionStream('deflate-raw'));
+const inflate = (bytes) => pipeBytes(bytes, new DecompressionStream('deflate-raw'));
+
+function toBase64Url(bytes) {
+  let bin = '';
+  for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+function fromBase64Url(str) {
+  const bin = atob(str.replace(/-/g, '+').replace(/_/g, '/'));
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+
+/** クエリの SQL が、ほかの DB を「DB名.表名」で参照しているか（共有先には無いかもしれない） */
+function refersOtherDb(sql) {
+  return state.dbs.some((n) => n !== state.dbName
+    && [n + '.', `"${n.replaceAll('"', '""')}".`, `[${n}].`, '`' + n + '`.'].some((t) => sql.includes(t)));
+}
+
+
+/**
+ * 「🔗 共有…」：開いている DB を人に渡すリンクを作る。
+ * ?db= で開いているものは元のファイルの URL を使うリンクも選べる。それ以外は DB を圧縮して #data= に埋め込む
+ */
+async function shareDialog() {
+  if (!state.dbName) return;
+  if (state.grid && !(await state.grid.flushDraft())) return;
+  const fromUrl = state.manual?.kind === 'url' && !state.manual.embed;
+  const name = state.manual ? (state.manual.wanted || state.manual.name) : state.dbName;
+  const picked = new Set(state.queries.map((x) => x.name)); // 含めるクエリシート（はじめは全部）
+  let mode = fromUrl ? 'link' : 'embed';
+  let embedded = null; // 圧縮した DB（作るのに時間がかかるので一度だけ）
+  let url = '';
+
+  const lead = el('p');
+  const modeBox = el('div.share-mode');
+  const queryBox = el('div.share-queries');
+  const sheetSel = el('select.share-sheet', { on: { change: () => update() } });
+  const out = el('input.share-url.mono', { readOnly: true, 'aria-label': tr('共有リンク'), on: { focus: (e) => e.target.select() } });
+  const info = el('div.share-info');
+  const warn = el('div.share-warn');
+  const copyBtn = el('button.btn.primary', { on: { click: () => copyLink() } }, tr('🔗 リンクをコピー'));
+  const shareBtn = navigator.share ? el('button.btn', { on: { click: () => shareLink() } }, tr('📤 共有…')) : null;
+
+  if (fromUrl) {
+    const radio = (v, label, note) => el('label.share-radio',
+      el('input', { type: 'radio', name: 'share-mode', checked: mode === v, on: { change: () => { mode = v; update(); } } }),
+      el('span', el('b', label), el('small', note)));
+    modeBox.append(
+      radio('link', tr('元のファイルの URL を使う'), state.dirty
+        ? tr('データの未保存の変更は含まれません。相手は元のファイルを開きます')
+        : tr('相手も同じファイルを開きます。リンクは短くなります')),
+      radio('embed', tr('データごと埋め込む'), tr('今のデータをリンクに入れます。元のファイルが無くても開けます')));
+  }
+
+  function renderSheets() {
+    const cur = sheetSel.value || state.key;
+    const keys = allKeys().filter((k) => k[0] !== 'q' || picked.has(k.slice(2)));
+    sheetSel.replaceChildren(...keys.map((k) => el('option', { value: k, selected: k === cur }, `${KIND_ICON[k[0]]} ${k.slice(2)}`)));
+    if (!keys.includes(cur) && keys.length) sheetSel.value = keys[0];
+  }
+  if (state.queries.length) {
+    queryBox.append(el('div.share-label', tr('含めるクエリシート')),
+      el('div.share-checks', ...state.queries.map((x) => el('label.share-check',
+        el('input', { type: 'checkbox', checked: true, on: { change: (e) => { if (e.target.checked) picked.add(x.name); else picked.delete(x.name); renderSheets(); update(); } } }),
+        el('span', x.name)))));
+  }
+  renderSheets();
+
+  async function update() {
+    lead.textContent = mode === 'link'
+      ? tr('このリンクを開くと、相手のブラウザで同じファイルとシートが開きます。相手の変更はこちらには届きません')
+      : tr('このリンクを開くと、相手のブラウザで今のデータとシートが開きます（保存するまで相手の端末には残りません）。相手の変更はこちらには届きません');
+    const qs = state.queries.filter((x) => picked.has(x.name));
+    const queryParams = [];
+    qs.forEach((x, i) => queryParams.push(['query' + (i + 1), x.sql], [`query${i + 1}.name`, x.name]));
+    if (mode === 'embed' && !embedded) {
+      info.textContent = tr('データを圧縮しています…');
+      copyBtn.disabled = true;
+      try {
+        const bytes = await db.exportDb(state.dbName);
+        embedded = { raw: bytes.length, data: toBase64Url(await deflate(bytes)) };
+      } catch (e) { info.textContent = friendlyError(e.message); return; }
+    }
+    url = location.origin + linkUrl({
+      wanted: name, src: mode === 'link' ? state.manual.url : null, queryParams,
+      key: sheetSel.value || null, data: mode === 'embed' ? embedded.data : null,
+    });
+    const len = url.length, tooLong = len > LINK_MAX;
+    out.value = tooLong ? '' : url;
+    copyBtn.disabled = tooLong;
+    if (shareBtn) shareBtn.disabled = tooLong;
+    info.replaceChildren(el('span', tr('リンクの長さ：{0} 文字', [len.toLocaleString()])),
+      mode === 'embed' ? el('span.muted', ' ' + tr('（DB {0} を圧縮）', [fmtBytes(embedded.raw)])) : '');
+    const notes = [];
+    if (tooLong) notes.push(tr('DB が大きすぎてリンクに入りません。「ファイルに書き出す」でファイルを渡してください'));
+    else if (len > LINK_WARN) notes.push(tr('リンクが長いので、チャットアプリなどで途中で切れることがあります。切れると開けません'));
+    if (mode === 'embed') notes.push(tr('リンクにはデータそのものが入っています。リンクを知っている人は中身を見られます'));
+    const ext = qs.filter((x) => refersOtherDb(x.sql)).map((x) => x.name);
+    if (ext.length) notes.push(tr('ほかの DB を参照しているクエリがあります（{0}）。相手の端末に同じ名前の DB がないと動きません', [ext.join(', ')]));
+    warn.replaceChildren(...notes.map((t) => el('p', t)));
+  }
+
+  async function copyLink() {
+    try { await navigator.clipboard.writeText(url); toast(tr('リンクをコピーしました'), 'success'); }
+    catch { out.focus(); out.select(); toast(tr('コピーできませんでした。リンクを選んであるので、手でコピーしてください'), 'error'); }
+  }
+  async function shareLink() {
+    try { await navigator.share({ title: name, url }); }
+    catch (e) { if (e.name !== 'AbortError') toast(tr('共有できませんでした（{0}）', [e.message]), 'error'); }
+  }
+
+  const m = modal([
+    el('h2', tr('🔗 「{0}」を共有', [name])),
+    lead, modeBox, queryBox,
+    el('label.share-label', tr('はじめに開くシート'), sheetSel),
+    out, info, warn,
+    el('div.modal-actions', shareBtn || '', copyBtn, el('button.btn', { on: { click: () => m.close() } }, tr('閉じる'))),
+  ], { className: 'share' });
+  update();
 }
 
 // PWA として開いているか（アドレスバーがないので、?db= を打ち込めない）
@@ -997,9 +1167,9 @@ async function openUrlDialog(anchor) {
   if (!v) return;
   const u = new URL(v, location.href);
   // このアプリの URL：公開版・検証用など別のオリジンのものでも、パスと引数をこちらで開く
-  if (u.searchParams.has('db')) {
+  if (u.searchParams.has('db') || u.hash.startsWith('#data=')) {
     // パスの最後が DB 名（保存するときの名前の候補）。公開先によって手前のパスが違うので最後だけ使う
-    history.pushState(null, '', BASE + u.pathname.split('/').pop() + u.search);
+    history.pushState(null, '', BASE + u.pathname.split('/').pop() + u.search + u.hash);
     return route();
   }
   if (!(await leaveCurrent())) return;
@@ -1049,14 +1219,17 @@ function dbMenu(anchor, { list = false } = {}) {
     items.push({ header: tr('🌐 {0}（URL から読み込み中）', [state.manual.name]) },
       { label: tr('データベースとして保存…'), icon: '💾', kbd: `${MOD}S`, action: () => saveFile() },
       { label: tr('ファイルに書き出す…'), icon: '⤓', action: () => exportCurrent() },
+      { label: tr('共有…'), icon: '🔗', action: shareDialog },
       { label: tr('閉じる'), icon: '✕', action: closeFile }, '-');
   } else if (state.manual) {
     items.push({ header: tr('📄 {0}（ローカルファイルを直接編集中）', [state.manual.name]) },
       { label: tr('保存'), icon: '💾', kbd: `${MOD}S`, disabled: !state.dirty, action: () => saveFile() },
       { label: tr('データベースとして取り込む…'), icon: '⤒', action: importFileToBrowser },
+      { label: tr('共有…'), icon: '🔗', action: shareDialog },
       { label: tr('ファイルを閉じる'), icon: '✕', action: closeFile }, '-');
   } else if (state.dbName) {
-    items.push({ header: el('span.menu-header-db', appIcon(), state.dbName) }, ...dbActions(state.dbName, { anchor }), '-');
+    items.push({ header: el('span.menu-header-db', appIcon(), state.dbName) }, ...dbActions(state.dbName, { anchor }),
+      { label: tr('共有…'), icon: '🔗', action: shareDialog }, '-');
   }
   items.push({ header: tr('データベース') });
   for (const n of state.dbs) items.push({ label: n, icon: n === state.dbName ? '✓' : appIcon(), action: () => { if (n !== state.dbName) openDb(n); } });
@@ -2991,6 +3164,7 @@ function palette() {
         { label: tr('トランザクションを取り消し（ROLLBACK）'), icon: '↶', run: rollbackTx }]
       : [{ label: tr('トランザクションを開始'), icon: '⧗', run: beginTx }]),
     { label: tr('CSV からテーブルを作成'), icon: '⤒', run: importCsv },
+    { label: tr('共有…'), icon: '🔗', run: shareDialog },
     state.manual ? { label: state.manual.kind === 'url' ? tr('データベースとして保存') : tr('ファイルに保存'), icon: '💾', run: () => saveFile() } : null,
     ...state.dbs.filter((n) => n !== state.dbName).map((n) => ({ label: n, hint: tr('DB を開く'), icon: appIcon(), run: () => openDb(n) })),
   ].filter(Boolean);
