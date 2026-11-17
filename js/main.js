@@ -83,24 +83,255 @@ function parseUrl() {
   try { dbName = decodeURIComponent(path.split('/')[0]) || null; } catch { /* 壊れたエンコードは無視 */ }
   const p = new URLSearchParams(location.search);
   // #data=<圧縮した DB>：共有リンクに埋め込まれたデータ（# 以降はサーバーに送られない）
-  const data = location.hash.startsWith('#data=') ? location.hash.slice(6) : null;
+  const data = hashParams().get('data');
   return { dbName, sheet: p.get('sheet'), src: p.get('db'), data };
+}
+
+// ---------- # 以降：選択を渡すリンク（「🔗 リンクをコピー」で作る。選んだだけでは URL は変えない） ----------
+// #data=…&sort=列:desc&filter=["列","op","値"]&range=B3:D7
+// sort・filter は並べ替え・絞り込み（いくつでも、前ほど優先）。無ければ付けない。
+// range は選択範囲。両端を「:」でつなぐ（片方だけなら1つ）。書き方は2通りで、両端は同じ書き方にする：
+//   位置で（A1 形式）：列は A, B…（表示の位置）、行は表示上の行番号（1 から）。セル B3・列 B・行 3・すべて all
+//   名前で（テーブル）：R[主キーの値の JSON 配列]C[列名の JSON 文字列]。セル R[42]C["price"]・行 R[42]・列 C["price"]
+//     複合主キーは R[4,"F-010"]、主キーがなければ rowid。大カッコは必須（A1 形式とは [ の有無で分かれる）
+function hashParams() {
+  const h = location.hash;
+  return new URLSearchParams(!h || h.startsWith('#/') ? '' : h.slice(1));
+}
+
+/** # から並べ替え・絞り込み・選択を読む */
+function readHashView() {
+  const p = hashParams();
+  const sorts = p.getAll('sort').map((v) => {
+    const i = v.lastIndexOf(':'), dir = v.slice(i + 1);
+    return i > 0 && (dir === 'asc' || dir === 'desc') ? { col: v.slice(0, i), dir } : { col: v, dir: 'asc' };
+  }).filter((x) => x.col);
+  const filters = p.getAll('filter').map((v) => {
+    try {
+      const [col, op, value] = JSON.parse(v);
+      return typeof col === 'string' && FILTER_OPS.some((o) => o.id === op) ? { col, op, value: value == null ? '' : String(value) } : null;
+    } catch { return null; }
+  }).filter(Boolean);
+  const sel = p.get('range') ? { range: p.get('range') } : null;
+  // 開いたあと、並べ替え・絞り込み・選択を変えるまでは URL に残す
+  const raw = [...p.entries()].filter(([k]) => k !== 'data');
+  return { sorts, filters, sel, raw };
+}
+
+/** # に書く値（読みやすさのため [ ] " , : @ はそのまま） */
+const hashEnc = (v) => encodeURIComponent(v).replace(/%(5B|5D|22|2C|3A|40)/g, (m) => decodeURIComponent(m));
+const hashParam = ([k, v]) => k + '=' + hashEnc(v);
+
+/** 開いたリンクの #（並べ替え・絞り込み・選択）。そのシートで何か変えるまでは URL に残す */
+function viewHashParams() {
+  return state.urlView && state.urlView.key === state.key ? state.urlView.raw : [];
+}
+
+/** 今のシートの並べ替え・絞り込み → [[キー, 値]]（リンクを作るとき用） */
+function viewParams(key = state.key) {
+  const v = state.views.get(key), out = [];
+  if (!v) return out;
+  for (const x of v.sorts) out.push(['sort', `${x.col}:${x.dir}`]);
+  for (const f of v.filters) out.push(['filter', JSON.stringify([f.col, f.op, f.value ?? ''])]);
+  return out;
+}
+
+function hashOf(data, params = []) {
+  const parts = [...(data ? ['data=' + data] : []), ...params.map(hashParam)];
+  return parts.length ? '#' + parts.join('&') : '';
+}
+
+function colLetter(c) {
+  let s = '';
+  for (let n = c + 1; n > 0; n = Math.floor((n - 1) / 26)) s = String.fromCharCode(65 + (n - 1) % 26) + s;
+  return s;
+}
+const colOfLetter = (s) => [...s].reduce((n, ch) => n * 26 + ch.charCodeAt(0) - 64, 0) - 1;
+
+/** 行の見分け方（テーブルだけ）：主キーの値、主キーがなければ rowid。URL に書けない値（BLOB 等）なら null */
+function rowKeyValues(row) {
+  const m = state.model;
+  if (!m || !row) return null;
+  const vals = m.pk.length ? m.pk.map((p) => row.values[m.columns.findIndex((c) => c.name === p)]) : [row.key?._rowid_];
+  return vals.every((x) => x === null || typeof x === 'string' || (typeof x === 'number' && Number.isFinite(x))) ? vals : null;
+}
+
+/** 今の選択 → 位置の range（選んでいない・新しい行なら null） */
+function rangeParam() {
+  const g = state.grid;
+  if (!g || g.none || !g.cols.length) return null;
+  const { cur, ext } = g;
+  if (cur.r === g.newRowIndex || ext.r === g.newRowIndex) return null;
+  const two = (a, b) => (a === b ? a : `${a}:${b}`);
+  if (g.colSelect && g.rowSelect) return 'all';
+  if (g.colSelect) return two(colLetter(cur.c), colLetter(ext.c));
+  if (g.rowSelect) return two(String(cur.r + 1), String(ext.r + 1));
+  return two(colLetter(cur.c) + (cur.r + 1), colLetter(ext.c) + (ext.r + 1));
+}
+
+/** 今の選択 → 名前で指す range（テーブルだけ。キーが URL に書けない行・新しい行なら null） */
+function namedRange() {
+  const g = state.grid;
+  if (!state.model || !g || g.none || !g.cols.length) return null;
+  if (g.colSelect && g.rowSelect) return 'all';
+  const { cur, ext } = g;
+  const ref = (p) => {
+    let out = '';
+    if (!g.colSelect) {
+      const k = p.r === g.newRowIndex ? null : rowKeyValues(g.rowAt(p.r));
+      if (!k) return null;
+      out += 'R' + JSON.stringify(k);
+    }
+    if (!g.rowSelect) out += 'C' + JSON.stringify([g.cols[p.c].name]);
+    return out;
+  };
+  const a = ref(cur), b = ref(ext);
+  return a && b ? (a === b ? a : `${a}:${b}`) : null;
+}
+
+/** s[i] の「[」に対応する「]」の位置（JSON の文字列の中は飛ばす）。無ければ -1 */
+function bracketEnd(s, i) {
+  if (s[i] !== '[') return -1;
+  let depth = 0, inStr = false;
+  for (; i < s.length; i++) {
+    const ch = s[i];
+    if (inStr) { if (ch === '\\') i++; else if (ch === '"') inStr = false; }
+    else if (ch === '"') inStr = true;
+    else if (ch === '[') depth++;
+    else if (ch === ']' && --depth === 0) return i;
+  }
+  return -1;
+}
+
+/** range を両端に分ける（大カッコ・文字列の中の「:」では切らない） */
+function splitRange(s) {
+  const out = [];
+  let start = 0;
+  for (let i = 0; i < s.length; i++) {
+    if (s[i] === '[') { i = bracketEnd(s, i); if (i < 0) return null; }
+    else if (s[i] === ':') { out.push(s.slice(start, i)); start = i + 1; }
+  }
+  out.push(s.slice(start));
+  return out;
+}
+
+/**
+ * range の片側 → { named, c, row }。
+ * 位置で「B3」「3」「B」：c は列の位置、row は表示上の行番号。
+ * 名前で「R[42]C["price"]」「R[42]」「C["price"]」：c は列名、row は主キーの値の配列
+ */
+function parseRef(s) {
+  if (s[0] !== 'R' && s[0] !== 'C' || s[1] !== '[') {
+    const m = s.match(/^([A-Z]*)(\d*)$/);
+    if (!m || (!m[1] && !m[2])) return null;
+    return { named: false, c: m[1] ? colOfLetter(m[1]) : null, row: m[2] ? Number(m[2]) : null };
+  }
+  let i = 0, row = null, c = null;
+  const part = () => {
+    const e = bracketEnd(s, i + 1);
+    if (e < 0) return null;
+    let v;
+    try { v = JSON.parse(s.slice(i + 1, e + 1)); } catch { return null; }
+    i = e + 1;
+    return v;
+  };
+  if (s[i] === 'R') {
+    row = part();
+    if (!Array.isArray(row) || !row.length) return null;
+  }
+  if (s[i] === 'C') {
+    const v = part();
+    if (!Array.isArray(v) || v.length !== 1 || typeof v[0] !== 'string') return null;
+    c = v[0];
+  }
+  return i === s.length ? { named: true, c, row } : null;
+}
+
+/** キーの値 → 今の並び順・絞り込みでの表示位置（見つからなければ null） */
+async function rowIndexOfKey(vals) {
+  const s = state.source, m = state.model;
+  if (!m) return null;
+  const cols = m.pk.length ? m.pk : ['_rowid_'];
+  if (vals.length !== cols.length) return null;
+  const w = s.where();
+  const sel = cols.map((c, i) => `${s.t}.${c === '_rowid_' ? '_rowid_' : q(c)} AS __k${i}`).join(', ');
+  const r = await db.query(`SELECT __n FROM (SELECT row_number() OVER (${s.orderBy().trim()}) AS __n, ${sel} FROM ${s.t}${w.sql}) WHERE ${cols.map((_, i) => `__k${i} IS ?`).join(' AND ')} LIMIT 1`, [...w.bind, ...vals]);
+  return r.rows.length ? Number(r.rows[0][0]) - 1 : null;
+}
+
+/** リンクの選択（range か cols/rows）を今のグリッドに当てる。当てられたら true */
+async function applySelection(sel) {
+  const g = state.grid;
+  if (!g || !sel || !g.cols.length) return false;
+  if (sel.range === 'all') { g.selectAll(); return true; }
+  const refs = splitRange(sel.range)?.map(parseRef);
+  if (!refs || refs.length > 2 || refs.some((x) => !x)) return false;
+  let [a, b = a] = refs;
+  if (a.named !== b.named) return false; // 両端は同じ書き方
+  if (a.named) {
+    if ((a.row || b.row) && !state.model) return false; // キーで指せるのはテーブルだけ
+    const colIdx = (n) => (n == null ? null : g.cols.findIndex((c) => c.name === n));
+    a = { ...a, c: colIdx(a.c) }; b = { ...b, c: colIdx(b.c) };
+  }
+  if ((a.row == null) !== (b.row == null) || (a.c == null) !== (b.c == null)) return false; // 両端は同じ形
+  const rowOf = async (row) => (row == null ? null : Array.isArray(row) ? await rowIndexOfKey(row) : row - 1);
+  const ok = (r) => r != null && r >= 0 && r < g.rowCount;
+  const okC = (c) => c != null && c >= 0 && c < g.cols.length;
+  try {
+    if (a.row == null && b.row == null) { // 列だけ
+      if (!okC(a.c) || !okC(b.c)) return false;
+      g.selectCol(a.c, false); g.selectCol(b.c, true);
+      return true;
+    }
+    const ra = await rowOf(a.row), rb = await rowOf(b.row);
+    if (!ok(ra) || !ok(rb) || state.grid !== g) return false;
+    if (a.c == null && b.c == null) { g.selectRows(ra, rb); g.ensureVisible(g.cur); return true; } // 行だけ
+    if (!okC(a.c) || !okC(b.c)) return false;
+    g.moveTo(ra, a.c);
+    if (rb !== ra || b.c !== a.c) g.moveTo(rb, b.c, true);
+    return true;
+  } catch { return false; }
+}
+
+/** 開いたリンクの選択から動いたら、URL の # を外す（履歴は増やさない） */
+const selSig = (g) => (g ? JSON.stringify([g.none, g.colSelect, g.rowSelect, g.cur, g.ext]) : '');
+function dropUrlView() {
+  if (!state.rangeReady || !state.urlView) return;
+  // 行の読み込み後などに同じ選択のまま知らせてくることがあるので、実際に動いたときだけ
+  if (selSig(state.grid) === state.urlView.sig) return;
+  state.urlView = null;
+  setUrl();
+}
+
+/** 同じシートのまま # が変わった（手で書き換えた・戻る）：リンクとして当て直す。当てたら true */
+async function syncFromHash() {
+  if (!state.key || !state.grid) return false;
+  const h = readHashView();
+  if (!h.raw.length) return false;
+  state.pendingHash = h;
+  await showSheet(state.key);
+  return true;
+}
+
+/** 右クリックメニューの「🔗 リンクを作る…」：今の選択を入れて共有ダイアログを開く */
+function linkItems() {
+  return ['-', { label: tr('🔗 リンクを作る…'), disabled: !rangeParam() && !namedRange(), action: () => shareDialog({ withSelection: true }) }];
 }
 
 /** URL から読んだ DB の URL（/<保存するときの名前の候補>?db=…&sheet=…） */
 function urlOfSrc(m, key) {
-  return linkUrl({ wanted: m.wanted, src: m.embed ? null : m.url, queryParams: m.queryParams, key, data: m.embed });
+  return linkUrl({ wanted: m.wanted, src: m.embed ? null : m.url, queryParams: m.queryParams, key, data: m.embed, hash: key && key === state.key ? viewHashParams() : [] });
 }
 
 /** /<名前>?db=…&query1=…&sheet=…#data=… を組み立てる（src・data はどちらか一方） */
-function linkUrl({ wanted, src, queryParams = [], key, data }) {
+function linkUrl({ wanted, src, queryParams = [], key, data, hash = [] }) {
   const params = [];
   if (src) params.push(['db', src]);
   params.push(...queryParams);
   if (key) params.push(['sheet', sheetParam(key)]);
   return BASE + (wanted ? encodeURIComponent(wanted) : '')
     + (params.length ? '?' + params.map(([k, v]) => k + '=' + encodeURIComponent(v)).join('&') : '')
-    + (data ? '#data=' + data : '');
+    + hashOf(data, hash);
 }
 
 /** 文字列の短い指紋（埋め込みデータの端末側データのキーに使う。長いデータをそのままキーにしない） */
@@ -146,7 +377,8 @@ function keyOfParam(v) {
 
 function urlOf(dbName, key) {
   if (!dbName) return BASE;
-  return BASE + encodeURIComponent(dbName) + (key ? '?sheet=' + encodeURIComponent(sheetParam(key)) : '');
+  return BASE + encodeURIComponent(dbName) + (key ? '?sheet=' + encodeURIComponent(sheetParam(key)) : '')
+    + (key && key === state.key ? hashOf(null, viewHashParams()) : '');
 }
 
 function setUrl() {
@@ -179,6 +411,12 @@ function restoreUrl() {
 }
 
 async function route() {
+  // # の並べ替え・絞り込み・選択は、このあと開くシートに当てる（URL が正）
+  state.pendingHash = readHashView();
+  try { return await routeInner(); } finally { state.pendingHash = null; }
+}
+
+async function routeInner() {
   const { dbName, sheet, src, data } = parseUrl();
   // ?db=<SQLite ファイルの URL>：そのファイルをメモリに読み込んで開く（手動保存）。
   // /<DB 名> は保存するときの名前の候補、?sheet= は開くシート
@@ -189,7 +427,7 @@ async function route() {
       && JSON.stringify(urlQueries().params) === JSON.stringify(state.manual.queryParams)) {
       const key = keyOfParam(sheet);
       if (key && key !== state.key) await showSheet(key);
-      else setUrl();
+      else if (!(await syncFromHash())) setUrl();
       return;
     }
     if (!(await leaveCurrent())) { if (state.dbName) setUrl(); else history.replaceState(null, '', BASE); return; }
@@ -211,7 +449,7 @@ async function route() {
   else {
     const key = keyOfParam(sheet);
     if (key && key !== state.key) await showSheet(key);
-    else setUrl();
+    else if (!(await syncFromHash())) setUrl();
   }
 }
 
@@ -1049,24 +1287,35 @@ function refersOtherDb(sql) {
 
 
 /**
- * 「🔗 共有…」：開いている DB を人に渡すリンクを作る。
- * ?db= で開いているものは元のファイルの URL を使うリンクも選べる。それ以外は DB を圧縮して #data= に埋め込む
+ * 「🔗 共有…」と、右クリックの「🔗 リンクを作る…」（withSelection：今の選択も入れる）。
+ * DB の渡し方・選択の指し方・並べ替えと絞り込みを選ぶと、下のリンクがすぐ変わる。
+ * DB は「含めない」（端末の DB を名前で開く）・元のファイルの URL（?db= で開いたとき）・置いたファイルの URL・#data= に埋め込む
  */
-async function shareDialog() {
+async function shareDialog({ withSelection = false } = {}) {
   if (!state.dbName) return;
   if (state.grid && !(await state.grid.flushDraft())) return;
   const fromUrl = state.manual?.kind === 'url' && !state.manual.embed;
+  const local = !state.manual;
   const name = state.manual ? (state.manual.wanted || state.manual.name) : state.dbName;
   const picked = new Set(state.queries.map((x) => x.name)); // 含めるクエリシート（はじめは全部）
+  // 選択を入れるなら今のシートのクエリは外せない
+  const fixedQuery = withSelection && state.key?.[0] === 'q' ? state.key.slice(2) : null;
+  const posRange = withSelection ? rangeParam() : null;
+  const keyRange = withSelection ? namedRange() : null;
+  let selMode = posRange ? 'pos' : keyRange ? 'key' : null;
   let mode = fromUrl ? 'link' : 'embed';
   let embedded = null; // 圧縮した DB（作るのに時間がかかるので一度だけ）
   let url = '';
 
   const lead = el('p');
   const modeBox = el('div.share-mode');
+  const selBox = el('div.share-mode');
   const queryBox = el('div.share-queries');
   const sheetSel = el('select.share-sheet', { on: { change: () => update() } });
-  const out = el('input.share-url.mono', { readOnly: true, 'aria-label': tr('共有リンク'), on: { focus: (e) => e.target.select() } });
+  const viewCheck = el('input', { type: 'checkbox', checked: true, on: { change: () => update() } });
+  const viewBox = el('label.share-check', viewCheck, el('span', tr('並べ替え・絞り込みを含める')));
+  const viewNote = el('small.muted');
+  const out = el('textarea.share-url.mono', { readOnly: true, rows: 4, 'aria-label': tr('共有リンク'), on: { focus: (e) => e.target.select() } });
   const info = el('div.share-info');
   const warn = el('div.share-warn');
   const copyBtn = el('button.btn.primary', { on: { click: () => copyLink() } }, tr('🔗 リンクをコピー'));
@@ -1084,40 +1333,69 @@ async function shareDialog() {
     try { const u = new URL(v); return /^https?:$/.test(u.protocol) ? u.href : null; } catch { return null; }
   };
 
+  const radio = (group, v, cur, onPick, label, note, { extra = '', disabled = false } = {}) => {
+    const input = el('input', { type: 'radio', name: group, checked: cur === v, on: { change: () => onPick(v) } });
+    input.disabled = disabled;
+    return el('label.share-radio' + (disabled ? '.disabled' : ''), input, el('span', el('b', label), el('small', note), extra));
+  };
   {
-    const radio = (v, label, note, extra = '') => el('label.share-radio',
-      el('input', { type: 'radio', name: 'share-mode', checked: mode === v, on: { change: () => { mode = v; update(); if (v === 'custom') srcInput.focus(); } } }),
-      el('span', el('b', label), el('small', note), extra));
+    const pick = (v) => { mode = v; update(); if (v === 'custom') srcInput.focus(); };
+    const items = [];
+    if (local) items.push(radio('share-mode', 'none', mode, pick, tr('DB を含めない'), tr('DB の名前だけを入れます。この端末か、同じ名前の DB がある端末で開くとき向けです')));
     if (fromUrl) {
-      modeBox.append(radio('link', tr('元のファイルの URL を使う'), state.dirty
+      items.push(radio('share-mode', 'link', mode, pick, tr('元のファイルの URL を使う'), state.dirty
         ? tr('データの未保存の変更は含まれません。相手は元のファイルを開きます')
         : tr('相手も同じファイルを開きます。リンクは短くなります')));
     }
-    modeBox.append(
-      radio('embed', tr('データごと埋め込む'), tr('今のデータをリンクに入れます。元のファイルが無くても開けます')),
-      radio('custom', tr('置いたファイルの URL を指定する'), tr('相手はその URL のファイルを開きます。リンクは短くなります'), srcBox));
+    items.push(
+      radio('share-mode', 'embed', mode, pick, tr('データごと埋め込む'), tr('今のデータをリンクに入れます。元のファイルが無くても開けます')),
+      radio('share-mode', 'custom', mode, pick, tr('置いたファイルの URL を指定する'), tr('相手はその URL のファイルを開きます。リンクは短くなります'), { extra: srcBox }));
+    modeBox.append(el('div.share-label', tr('DB')), ...items);
+  }
+  if (withSelection) {
+    const pick = (v) => { selMode = v; update(); };
+    selBox.append(el('div.share-label', tr('選択範囲の指し方')),
+      radio('share-sel', 'pos', selMode, pick, tr('位置で'), tr('列は A, B…、行は表示上の何行目か。どのシートでも使えます。データが変わるとずれます'), { disabled: !posRange }),
+      radio('share-sel', 'key', selMode, pick, tr('列名・主キーで'), keyRange
+        ? tr('列の並びやデータが変わっても同じ所を指します。リンクに主キーの値が入ります')
+        : tr('テーブルで、主キーの値をリンクに書ける行だけ使えます'), { disabled: !keyRange }));
   }
 
   function renderSheets() {
     const cur = sheetSel.value || state.key;
-    const keys = allKeys().filter((k) => k[0] !== 'q' || picked.has(k.slice(2)));
+    const keys = allKeys().filter((k) => k[0] !== 'q' || picked.has(k.slice(2)) || mode === 'none');
     sheetSel.replaceChildren(...keys.map((k) => el('option', { value: k, selected: k === cur }, `${KIND_ICON[k[0]]} ${k.slice(2)}`)));
     if (!keys.includes(cur) && keys.length) sheetSel.value = keys[0];
   }
   if (state.queries.length) {
     queryBox.append(el('div.share-label', tr('含めるクエリシート')),
-      el('div.share-checks', ...state.queries.map((x) => el('label.share-check',
-        el('input', { type: 'checkbox', checked: true, on: { change: (e) => { if (e.target.checked) picked.add(x.name); else picked.delete(x.name); renderSheets(); update(); } } }),
-        el('span', x.name)))));
+      el('div.share-checks', ...state.queries.map((x) => {
+        const cb = el('input', { type: 'checkbox', checked: true, on: { change: (e) => { if (e.target.checked) picked.add(x.name); else picked.delete(x.name); renderSheets(); update(); } } });
+        cb.disabled = x.name === fixedQuery;
+        return el('label.share-check', cb, el('span', x.name));
+      })));
   }
   renderSheets();
+  sheetSel.disabled = withSelection; // 選択を入れるなら今のシート
 
   async function update() {
     srcBox.hidden = mode !== 'custom';
-    lead.textContent = mode !== 'embed'
-      ?tr('このリンクを開くと、相手のブラウザで同じファイルとシートが開きます。相手の変更はこちらには届きません')
-      : tr('このリンクを開くと、相手のブラウザで今のデータとシートが開きます（保存するまで相手の端末には残りません）。相手の変更はこちらには届きません');
-    const qs = state.queries.filter((x) => picked.has(x.name));
+    queryBox.hidden = mode === 'none';
+    renderSheets();
+    const key = withSelection ? state.key : sheetSel.value || null;
+    const sel = selMode === 'pos' ? posRange : selMode === 'key' ? keyRange : null;
+    // 位置で指すなら、並べ替え・絞り込みは必ず入れる（無いと別の行になる）
+    const view = key ? viewParams(key) : [];
+    viewBox.hidden = !view.length;
+    viewCheck.disabled = !!sel && selMode === 'pos';
+    if (viewCheck.disabled) viewCheck.checked = true;
+    viewNote.textContent = view.length && viewCheck.disabled ? tr('位置で指すときは必ず含めます') : '';
+    lead.textContent = mode === 'none'
+      ? tr('このリンクに DB は入りません。開いた端末にある同じ名前の DB で、同じシートを開きます')
+      : mode !== 'embed'
+        ? tr('このリンクを開くと、相手のブラウザで同じファイルとシートが開きます。相手の変更はこちらには届きません')
+        : tr('このリンクを開くと、相手のブラウザで今のデータとシートが開きます（保存するまで相手の端末には残りません）。相手の変更はこちらには届きません');
+    const qs = mode === 'none' ? [] : state.queries.filter((x) => picked.has(x.name));
     const queryParams = [];
     qs.forEach((x, i) => queryParams.push(['query' + (i + 1), x.sql], [`query${i + 1}.name`, x.name]));
     if (mode === 'embed' && !embedded) {
@@ -1130,9 +1408,9 @@ async function shareDialog() {
     }
     const src = mode === 'link' ? state.manual.url : mode === 'custom' ? customSrc() : null;
     const noSrc = mode === 'custom' && !src;
+    const hash = [...(viewCheck.checked ? view : []), ...(sel ? [['range', sel]] : [])];
     url = noSrc ? '' : location.origin + linkUrl({
-      wanted: name, src, queryParams,
-      key: sheetSel.value || null, data: mode === 'embed' ? embedded.data : null,
+      wanted: name, src, queryParams, key, hash, data: mode === 'embed' ? embedded.data : null,
     });
     const len = url.length, tooLong = len > LINK_MAX;
     out.value = tooLong ? '' : url;
@@ -1160,8 +1438,8 @@ async function shareDialog() {
   }
 
   const m = modal([
-    el('h2', tr('🔗 「{0}」を共有', [name])),
-    lead, modeBox, queryBox,
+    el('h2', withSelection ? tr('🔗 選択範囲へのリンク') : tr('🔗 「{0}」を共有', [name])),
+    lead, modeBox, selBox, el('div.share-view', viewBox, viewNote), queryBox,
     el('label.share-label', tr('はじめに開くシート'), sheetSel),
     out, info, warn,
     el('div.modal-actions', shareBtn || '', copyBtn, el('button.btn', { on: { click: () => m.close() } }, tr('閉じる'))),
@@ -1185,8 +1463,16 @@ async function openUrlDialog(anchor) {
   });
   if (!v) return;
   const u = new URL(v, location.href);
-  // このアプリの URL：公開版・検証用など別のオリジンのものでも、パスと引数をこちらで開く
-  if (u.searchParams.has('db') || u.hash.startsWith('#data=')) {
+  // このアプリの URL：公開版・検証用など別のオリジンのものでも、パスと引数をこちらで開く。
+  // ?db=・?sheet=・queryN=、# の data・range・sort・filter のどれかがあるか、同じオリジンで拡張子のないパスならアプリの URL。
+  // DB の入っていないリンク（/<DB 名>?sheet=…#range=…）は、この端末の同じ名前の DB を開く
+  const hp = new URLSearchParams(u.hash.startsWith('#/') ? '' : u.hash.slice(1));
+  const last = u.pathname.split('/').pop();
+  const isApp = ['db', 'sheet'].some((k) => u.searchParams.has(k))
+    || [...u.searchParams.keys()].some((k) => /^query\d+$/.test(k))
+    || ['data', 'range', 'sort', 'filter'].some((k) => hp.has(k))
+    || (u.origin === location.origin && u.pathname.startsWith(BASE) && !last.includes('.'));
+  if (isApp) {
     // パスの最後が DB 名（保存するときの名前の候補）。公開先によって手前のパスが違うので最後だけ使う
     history.pushState(null, '', BASE + u.pathname.split('/').pop() + u.search + u.hash);
     return route();
@@ -1805,6 +2091,13 @@ async function showSheet(key, { keepView = true } = {}) {
   }
   state.order = keys;
   state.key = key;
+  // URL から来たときは、# の並べ替え・絞り込みをこのシートに当てる
+  const fromUrl = state.pendingHash;
+  state.pendingHash = null;
+  // リンクの # が何か指していれば当てる。何も無い URL（タブの切り替え・戻る）なら今の並べ替えのまま
+  if (fromUrl?.raw.length && key) Object.assign(viewOf(key), { sorts: fromUrl.sorts, filters: fromUrl.filters });
+  state.urlView = fromUrl?.raw.length && key ? { key, raw: fromUrl.raw } : null;
+  state.rangeReady = false; // 当て終えるまで、選択の変化で # を外さない
   setUrl();
   renderTabs();
   if (!key) {
@@ -1826,6 +2119,9 @@ async function showSheet(key, { keepView = true } = {}) {
   try {
     if (kind === 't') {
       state.model = await readTable(name);
+      // URL などから来た、無い列の並べ替え・絞り込みは捨てる
+      const has = (c) => state.model.columns.some((x) => x.name === c);
+      view.sorts = view.sorts.filter((x) => has(x.col)); view.filters = view.filters.filter((x) => has(x.col));
       state.source = new TableSource(state.dbName, state.model, view, await labelColumns(state.model));
       state.prots = readProtections(state.model);
       state.source.protect = protectionChecker(state.model, state.prots);
@@ -1848,9 +2144,18 @@ async function showSheet(key, { keepView = true } = {}) {
   state.grid = new Grid($('grid-host'), state.source, gridHooks(kind));
   if (carryDraft && carryDraft.values.length === state.source.columns.length) state.grid.draft = carryDraft;
   await state.grid.reload({ keepSelection: false });
-  if (view.pos) state.grid.setPos(view.pos);
-  // スマホは開いた直後は何も選ばない（スプレッドシートと同じ）
-  if (phone.matches) await state.grid.deselect(); else state.grid.focus();
+  const grid = state.grid;
+  const placed = fromUrl?.sel ? await applySelection(fromUrl.sel) : false;
+  if (state.grid !== grid) return; // 当てている間に別のシートへ移った
+  if (fromUrl?.sel && !placed) toast(tr('リンクの選択範囲が見つかりませんでした（消えたか、絞り込みで隠れています）'));
+  if (!placed) {
+    if (view.pos) state.grid.setPos(view.pos);
+    // スマホは開いた直後は何も選ばない（スプレッドシートと同じ）
+    if (phone.matches) await state.grid.deselect(); else state.grid.focus();
+  } else if (!phone.matches) state.grid.focus();
+  if (state.urlView) state.urlView.sig = selSig(state.grid);
+  state.rangeReady = true;
+  setUrl();
   updatePanel();
 }
 
@@ -2082,6 +2387,7 @@ function gridHooks(kind) {
   return {
     onSelect: (s) => {
       document.body.classList.toggle('has-sel', !!s);
+      dropUrlView();
       // 数式バーで次のセルを打っている最中（前のセルの保存が後から終わったとき）は、打った文字を上書きしない
       if (state.grid?.editing && document.activeElement === $('fx-input')) return;
       updateFx(s ?? undefined);
@@ -2524,7 +2830,7 @@ function headerMenu(c, anchor) {
       { label: tr('{0} 列を保護…', [cols.length]), icon: '🔒', action: () => protect({ kind: 'cols', cols: names }, at) },
       '-',
       { label: tr('{0} 列を削除…', [cols.length]), icon: '🗑', danger: true, disabled: state.model.columns.length <= names.length, action: () => dropColumns(names) });
-    return menu(anchor, items);
+    return menu(anchor, [...items, ...linkItems()]);
   }
   const items = [
     { header: col.name },
@@ -2551,7 +2857,7 @@ function headerMenu(c, anchor) {
     }
     items.push('-', { label: tr('列を削除…'), icon: '🗑', danger: true, disabled: state.model.columns.length <= 1, action: () => dropColumn(col.name) });
   }
-  menu(anchor, items.filter(Boolean));
+  menu(anchor, [...items.filter(Boolean), ...linkItems()]);
 }
 
 /**
@@ -2820,6 +3126,7 @@ async function cellMenu(pos, range) {
       { label: many ? tr('{0} 行を保護…', [rows]) : tr('行を保護…'), icon: '🔒', disabled: rows < 1, action: () => protectSelection(pos) },
       ...unprotectHere());
     items.push(...cellSection('row'));
+    items.push(...linkItems());
     if (isTable) items.push('-',
       { label: many ? tr('{0} 行を削除', [rows]) : tr('行を削除'), icon: '🗑', kbd: `${MOD}-`, danger: true, disabled: rows < 1, action: () => deleteSelectedRows() });
     return menu(pos, items.filter(Boolean));
@@ -2845,6 +3152,7 @@ async function cellMenu(pos, range) {
     const v = g.rowAt(r)?.values[c];
     if (single && col?.fk && v != null) items.push('-', { label: tr('参照先の行を開く（{0}）', [col.fk.table]), icon: '→', kbd: tr('{0}クリック', [MOD]), action: () => jumpToRef(col.fk, v) });
   }
+  items.push(...linkItems());
   menu(pos, items);
 }
 

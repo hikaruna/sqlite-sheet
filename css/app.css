@@ -635,7 +635,11 @@ body.at-home .toolbar, body.at-home .fxbar { display: none; }
 .share-checks { display: flex; flex-wrap: wrap; gap: 4px 14px; }
 .share-check { display: inline-flex; gap: 6px; align-items: center; color: var(--text); font-size: 13px; }
 .share-sheet { justify-self: start; max-width: 100%; }
-.share-url { width: 100%; font-size: 12px; }
+.share-url { width: 100%; font-size: 12px; resize: vertical; word-break: break-all; }
+.share-radio.disabled { opacity: .5; cursor: default; }
+.share-view { display: grid; gap: 2px; }
+.share-view:has(> label[hidden]) { display: none; }
+.share-queries[hidden] { display: none; }
 .share-info { font-size: 12px; }
 .share-warn p { font-size: 12px; color: var(--warn, #b45309); margin: 2px 0 0; }
 .share-warn:empty { display: none; }
