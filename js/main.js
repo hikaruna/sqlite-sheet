@@ -3,7 +3,7 @@ import { t as tr, lang, LANGS, setLang, locale } from './i18n.js';
 import { db, q } from './db-client.js';
 import { el, toast, menu, popover, closePopover, ask, confirmDialog, choiceDialog, modal, pickFile, download, exportFile, fmtBytes, isTouch, modKey, isMac, icon, appIcon, phone } from './ui.js';
 import { listObjects, readTable, createTableSql, migrationSql, constantDefault, TYPES, affinity } from './schema.js';
-import { Grid } from './grid.js';
+import { Grid, CELL_FORMATS } from './grid.js';
 import { sniff, asText, hexDump } from './blob.js';
 import { TableSource, QuerySource, FILTER_OPS, friendlyError, convertInput, formText, formToDefault } from './sources.js';
 import { txMarks } from './txmarks.js';
@@ -515,10 +515,8 @@ function buildChrome() {
       // 保護：テーブルなら常に出す（保護がなくても、ここから新しく保護できる）
       el('button#prot-btn.tb-btn', { title: tr('シートと範囲の保護'), on: { click: (e) => protPanel(e.currentTarget) } }, icon('lock'), el('span.tb-label', tr('保護')), el('span#prot-n.tb-count', { hidden: true })),
       el('span.vsep'),
-      // テキストの折り返し（スプレッドシートのツールバーと同じく、押すと選べる）
-      el('button#wrap-btn.tb-btn', { title: tr('テキストの折り返し'), on: { click: (e) => { if (state.grid) menu(e.currentTarget, wrapItems()); } } }, icon('wrap')),
-      // URL を画像で表示（折り返しと同じく押すと選べる）。どちらも対象のセルを選んでいないときは灰色
-      el('button#image-btn.tb-btn', { title: tr('URL を画像で表示'), on: { click: (e) => { if (state.grid) menu(e.currentTarget, imageItems()); } } }, icon('image')),
+      // セルごとの書式（折り返し・画像表示など。スプレッドシートのツールバーと同じく、押すと選べる）
+      ...formatButtons(),
       el('span.grow'),
       el('button#panel-btn.tb-btn', { title: tr('テーブルの設計（列・キー・制約）'), on: { click: () => togglePanel() } }, icon('design'), el('span.tb-label', tr('設計'))),
       el('button#console-btn.tb-btn', { title: tr('SQL コンソール（{0}`）', [MOD]), on: { click: () => toggleConsole() } }, icon('terminal'), el('span.tb-label', 'SQL')),
@@ -1565,49 +1563,56 @@ function editItems() {
   ];
 }
 
-/** 「表示形式」メニュー */
+// ---------- セルごとの書式の UI（定義は grid.js の CELL_FORMATS） ----------
+// 書式を足すときはここに1つ足すと、メニュー・ツールバーのボタン・元に戻すが揃う。
+// 文言は表示するときに tr() で訳す
+const FORMAT_UI = [
+  { name: 'wrap', icon: 'wrap', title: 'テキストの折り返し', on: '折り返す', off: '切り詰める', undo: '「{0}」のテキストの折り返し' },
+  { name: 'image', icon: 'image', title: 'URL を画像で表示', on: '画像で表示', off: '文字で表示', undo: '「{0}」の URL の画像表示' },
+];
+
+/** 「表示形式」メニュー：書式ごとに見出しと2択を並べる */
 function formatItems() {
-  return [{ header: tr('テキストの折り返し') }, ...wrapItems(), { header: tr('URL を画像で表示') }, ...imageItems()];
+  return FORMAT_UI.flatMap((f) => [{ header: tr(f.title) }, ...formatToggleItems(f)]);
+}
+
+/** ツールバーの書式ボタン（押すとその書式の2択） */
+function formatButtons() {
+  return FORMAT_UI.map((f) => el(`button#fmt-${f.name}-btn.tb-btn`, { title: tr(f.title), on: { click: (e) => { if (state.grid) menu(e.currentTarget, formatToggleItems(f)); } } }, icon(f.icon)));
+}
+
+/** 選んでいるセル（読み込み済みの行のもの）のうち、その書式を付けられるもの */
+function formatTargets(name) {
+  const g = state.grid;
+  return g && !g.none ? g.selectedCells().filter((x) => g.canFormat(name, x.r, x.row, x.c)) : [];
 }
 
 /**
- * ツールバーの書式ボタン（折り返し・画像）：選んでいる範囲に対象のセルがなければ灰色。
+ * ツールバーの書式ボタン：選んでいる範囲に対象のセルがなければ灰色。
  * 対象のセルが全部その書式ならオンの見た目（メニューの ✓ と同じ判定）
  */
 function updateFormatButtons() {
-  const g = state.grid, cells = g && !g.none ? g.selectedCells() : [];
-  const set = (btn, can, is) => {
-    if (!btn) return;
-    const targets = cells.filter(can), on = targets.length > 0 && targets.every(is);
+  const g = state.grid;
+  for (const f of FORMAT_UI) {
+    const btn = $(`fmt-${f.name}-btn`);
+    if (!btn) continue;
+    const targets = formatTargets(f.name), on = targets.length > 0 && targets.every((x) => g.isFormat(f.name, x.r, x.row, x.c));
     btn.disabled = !targets.length;
     btn.classList.toggle('on', on);
     btn.setAttribute('aria-pressed', String(on));
-  };
-  set($('wrap-btn'), (x) => g.canWrap(x.row, x.c), (x) => g.isWrap(x.r, x.row, x.c));
-  set($('image-btn'), (x) => g.canImage(x.row, x.c), (x) => g.isImage(x.r, x.row, x.c));
-}
-
-function wrapItems() {
-  const g = state.grid;
-  return toggleItems((x) => g.canWrap(x.row, x.c), (x) => g.isWrap(x.r, x.row, x.c), (t, on) => g.setWrap(t, on), tr('折り返す'), tr('切り詰める'));
-}
-function imageItems() {
-  const g = state.grid;
-  return toggleItems((x) => g.canImage(x.row, x.c), (x) => g.isImage(x.r, x.row, x.c), (t, on) => g.setImage(t, on), tr('画像で表示'), tr('文字で表示'));
+  }
 }
 
 /**
- * セルごとの書式を切り替える2つの選択肢。選んでいるセル（読み込み済みの行のもの）のうち、can を満たすものだけが対象。
- * 対象が1つもなければ灰色。今の設定に ✓（セルごとに違うときは付けない）
+ * 書式を切り替える2つの選択肢。対象が1つもなければ灰色。今の設定に ✓（セルごとに違うときは付けない）
  */
-function toggleItems(can, is, set, onLabel, offLabel) {
-  const g = state.grid;
-  const targets = g ? g.selectedCells().filter(can) : [];
-  if (!targets.length) return [{ label: onLabel, icon: '', disabled: true }, { label: offLabel, icon: '', disabled: true }];
-  const on = targets.filter(is).length;
+function formatToggleItems(f) {
+  const g = state.grid, targets = formatTargets(f.name);
+  if (!targets.length) return [{ label: tr(f.on), icon: '', disabled: true }, { label: tr(f.off), icon: '', disabled: true }];
+  const on = targets.filter((x) => g.isFormat(f.name, x.r, x.row, x.c)).length;
   return [
-    { label: onLabel, icon: on === targets.length ? '✓' : '', action: () => set(targets, true) },
-    { label: offLabel, icon: on === 0 ? '✓' : '', action: () => set(targets, false) },
+    { label: tr(f.on), icon: on === targets.length ? '✓' : '', action: () => g.setFormat(f.name, targets, true) },
+    { label: tr(f.off), icon: on === 0 ? '✓' : '', action: () => g.setFormat(f.name, targets, false) },
   ];
 }
 
@@ -2449,25 +2454,16 @@ function gridHooks(kind) {
       const sheet = state.key;
       undo.push({ label: tr('「{0}」の列幅の変更', [sheet.slice(2)]), sheet, col: changes[0].name, undoFn: () => apply((x) => x.before), redoFn: () => apply((x) => x.after) });
     },
-    // テキストの折り返しも元に戻せる。before / after: 折り返すセルのキーの配列
-    onWrap: (key, before, after) => {
+    // セルごとの書式も元に戻せる。before / after: 既定と違うセルのキーの配列
+    onFormat: (name, key, before, after) => {
       updateFormatButtons();
-      const apply = (names) => {
-        if (state.grid?.source.widthKey === key) { state.grid.setWrapNames(names); updateFormatButtons(); return; }
-        try { if (names.length) localStorage.setItem('wrapc:' + key, JSON.stringify(names)); else localStorage.removeItem('wrapc:' + key); } catch { /* 無視 */ }
+      const store = CELL_FORMATS[name].store;
+      const apply = (keys) => {
+        if (state.grid?.source.widthKey === key) { state.grid.setFormatKeys(name, keys); updateFormatButtons(); return; }
+        try { if (keys.length) localStorage.setItem(store + key, JSON.stringify(keys)); else localStorage.removeItem(store + key); } catch { /* 無視 */ }
       };
-      const sheet = state.key;
-      undo.push({ label: tr('「{0}」のテキストの折り返し', [sheet.slice(2)]), sheet, undoFn: () => apply(before), redoFn: () => apply(after) });
-    },
-    // URL を画像で表示するセルも同じ形で元に戻せる
-    onImage: (key, before, after) => {
-      updateFormatButtons();
-      const apply = (names) => {
-        if (state.grid?.source.widthKey === key) { state.grid.setImageNames(names); updateFormatButtons(); return; }
-        try { if (names.length) localStorage.setItem('imgc:' + key, JSON.stringify(names)); else localStorage.removeItem('imgc:' + key); } catch { /* 無視 */ }
-      };
-      const sheet = state.key;
-      undo.push({ label: tr('「{0}」の URL の画像表示', [sheet.slice(2)]), sheet, undoFn: () => apply(before), redoFn: () => apply(after) });
+      const sheet = state.key, f = FORMAT_UI.find((x) => x.name === name);
+      undo.push({ label: tr(f.undo, [sheet.slice(2)]), sheet, undoFn: () => apply(before), redoFn: () => apply(after) });
     },
     // 行の高さも同じく元に戻せる。changes: [{id: 行の見分け方, before, after}]
     onRowHeight: (key, changes) => {

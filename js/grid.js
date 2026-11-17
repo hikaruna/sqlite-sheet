@@ -53,8 +53,7 @@ export class Grid {
     this.manualHeights = new Map(); // 自分で決めた高さ {何行目: 高さ}
     this.autoHeights = new Map();   // 折り返した文字に合わせた自動の高さ {何行目: 高さ}（保存しない）
     this.rowHeights = new Map(); this.hIdx = []; this.hCum = []; // 両方を合わせた {何行目: 高さ} と、位置計算用の累積
-    this.wraps = this.loadWraps();  // 折り返して表示するセル（[行の見分け方, 列名] の JSON）
-    this.images = this.loadCellSet('imgc:'); // URL を画像で表示するセル（キーは折り返しと同じ）
+    this.formats = this.loadFormats(); // セルごとの書式 {書式名: 既定と違うセルのキー（[行の見分け方, 列名] の JSON）の Set}
     this.z = TOUCH ? loadZoom() : 1;
     this.build();
   }
@@ -548,11 +547,15 @@ export class Grid {
     if (changes.length) this.hooks.onRowHeight?.(this.source.widthKey, changes);
   }
 
-  // ---------- テキストの折り返し（セルごと） ----------
-  // セルは「行のキー（主キー、なければ rowid）＋列名」で覚えるので、並べ替え・絞り込みをしても同じデータに付いてくる
-  loadWraps() { return this.loadCellSet('wrapc:'); }
-  saveWraps() { this.saveCellSet('wrapc:', this.wraps); }
-  /** セルごとの書式（折り返し・画像）を localStorage から読む・書く。prefix: 'wrapc:' など */
+  // ---------- セルごとの書式（折り返し・画像表示など。定義は CELL_FORMATS） ----------
+  // セルは「行のキー（主キー、なければ rowid）＋列名」で覚えるので、並べ替え・絞り込みをしても同じデータに付いてくる。
+  // 覚えるのは既定と違うセルだけ（既定がオフの書式なら付けたセル）
+  loadFormats() {
+    const out = {};
+    for (const [name, f] of Object.entries(CELL_FORMATS)) out[name] = this.loadCellSet(f.store);
+    return out;
+  }
+  /** セルごとの書式を localStorage から読む・書く。prefix: 'wrapc:' など */
   loadCellSet(prefix) {
     try { const v = JSON.parse(localStorage.getItem(prefix + this.source.widthKey) || '[]'); return new Set(Array.isArray(v) ? v : []); } catch { return new Set(); }
   }
@@ -562,22 +565,42 @@ export class Grid {
       else localStorage.removeItem(prefix + this.source.widthKey);
     } catch { /* 無視 */ }
   }
-  wrapKey(r, row, c) { const col = this.cols[c]; return col ? JSON.stringify([this.rowId(r, row), col.name]) : null; }
-  isWrap(r, row, c) { if (!this.wraps.size) return false; const k = this.wrapKey(r, row, c); return k != null && this.wraps.has(k); }
-  isImage(r, row, c) { if (!this.images.size) return false; const k = this.wrapKey(r, row, c); return k != null && this.images.has(k); }
-  /** 折り返しを付けられるセルか（空でない文字列だけ） */
-  canWrap(row, c) { const v = row?.values?.[c]; return typeof v === 'string' && v !== ''; }
-  /** 画像で表示できるセルか（値全体が1つの画像の URL の文字列だけ） */
-  canImage(row, c) { return imageUrlOf(row?.values?.[c]) != null; }
+  cellKey(r, row, c) { const col = this.cols[c]; return col ? JSON.stringify([this.rowId(r, row), col.name]) : null; }
+  /** セルにその書式が効いているか */
+  isFormat(name, r, row, c) {
+    const f = CELL_FORMATS[name], set = this.formats[name];
+    if (!set.size) return f.def;
+    const k = this.cellKey(r, row, c);
+    return k == null ? f.def : f.def !== set.has(k);
+  }
+  /** そのセルにその書式を付けられるか */
+  canFormat(name, r, row, c) { return CELL_FORMATS[name].can(this, row?.values?.[c], r, row, c); }
+  /** cells のその書式を切り替える（元に戻すに積む）。行の高さは自動では変えない（折り返しは測り直す） */
+  setFormat(name, cells, on) {
+    const f = CELL_FORMATS[name], set = this.formats[name], before = [...set];
+    for (const { r, row, c } of cells) {
+      const k = this.cellKey(r, row, c);
+      if (k == null) continue;
+      if (on !== f.def) set.add(k); else set.delete(k);
+    }
+    if (before.length === set.size && before.every((k) => set.has(k))) return;
+    this.saveCellSet(f.store, set); this.remeasure();
+    this.hooks.onFormat?.(name, this.source.widthKey, before, [...set]);
+  }
+  /** 元に戻す・やり直すから：その書式のセルをそのまま入れ替える */
+  setFormatKeys(name, keys) {
+    this.formats[name] = new Set(keys);
+    this.saveCellSet(CELL_FORMATS[name].store, this.formats[name]); this.remeasure();
+  }
   /**
    * セルに出す画像の URL。BLOB の画像なら Object URL、画像の書式を付けた URL の文字列ならその URL。
-   * どちらでもなければ null（BLOB と URL で表示も高さ合わせも同じ仕組みを使う）
+   * どちらでもなければ null（BLOB と URL で同じ表示の仕組みを使う）
    */
   imageSrc(v, r, row, c) {
     if (v instanceof Uint8Array) { const k = sniff(v); return k.image && v.length ? this.blobUrl(v, k.mime) : null; }
-    return this.isImage(r, row, c) ? imageUrlOf(v) : null;
+    return this.isFormat('image', r, row, c) ? imageUrlOf(v) : null;
   }
-  /** 選んでいるセルのうち、読み込み済みの行のもの（折り返しの対象）: [{r, row, c}] */
+  /** 選んでいるセルのうち、読み込み済みの行のもの（書式の対象）: [{r, row, c}] */
   selectedCells() {
     const { r0, r1, c0, c1 } = this.range();
     const out = [];
@@ -588,44 +611,18 @@ export class Grid {
     }
     return out;
   }
-  /** cells の折り返しを切り替える（元に戻すに積む） */
-  setWrap(cells, on) {
-    const before = [...this.wraps];
-    for (const { r, row, c } of cells) { const k = this.wrapKey(r, row, c); if (k == null) continue; if (on) this.wraps.add(k); else this.wraps.delete(k); }
-    if (before.length === this.wraps.size && before.every((k) => this.wraps.has(k))) return;
-    this.saveWraps(); this.remeasure();
-    this.hooks.onWrap?.(this.source.widthKey, before, [...this.wraps]);
-  }
-
-  /** 元に戻す・やり直すから：折り返すセルをそのまま入れ替える */
-  setWrapNames(keys) {
-    this.wraps = new Set(keys);
-    this.saveWraps(); this.remeasure();
-  }
-  /** cells の「URL を画像で表示」を切り替える（元に戻すに積む）。行の高さは BLOB と同じく自動では変えない */
-  setImage(cells, on) {
-    const before = [...this.images];
-    for (const { r, row, c } of cells) { const k = this.wrapKey(r, row, c); if (k == null) continue; if (on) this.images.add(k); else this.images.delete(k); }
-    if (before.length === this.images.size && before.every((k) => this.images.has(k))) return;
-    this.saveCellSet('imgc:', this.images); this.remeasure();
-    this.hooks.onImage?.(this.source.widthKey, before, [...this.images]);
-  }
-  setImageNames(keys) {
-    this.images = new Set(keys);
-    this.saveCellSet('imgc:', this.images); this.remeasure();
-  }
 
   /**
    * 行ごとの、折り返したセルの中身が全部見える高さ（折り返すセルがなければ空）。
    * 実際と同じ CSS のセルを、見えない所に並べて測る。r0: rows[0] が何行目か
    */
   measureRows(rows, r0) {
-    if (!this.wraps.size || !rows.length) return [];
+    if (!this.formats.wrap.size || !rows.length) return [];
     let any = false;
     const lines = rows.map((row, i) => {
       const line = el('div.gr-measure', { style: { display: 'flex', alignItems: 'flex-start' } });
       if (row) for (let c = 0; c < this.cols.length; c++) {
-        if (!this.isWrap(r0 + i, row, c)) continue;
+        if (!this.isFormat('wrap', r0 + i, row, c)) continue;
         const cell = el('div.gc', { style: { width: this.colW(c) + 'px', height: 'auto' } });
         this.fillCell(cell, row.values[c], this.cols[c], row, r0 + i, c);
         line.append(cell); any = true;
@@ -654,7 +651,7 @@ export class Grid {
   }
 
   /** 列幅が変わると折り返しの位置が変わるので、折り返すセルがあれば測り直す */
-  afterWidthChange() { if (this.wraps.size) this.remeasure(); }
+  afterWidthChange() { if (this.formats.wrap.size) this.remeasure(); }
 
   /** 折り返しや列幅が変わったときに、読み込み済みの行を測り直す */
   remeasure() {
@@ -971,7 +968,7 @@ export class Grid {
     const src = this.imageSrc(v, r, row, c);
     if (src) { cell.classList.add('imgurl'); cell.append(thumb(src, true), t); return; }
     // 折り返すセルは改行をそのまま出す。折り返さないセルは1行なので、改行があることだけ ⏎ で見せる
-    if (this.isWrap(r, row, c)) { cell.classList.add('wrap'); cell.textContent = t; }
+    if (this.isFormat('wrap', r, row, c)) { cell.classList.add('wrap'); cell.textContent = t; }
     else cell.textContent = t.replaceAll('\n', ' ⏎ ');
     if (col.fk) {
       cell.classList.add('fk');
@@ -1857,6 +1854,17 @@ function autoWidth(col) {
 }
 
 function isMacCtrl() { return /Mac/.test(navigator.platform); }
+
+/**
+ * セルごとの書式の定義。書式を足すときはここ（と main.js の FORMAT_UI）に1つ足す。
+ * store: localStorage の接頭辞 / def: 何もしないときに効いているか / can: そのセルに付けられるか
+ */
+export const CELL_FORMATS = {
+  // テキストの折り返し：空でない文字列
+  wrap: { store: 'wrapc:', def: false, can: (g, v) => typeof v === 'string' && v !== '' },
+  // URL を画像で表示：値全体が1つの画像の URL の文字列
+  image: { store: 'imgc:', def: false, can: (g, v) => imageUrlOf(v) != null },
+};
 
 /** 値全体が1つの画像の URL（http(s) か data:image/）ならその URL。前後の空白は無視する */
 export function imageUrlOf(v) {
