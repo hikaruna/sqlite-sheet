@@ -1569,6 +1569,7 @@ function editItems() {
 const FORMAT_UI = [
   { name: 'wrap', icon: 'wrap', title: 'テキストの折り返し', on: '折り返す', off: '切り詰める', undo: '「{0}」のテキストの折り返し' },
   { name: 'image', icon: 'image', title: 'URL を画像で表示', on: '画像で表示', off: '文字で表示', undo: '「{0}」の URL の画像表示' },
+  { name: 'info', icon: 'info', title: 'プレビューの付加情報', on: '情報を表示', off: 'プレビューだけ', undo: '「{0}」のプレビューの付加情報' },
 ];
 
 /** 「表示形式」メニュー：書式ごとに見出しと2択を並べる */

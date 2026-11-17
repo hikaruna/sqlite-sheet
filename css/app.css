@@ -364,6 +364,12 @@ body.at-home .toolbar, body.at-home .fxbar { display: none; }
 .gr.tall .blob-thumb { max-width: 100%; }
 /* 画像で表示する URL：サムネイルは BLOB と同じ。URL の文字ははみ出た分を省略 */
 .gc.imgurl { color: var(--text-2); }
+/* プレビューの付加情報。画像の横に余白がなければ、画像の下の方に半透明の帯で重ねる（位置と幅は JS で画像に合わせる） */
+.gc.info-over .gc-info {
+  position: absolute; bottom: 3px; padding: 0 4px; border-radius: 0 0 2px 2px;
+  background: rgba(0, 0, 0, .55); color: #fff; font: 11px/16px var(--mono);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; pointer-events: none;
+}
 .gc.loading::after { content: ''; position: absolute; inset: 9px 12px; border-radius: 3px; background: var(--surface-2); }
 .gc.sel { background: var(--sel); }
 .gc.cur { box-shadow: inset 0 0 0 2px var(--accent); background: var(--surface); }

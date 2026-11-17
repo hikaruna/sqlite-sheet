@@ -600,6 +600,11 @@ export class Grid {
     if (v instanceof Uint8Array) { const k = sniff(v); return k.image && v.length ? this.blobUrl(v, k.mime) : null; }
     return this.isFormat('image', r, row, c) ? imageUrlOf(v) : null;
   }
+  /** そのセルにプレビューを出すか（今は画像だけ：BLOB の画像と、画像で表示する URL） */
+  hasPreview(v, r, row, c) {
+    if (v instanceof Uint8Array) return v.length > 0 && sniff(v).image;
+    return imageUrlOf(v) != null && this.isFormat('image', r, row, c);
+  }
   /** 選んでいるセルのうち、読み込み済みの行のもの（書式の対象）: [{r, row, c}] */
   selectedCells() {
     const { r0, r1, c0, c1 } = this.range();
@@ -955,18 +960,19 @@ export class Grid {
     if (v instanceof Uint8Array) {
       const k = sniff(v);
       cell.classList.add('blob');
+      const text = `${v.length ? k.label : 'BLOB'} ${fmtBytes(v.length)}`;
       const src = this.imageSrc(v, r, row, c);
-      if (src) cell.append(thumb(src));
-      cell.append(`${v.length ? k.label : 'BLOB'} ${fmtBytes(v.length)}`);
+      if (src) preview(cell, src, text, false, this.isFormat('info', r, row, c));
+      else cell.append(text);
       return;
     }
     if (typeof v === 'number' || typeof v === 'bigint') { cell.classList.add('num'); }
     const s = String(v);
     if (s === '') { cell.classList.add('emptystr'); return; }
     const t = s.length > MAX_TEXT ? s.slice(0, MAX_TEXT) + '…' : s;
-    // 画像で表示する URL：BLOB と同じサムネイルの横に URL の文字（読めなければ文字だけに戻る）
+    // 画像で表示する URL：BLOB と同じプレビュー。付加情報は URL の文字（読めなければ文字だけに戻る）
     const src = this.imageSrc(v, r, row, c);
-    if (src) { cell.classList.add('imgurl'); cell.append(thumb(src, true), t); return; }
+    if (src) { cell.classList.add('imgurl'); preview(cell, src, t, true, this.isFormat('info', r, row, c)); return; }
     // 折り返すセルは改行をそのまま出す。折り返さないセルは1行なので、改行があることだけ ⏎ で見せる
     if (this.isFormat('wrap', r, row, c)) { cell.classList.add('wrap'); cell.textContent = t; }
     else cell.textContent = t.replaceAll('\n', ' ⏎ ');
@@ -1864,6 +1870,8 @@ export const CELL_FORMATS = {
   wrap: { store: 'wrapc:', def: false, can: (g, v) => typeof v === 'string' && v !== '' },
   // URL を画像で表示：値全体が1つの画像の URL の文字列
   image: { store: 'imgc:', def: false, can: (g, v) => imageUrlOf(v) != null },
+  // プレビューの付加情報（URL・BLOB の種類と大きさなど）を出す：プレビューを出しているセル。既定は出す
+  info: { store: 'infoc:', def: true, can: (g, v, r, row, c) => g.hasPreview(v, r, row, c) },
 };
 
 /** 値全体が1つの画像の URL（http(s) か data:image/）ならその URL。前後の空白は無視する */
@@ -1876,6 +1884,30 @@ export function imageUrlOf(v) {
   if (!/^https?:\/\//i.test(s)) return null;
   try { new URL(s); return s; } catch { return null; }
 }
+
+/**
+ * セルのプレビュー（BLOB と URL で共通）：サムネイルと付加情報の文字。
+ * showInfo が false なら文字は出さない（画像が読めなかったときだけ文字に戻す）。
+ * 画像の横に文字を置く余白がなければ、文字を画像の下の方に重ねる（.info-over）
+ */
+function preview(cell, src, text, external, showInfo) {
+  const img = thumb(src, external);
+  if (!img) { cell.append(text); return; }
+  const info = el('span.gc-info', text);
+  cell.append(img);
+  if (showInfo) cell.append(info);
+  img.addEventListener('error', () => { if (!showInfo) cell.append(text); }, { once: true });
+  if (!showInfo) return;
+  const place = () => requestAnimationFrame(() => {
+    if (!img.isConnected) return;
+    const room = cell.clientWidth - (img.offsetLeft + img.offsetWidth);
+    const over = room < INFO_ROOM;
+    cell.classList.toggle('info-over', over);
+    if (over) { info.style.left = img.offsetLeft + 'px'; info.style.width = img.offsetWidth + 'px'; }
+  });
+  if (img.complete) place(); else img.addEventListener('load', place, { once: true });
+}
+const INFO_ROOM = 40; // 画像の横に付加情報の文字を置くのに要る幅（これより狭ければ画像に重ねる）
 
 /** セルのサムネイル（BLOB と URL で共通）。大きさは CSS でセルの高さに合わせる。読めなければ消して文字だけにする */
 function thumb(src, external = false) {
