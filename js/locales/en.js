@@ -582,6 +582,7 @@ export default {
   "行の削除": "Row deleted",
   "書き出しの準備ができました": "Ready to export",
   "共有…": "Share…",
+  "ホームへ（データベースの一覧）": "Home (database list)",
   "バイナリ": "Binary",
   "テキスト": "Text",
   "：{0}": ": {0}",

@@ -1208,6 +1208,8 @@ function dbActions(name, { anchor, home = false } = {}) {
     { label: tr('ファイルに書き出す…'), icon: '⤓', action: () => exportCurrent(name) },
     { label: tr('名前を変更…'), icon: '✎', action: () => (home ? renameDbAsk(name, anchor) : (() => { $('db-name').focus(); $('db-name').select(); })()) },
     { label: tr('複製…'), icon: '⧉', action: () => copyDb(name, anchor) },
+    // 共有はシートやクエリシートを選ぶので、ホームからは開いてから
+    { label: tr('共有…'), icon: '🔗', action: async () => { if (home) await openDb(name); if (state.dbName === name) shareDialog(); } },
     { label: tr('削除…'), icon: '🗑', danger: true, action: () => deleteDb(name) },
   ].filter(Boolean);
 }
@@ -1228,8 +1230,13 @@ function dbMenu(anchor, { list = false } = {}) {
       { label: tr('共有…'), icon: '🔗', action: shareDialog },
       { label: tr('ファイルを閉じる'), icon: '✕', action: closeFile }, '-');
   } else if (state.dbName) {
-    items.push({ header: el('span.menu-header-db', appIcon(), state.dbName) }, ...dbActions(state.dbName, { anchor }),
-      { label: tr('共有…'), icon: '🔗', action: shareDialog }, '-');
+    items.push({ header: el('span.menu-header-db', appIcon(), state.dbName) }, ...dbActions(state.dbName, { anchor }), '-',
+      { label: tr('ホームへ（データベースの一覧）'), icon: '⌂', action: goHome });
+  }
+  // 何か開いているときは、その DB の操作だけ。ほかの DB・新規作成などのアプリ全体の操作はホームに置く
+  if (state.manual || state.dbName) {
+    if (list) return items;
+    return menu(anchor, items);
   }
   items.push({ header: tr('データベース') });
   for (const n of state.dbs) items.push({ label: n, icon: n === state.dbName ? '✓' : appIcon(), action: () => { if (n !== state.dbName) openDb(n); } });
