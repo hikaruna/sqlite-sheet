@@ -7,8 +7,9 @@ const CDN = 'cdn-v1';           // jsDelivr の sqlite-wasm（URL に版が入�
 const SHELL = [
   './', 'index.html', 'css/app.css', 'manifest.webmanifest',
   'icons/icon.svg', 'icons/icon-192.png', 'icons/icon-512.png',
+  'docs/examples/met.sqlitesheet', 'docs/examples/met.sqlite', // 「サンプル」の中身（オフラインでも作れるように）
   ...['blob', 'console', 'db-client', 'db-worker', 'design-panel', 'files', 'grid', 'i18n', 'locales/en', 'main', 'project', 'protect',
-    'sample', 'schema', 'sources', 'store', 'triggers', 'txmarks', 'ui', 'undo', 'version'].map((f) => `js/${f}.js`),
+    'schema', 'sources', 'store', 'triggers', 'txmarks', 'ui', 'undo', 'version'].map((f) => `js/${f}.js`),
 ];
 
 self.addEventListener('install', (e) => {

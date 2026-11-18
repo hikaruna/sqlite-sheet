@@ -11,7 +11,6 @@ import { DesignPanel } from './design-panel.js';
 import { SqlConsole } from './console.js';
 import { undo, tableSummary } from './undo.js';
 import { triggerDialog } from './triggers.js';
-import { createSample, SAMPLE_QUERIES } from './sample.js';
 import * as store from './store.js';
 import { APP_VERSION } from './version.js';
 import * as files from './files.js';
@@ -1316,19 +1315,30 @@ async function newDb(anchor) {
   } catch (e) { toast(friendlyError(e.message), 'error'); }
 }
 
+// サンプル：メトロポリタン美術館の所蔵品のプロジェクト。DB とシートの設定を、ブラウザの DB として取り込む
+const SAMPLE_PROJECT = new URL('../docs/examples/met.sqlitesheet', import.meta.url);
+
 async function makeSample() {
   if (!(await leaveCurrent())) return;
   let name = tr('サンプル'), i = 2;
   while (state.dbs.includes(name)) name = tr('サンプル{0}', [i++]);
+  const text = await fetchUrl(SAMPLE_PROJECT);
+  if (!text) return;
+  const { project: p, error } = project.parseProjectFile(new TextDecoder().decode(text));
+  if (error) return loadFail(error);
+  const bytes = await fetchUrl(new URL(p.db, SAMPLE_PROJECT));
+  if (!bytes) return;
   try {
     store.removeDb(name); // 同名で作り直したときに前の DB の設定を引き継がない
-    await db.create(name);
+    await db.importDb(name, bytes);
     requestPersist();
     state.manual = null; setDirty(false);
-    await createSample(db);
-    store.setQueries(name, SAMPLE_QUERIES);
     state.dbs = await db.list();
     state.dbName = null;
+    await db.open(name); // シートの設定を当てるのに主キーを読む
+    await project.applySheets(name, p.sheets, async (t) => {
+      try { return (await readTable(t)).pk; } catch { return null; }
+    });
     await openDb(name);
     toast(tr('サンプルの DB を作成しました'), 'success');
   } catch (e) { toast(friendlyError(e.message), 'error'); }
