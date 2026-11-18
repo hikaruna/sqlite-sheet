@@ -1030,3 +1030,12 @@ body.dropping::after {
   /* 確定できなかった：直している間はセルの赤枠を残す */
   .grid-sink.editing.invalid { box-shadow: 0 0 0 2px var(--danger), var(--shadow); }
 }
+
+/* ビューの「トリガーで編集できます」：押すとトリガーの画面 */
+button.view-ops { border: 0; background: none; padding: 0 4px; font: inherit; color: var(--accent); cursor: pointer; }
+button.view-ops.muted { color: var(--text-2); }
+button.view-ops:hover { text-decoration: underline; }
+/* トリガーの画面 */
+.modal.triggers { width: min(640px, calc(100vw - 32px)); }
+.trig-add { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 12px; }
+.trig-sql { width: 100%; min-height: 200px; box-sizing: border-box; }

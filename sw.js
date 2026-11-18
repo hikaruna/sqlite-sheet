@@ -8,7 +8,7 @@ const SHELL = [
   './', 'index.html', 'css/app.css', 'manifest.webmanifest',
   'icons/icon.svg', 'icons/icon-192.png', 'icons/icon-512.png',
   ...['blob', 'console', 'db-client', 'db-worker', 'design-panel', 'files', 'grid', 'i18n', 'locales/en', 'main', 'project', 'protect',
-    'sample', 'schema', 'sources', 'store', 'txmarks', 'ui', 'undo', 'version'].map((f) => `js/${f}.js`),
+    'sample', 'schema', 'sources', 'store', 'triggers', 'txmarks', 'ui', 'undo', 'version'].map((f) => `js/${f}.js`),
 ];
 
 self.addEventListener('install', (e) => {

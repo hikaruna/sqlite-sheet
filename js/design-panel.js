@@ -5,6 +5,7 @@ import { el, confirmDialog, toast, menu } from './ui.js';
 import { TYPES, FK_ACTIONS, createTableSql, migrationSql, columnDef, readTable, constantDefault } from './schema.js';
 import { friendlyError, defaultToForm, formToDefault } from './sources.js';
 import { txMarks } from './txmarks.js';
+import { triggerDialog, triggerEvent } from './triggers.js';
 
 const clone = (o) => JSON.parse(JSON.stringify(o));
 const COLLATES = ['', 'BINARY', 'NOCASE', 'RTRIM'];
@@ -354,7 +355,9 @@ export class DesignPanel {
         el('label.chk', el('input', { type: 'checkbox', checked: draft.unique, on: { change: (e) => { draft.unique = e.target.checked; } } }), 'UNIQUE'),
         el('button.btn.primary', { disabled: !draft.cols.length, on: { click: () => this.createIndex() } }, tr('作成')),
         el('p.hint', tr('インデックスはすぐに作成されます（テーブルの作り直しは不要）。'))),
-      m.triggers.length ? section(tr('トリガー'), m.triggers.map((t) => el('div.idx-row', el('div', el('b', t.name)), el('span.muted', tr('SQL タブで確認'))))) : null,
+      section(tr('トリガー'),
+        m.triggers.filter((t) => !/^protect_\d+_/.test(t.name)).map((t) => el('div.idx-row', el('div', el('b', t.name)), el('span.muted.mono.sm', triggerEvent(t.sql)))),
+        el('button.btn', { on: { click: () => triggerDialog(this.model.name, 't', () => this.reloadModel()) } }, tr('トリガーを管理…'))),
     ];
   }
 

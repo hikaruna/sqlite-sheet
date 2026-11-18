@@ -229,6 +229,16 @@ function checkRead(sql, { columns = false } = {}) {
   } finally { st.finalize(); }
 }
 
+/** トリガーの SQL が1文だけか確かめる（「END; DROP TABLE …」のように後ろへ続けられないように） */
+function checkTrigger(sql) {
+  for (let i = sql.indexOf(';'); i >= 0; i = sql.indexOf(';', i + 1)) {
+    if (!sqlite3.capi.sqlite3_complete(sql.slice(0, i + 1))) continue;
+    if (sql.slice(i + 1).replace(/--[^\n]*|\/\*[\s\S]*?\*\//g, '').trim()) throw new Error('トリガーの SQL は1文だけ書けます');
+    return;
+  }
+  throw new Error('SQL が途中で終わっています（BEGIN … END; で閉じてください）');
+}
+
 /** ユーザーが書いたクエリを、包む前に確かめる（分かりやすいエラーを出すため） */
 function checkQuery(sql) {
   // 末尾の「;」は許す（クエリシートも取り除いてから使う）
@@ -614,7 +624,7 @@ async function copy(from, to) {
   return true;
 }
 
-const api = { init, list, open, openFile, openBytes, close, save, checkFile, markClean, begin, commit, rollback, run, exec, checkQuery, readQuery, batch, batchTracked, applyChangeset, consoleRun, rebuild, create, exportDb, importDb, remove, rename, copy };
+const api = { init, list, open, openFile, openBytes, close, save, checkFile, markClean, begin, commit, rollback, run, exec, checkQuery, checkTrigger, readQuery, batch, batchTracked, applyChangeset, consoleRun, rebuild, create, exportDb, importDb, remove, rename, copy };
 
 // 呼び出しは1つずつ順に処理する（ファイルの読み書きを待つ間に、次の呼び出しが割り込まないように）
 let queue = Promise.resolve();

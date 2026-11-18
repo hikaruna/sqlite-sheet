@@ -531,13 +531,16 @@ export class QuerySource {
 
 // ------------------------------------------------------------------------
 
-/** ビューの INSTEAD OF トリガーの種類。{update, insert, delete} */
+/** ビューの INSTEAD OF トリガーの種類。{update, insert, delete, triggers:[{name, op}]} */
 export async function viewWriteOps(name) {
-  const r = await db.query(`SELECT sql FROM sqlite_schema WHERE type = 'trigger' AND tbl_name = ?`, [name]);
-  const ops = { update: false, insert: false, delete: false };
-  for (const [sql] of r.rows) {
+  const r = await db.query(`SELECT name, sql FROM sqlite_schema WHERE type = 'trigger' AND tbl_name = ?`, [name]);
+  const ops = { update: false, insert: false, delete: false, triggers: [] };
+  for (const [tname, sql] of r.rows) {
     const m = /\bINSTEAD\s+OF\s+(UPDATE|INSERT|DELETE)\b/i.exec(sql || '');
-    if (m) ops[m[1].toLowerCase()] = true;
+    if (!m) continue;
+    const op = m[1].toLowerCase();
+    ops[op] = true;
+    ops.triggers.push({ name: tname, op });
   }
   return ops;
 }
@@ -592,7 +595,13 @@ export class ViewSource extends QuerySource {
         checks: parts.filter((p) => p.check).map((p) => p.check),
       };
     });
+    // 元の行がそのまま残っていれば、トリガーがその変更を扱わなかった（同じ値の行の数で比べる）
+    const plans = [...byRow.values()].filter(({ rowObj, cols, parts }) => cols.some((c, i) =>
+      parts[i].sql !== '?' || !sameValue(parts[i].bind[0], rowObj.values[this.columns.indexOf(c)])));
+    const before = await Promise.all(plans.map((p) => this.countLike(p.rowObj)));
     await this.run(stmts, (n) => (n > 1 ? tr('{0} セルの変更', [n]) : tr('セルの変更')), changes.length);
+    const after = await Promise.all(plans.map((p) => this.countLike(p.rowObj)));
+    if (plans.some((p, i) => after[i] >= before[i])) this.onNotice?.(tr('変更がビューに反映されませんでした（トリガーがこの列を扱っていない可能性があります）'));
     return null;
   }
 
@@ -612,7 +621,18 @@ export class ViewSource extends QuerySource {
         checks: parts.filter((p) => p.check).map((p) => p.check),
       };
     });
+    const before = await this.countAll();
     await this.run(stmts, (n) => (n > 1 ? tr('{0} 行の追加', [n]) : tr('行の追加')), rows.length);
+    if (await this.countAll() - before < rows.length) this.onNotice?.(tr('追加した行は、このビューの条件に合わないため表示されていません'));
+  }
+
+  /** ビュー全体（絞り込みなし）の行数 */
+  async countAll() { return Number((await db.readQuery(`SELECT count(*) FROM ${this.t}`)).rows[0][0]); }
+
+  /** その行と全列が同じ値の行の数 */
+  async countLike(rowObj) {
+    const w = this.rowWhere(rowObj);
+    return Number((await db.readQuery(`SELECT count(*) FROM ${this.t} WHERE ${w.sql}`, w.bind)).rows[0][0]);
   }
 
   async deleteRows(rowObjs) {

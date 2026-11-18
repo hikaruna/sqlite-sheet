@@ -67,6 +67,7 @@ export const db = {
   readQuery: (sql, bind) => call('readQuery', sql, bind),
   /** ユーザーのクエリが読み取り専用の1文か確かめる（違えばエラー） */
   checkQuery: (sql) => call('checkQuery', sql),
+  checkTrigger: (sql) => call('checkTrigger', sql),
   /** 書き込み用。ログに出す */
   exec: (sql, bind, source = 'gui') => logged(() => call('exec', sql, bind), [{ sql, bind }], source),
   batch: (stmts, source = 'gui') => logged(() => call('batch', stmts), stmts, source),

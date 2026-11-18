@@ -10,6 +10,7 @@ import { txMarks } from './txmarks.js';
 import { DesignPanel } from './design-panel.js';
 import { SqlConsole } from './console.js';
 import { undo, tableSummary } from './undo.js';
+import { triggerDialog } from './triggers.js';
 import { createSample, SAMPLE_QUERIES } from './sample.js';
 import * as store from './store.js';
 import { APP_VERSION } from './version.js';
@@ -2132,6 +2133,7 @@ function tabMenu(key, anchor) {
     kind === 't' ? (state.lockedSheets?.has(name)
       ? { label: tr('シートの保護を外す…'), icon: '🔓', action: () => withSheet(key, () => unprotect(state.prots.find((p) => p.kind === 'sheet'))) }
       : { label: tr('シートを保護…'), icon: '🔒', action: () => withSheet(key, () => protect({ kind: 'sheet' }, anchor)) }) : null,
+    kind !== 'q' ? { label: tr('トリガー…'), icon: 'ϟ', action: () => openTriggers(key) } : null,
     kind !== 'q' ? { label: tr('SQL コンソールで SELECT'), icon: '⌨', action: () => sqlConsole.insert(`SELECT * FROM ${q(name)};`) } : null,
     kind === 't' ? { label: tr('CSV で書き出し'), icon: '⤓', action: () => exportCsv(key) } : { label: tr('CSV で書き出し'), icon: '⤓', action: () => exportCsv(key) },
     '-',
@@ -2390,6 +2392,7 @@ async function showSheet(key, { keepView = true } = {}) {
       state.model = null;
       const ops = kind === 'v' ? await viewWriteOps(name) : null;
       if (ops && (ops.update || ops.insert || ops.delete)) state.source = await new ViewSource(`${state.dbName}/${key}`, name, view, ops).init();
+      if (state.source?.ops) state.source.onNotice = (m) => toast(m, 'info', 6000);
       else {
         const sql = kind === 'v' ? `SELECT * FROM ${q(name)}` : state.queries.find((x) => x.name === name)?.sql || 'SELECT 1';
         state.source = await new QuerySource(`${state.dbName}/${key}`, sql, view).init();
@@ -2475,9 +2478,13 @@ function queryEditor(kind, name, error) {
     rows: 1,
     on: {
       keydown: (e) => {
-        if (modKey(e) && e.key === 'Enter') { e.preventDefault(); run(); }
-        if (e.key === 'Tab') { e.preventDefault(); ta.setRangeText('  ', ta.selectionStart, ta.selectionEnd, 'end'); }
-        if (e.key === 'Escape') state.grid?.focus();
+        if (modKey(e) && e.key === 'Enter') { e.preventDefault(); if (!ta.readOnly) run(); }
+        if (e.key === 'Tab' && !ta.readOnly) { e.preventDefault(); ta.setRangeText('  ', ta.selectionStart, ta.selectionEnd, 'end'); }
+        if (e.key === 'Escape') {
+          // ビューの定義を編集中なら、変更を捨てて読み取り専用に戻す
+          if (isView && !ta.readOnly) { e.preventDefault(); cancelEdit(); }
+          state.grid?.focus();
+        }
       },
       input: () => { dirtyMark.hidden = ta.value === original; },
     },
@@ -2520,7 +2527,38 @@ function queryEditor(kind, name, error) {
       // 読み取りの1文か先に確かめる（「; DELETE …」を後ろに続けられないように）
       await db.checkQuery(sql);
       if (isView) {
-        await db.rebuild([{ sql: `DROP VIEW ${q(name)}` }, { sql: `CREATE VIEW ${q(name)}${viewParts.cols} AS ${sql}` }]);
+        // DROP VIEW でビューのトリガーも消える。定義が変わると列が合わなくなるので、作り直さずに消す
+        const trigRows = (await db.query(`SELECT name, sql FROM sqlite_schema WHERE type = 'trigger' AND tbl_name = ? AND sql IS NOT NULL`, [name])).rows;
+        const trig = trigRows.map(([, s]) => ({ sql: s }));
+        const names = trigRows.map(([n]) => n).join(', ');
+        if (sql === original) {
+          // 定義が同じなら作り直す必要はない。トリガーを消すかどうかだけ選んでもらう
+          if (!trig.length) { cancelEdit(); return; }
+          const c = await choiceDialog({
+            title: tr('ビューの定義は変わっていません'),
+            body: tr('このビューのトリガー（{0}）をどうしますか？', [names]),
+            choices: [
+              { label: tr('キャンセル'), value: null },
+              { label: tr('トリガーを削除'), value: 'drop', danger: true },
+              { label: tr('トリガーを残す'), value: 'keep', primary: true },
+            ],
+          });
+          if (c !== 'drop') { if (c === 'keep') cancelEdit(); return; }
+        } else if (trig.length && !await confirmDialog({
+          title: tr('トリガーが削除されます'),
+          body: tr('ビューを更新すると、このビューのトリガー（{0}）は削除されます。必要なら作り直してください。よろしいですか？', [names]),
+          okLabel: tr('削除して更新'), danger: true,
+        })) return;
+        const before = [{ sql: `DROP VIEW ${q(name)}` }, { sql: obj.sql }, ...trig];
+        const after = [{ sql: `DROP VIEW ${q(name)}` }, { sql: `CREATE VIEW ${q(name)}${viewParts.cols} AS ${sql}` }];
+        await db.rebuild(after);
+        const sheet = 'v:' + name;
+        const apply = async (stmts) => {
+          await db.rebuild(stmts);
+          await refreshObjects();
+          if (state.key === sheet) await showSheet(sheet, { keepView: true });
+        };
+        undo.push({ label: tr('ビュー「{0}」の定義の変更', [name]), sheet, undoFn: () => apply(before), redoFn: () => apply(after) });
       } else {
         // 保存する前に実行できるか確かめる
         await db.readQuery(`SELECT * FROM (${sql}\n) LIMIT 0`);
@@ -2535,17 +2573,46 @@ function queryEditor(kind, name, error) {
   const actions = isView
     ? el('div.query-actions',
       el('span.muted.sm', tr('ビューの定義')),
+      viewOpsBadge(),
       el('span.grow'),
-      el('button.btn.sm', { on: { click: (e) => { ta.readOnly = false; ta.focus(); ta.select(); e.currentTarget.remove(); saveBtn.hidden = false; } } }, tr('✎ 編集')),
+      el('button.btn.sm.view-edit', { on: { click: (e) => { ta.readOnly = false; ta.focus(); ta.select(); e.currentTarget.hidden = true; saveBtn.hidden = false; cancelBtn.hidden = false; } } }, tr('✎ 編集')),
       el('button.btn.sm', { on: { click: () => newQuery(original, name + tr('のクエリ')) } }, tr('クエリとして複製')),
-      Object.assign(el('button.btn.primary.sm', { hidden: true, on: { click: run } }, tr('ビューを更新')), {}))
+      el('button.btn.sm.view-cancel', { hidden: true, title: 'Esc', on: { click: () => cancelEdit() } }, tr('キャンセル')),
+      el('button.btn.primary.sm', { hidden: true, on: { click: run } }, tr('ビューを更新')))
     : el('div.query-actions',
       el('span.muted.sm', tr('{0}Enter で実行', [MOD])), dirtyMark,
       el('span.grow'),
       el('button.btn.sm', { on: { click: () => saveAsView(name, ta.value) } }, tr('◫ ビューとして保存')),
       el('button.btn.primary.sm', { on: { click: run } }, tr('▶ 実行')));
   const saveBtn = actions.querySelector('.btn.primary');
+  const cancelBtn = actions.querySelector('.view-cancel');
+  function cancelEdit() {
+    ta.value = original; ta.readOnly = true; err.textContent = '';
+    saveBtn.hidden = true; cancelBtn.hidden = true;
+    actions.querySelector('.view-edit').hidden = false;
+  }
   return el('div.query-box', { class: isView ? 'readonly' : '' }, ta, resizer, actions, err);
+}
+
+/** ビューを INSTEAD OF トリガーで編集できるなら、できる操作とトリガーの名前を見せる */
+function viewOpsBadge() {
+  const ops = state.source?.ops;
+  const open = { click: () => openTriggers(state.key) };
+  if (!ops?.triggers?.length) return el('button.view-ops.link.muted.sm', { title: tr('INSTEAD OF トリガーがないため、このビューは読み取り専用です（クリックでトリガーを管理）'), on: open }, tr('· 読み取り専用'));
+  const label = { update: tr('値の変更'), insert: tr('行の追加'), delete: tr('行の削除') };
+  const can = ['update', 'insert', 'delete'].filter((k) => ops[k]).map((k) => label[k]).join(tr('・'));
+  const title = ops.triggers.map((t) => `INSTEAD OF ${t.op.toUpperCase()}: ${t.name}`).join('\n');
+  return el('button.view-ops.link.sm', { title: title + '\n' + tr('（クリックでトリガーを管理）'), on: open }, tr('· トリガーで編集できます（{0}）', [can]));
+}
+
+/** シートのトリガーの画面。変更したら、開いていればシートを読み直す（ビューは編集できるかが変わる） */
+function openTriggers(key) {
+  const kind = key[0], name = key.slice(2);
+  triggerDialog(name, kind, async () => {
+    await refreshObjects();
+    if (state.key === key) await showSheet(key, { keepView: true });
+    if (state.panel) await state.panel.reloadModel?.();
+  });
 }
 
 async function saveAsView(queryName, sql) {
