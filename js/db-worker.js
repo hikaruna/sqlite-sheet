@@ -77,6 +77,9 @@ async function save(force = false) {
   return true;
 }
 
+// main がファイルに書き出したので、未保存の印を消す
+function markClean() { setDirty(false); return true; }
+
 // 未保存の変更は捨てる（保存するかどうかは main が先に尋ねる）
 async function close() {
   if (!db) return true;
@@ -611,7 +614,7 @@ async function copy(from, to) {
   return true;
 }
 
-const api = { init, list, open, openFile, openBytes, close, save, checkFile, begin, commit, rollback, run, exec, checkQuery, readQuery, batch, batchTracked, applyChangeset, consoleRun, rebuild, create, exportDb, importDb, remove, rename, copy };
+const api = { init, list, open, openFile, openBytes, close, save, checkFile, markClean, begin, commit, rollback, run, exec, checkQuery, readQuery, batch, batchTracked, applyChangeset, consoleRun, rebuild, create, exportDb, importDb, remove, rename, copy };
 
 // 呼び出しは1つずつ順に処理する（ファイルの読み書きを待つ間に、次の呼び出しが割り込まないように）
 let queue = Promise.resolve();

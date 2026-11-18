@@ -52,6 +52,7 @@ export const db = {
   close: () => call('close'),
   /** ファイルへ保存する。ほかのアプリで変更されていれば force でない限り 'CONFLICT' で失敗する */
   save: (force = false) => call('save', force),
+  markClean: () => call('markClean'),
   /** {changed: ほかのアプリで変更されたか, dirty: 未保存の変更があるか} */
   checkFile: () => call('checkFile'),
   create: (name) => call('create', name),

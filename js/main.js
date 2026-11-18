@@ -319,7 +319,6 @@ function linkItems() {
 
 /** URL から読んだ DB の URL（/<保存するときの名前の候補>?db=…&sheets[0][…]=…&sheet=…#db_embed=…）。ファイルから開いたものは URL に載せない */
 function urlOfSrc(m, key) {
-  if (m.noUrl) return BASE;
   const params = m.project ? [['project', m.project]] : [...(m.embed ? [] : [['db', m.url]]), ...m.keep];
   return linkUrl({ wanted: m.wanted, params, key, embed: m.embed, hash: key && key === state.key ? viewHashParams() : [] });
 }
@@ -362,7 +361,7 @@ function setUrl() {
     : state.manual ? urlOf(null) : urlOf(state.dbName, state.key);
   if (location.pathname + location.search + location.hash !== u) {
     const was = parseUrl();
-    const same = state.manual?.kind === 'url' ? (state.manual.noUrl || was.sig === state.manual.sig)
+    const same = state.manual?.kind === 'url' ? was.sig === state.manual.sig
       : !was.sig && was.dbName === (state.manual ? null : state.dbName);
     if (same) history.replaceState(null, '', u);
     else history.pushState(null, '', u);
@@ -416,7 +415,7 @@ async function routeInner() {
   // 手動保存のものを開いているときに「戻る」などで URL が変わったとき：
   // ファイルを編集中でホームの URL ならそのまま、ほかへなら未保存の確認をしてから
   if (state.manual) {
-    if (!dbName && (state.manual.kind === 'file' || state.manual.noUrl)) return setUrl();
+    if (!dbName && state.manual.kind === 'file') return setUrl();
     if (!(await leaveCurrent())) { setUrl(); return; }
   }
   // / は最初の画面。前回の DB を勝手には開かない
@@ -543,7 +542,7 @@ function buildChrome() {
   // DB への書き込み（成功したもの）を最終更新として記録する。ローカルファイルは対象外
   db.onLog((e) => { if (!e.error && state.dbName && !state.manual) store.touch(state.dbName, 'updated'); });
   // データが元に戻っても、クエリの変更が残っていれば未保存のまま
-  db.onDirty((v) => setDirty(v || state.queriesDirty));
+  db.onDirty((v) => { setDirty(v || state.queriesDirty); state.dataDirty = v; });
   db.onTx(setTx);
   // タブに戻ってきたら、ファイルがほかのアプリで変更されていないか確かめる
   document.addEventListener('visibilitychange', () => { if (!document.hidden) checkExternalChange(); });
@@ -557,13 +556,20 @@ function buildChrome() {
   // ファイルに保存していない変更があるときも確認
   addEventListener('beforeunload', (e) => { if (state.grid?.hasDraft || state.inTx || (state.manual && state.dirty)) { e.preventDefault(); e.returnValue = ''; } });
   // .sqlite ファイルのドラッグ＆ドロップ
-  document.documentElement.style.setProperty('--drop-label', JSON.stringify(tr('.sqlite・.sqlitesheet ファイルをドロップして読み込む')));
+  document.documentElement.style.setProperty('--drop-label', JSON.stringify(tr('.sqlite・.sqlitesheet ファイルをドロップして開く')));
   addEventListener('dragover', (e) => { if (e.dataTransfer?.types.includes('Files')) { e.preventDefault(); document.body.classList.add('dropping'); } });
   addEventListener('dragleave', (e) => { if (!e.relatedTarget) document.body.classList.remove('dropping'); });
-  addEventListener('drop', (e) => {
+  addEventListener('drop', async (e) => {
     document.body.classList.remove('dropping');
     const f = e.dataTransfer?.files?.[0];
-    if (f) { e.preventDefault(); importFile(f); }
+    if (!f) return;
+    e.preventDefault();
+    // Chrome / Edge ではハンドルも取れる（上書き保存できる）。イベントの中で呼ばないと取れない
+    const item = [...e.dataTransfer.items].find((i) => i.kind === 'file');
+    const handleP = item?.getAsFileSystemHandle?.().catch(() => null);
+    const handle = await handleP;
+    if (handle?.kind === 'file') return openHandle(handle);
+    openBytesFile(new Uint8Array(await f.arrayBuffer()), f.name, null, null);
   });
 }
 
@@ -653,9 +659,8 @@ function showWelcome() {
         el('p.lead', tr('スプレッドシートの手軽さで、SQLite データベースを。'))),
       el('div.home-tools',
         el('button.btn.primary', { title: tr('空のデータベースを作る'), on: { click: newDb } }, tr('＋ 新規作成')),
-        el('button.btn', { title: tr('.sqlite ファイルをデータベースとして取り込む・.sqlitesheet ファイルを開く（ドラッグ＆ドロップでも可）'), on: { click: pickSqlite } }, tr('⤒ 取り込む')),
+        el('button.btn', { title: tr('.sqlite・.sqlitesheet ファイルを開く（ドラッグ＆ドロップでも可）'), on: { click: openFileDialog } }, tr('📂 ファイルから開く…')),
         el('button.btn', { title: tr('サンプルのデータベースを作る'), on: { click: makeSample } }, tr('✨ サンプル')),
-        files.supported ? el('button.btn', { title: tr('パソコンの .sqlite ファイルをそのまま開いて編集する'), on: { click: fileModeDialog } }, tr('📂 ローカルファイルを直接編集…')) : null,
         isPwa() ? el('button.btn', { title: tr('Web 上の .sqlite ファイルを URL で開く（保存するまで何も残らない）'), on: { click: (e) => openUrlDialog(e.currentTarget) } }, tr('🌐 URL から開く…')) : null),
       el('section.home-section',
         el('div.home-section-head',
@@ -701,9 +706,8 @@ function sortMenu(anchor) {
 function homeDrawer() {
   const items = [
     { label: tr('新規作成'), icon: tr('＋'), run: newDb },
-    { label: tr('取り込む'), icon: '⤒', run: pickSqlite },
+    { label: tr('ファイルから開く…'), icon: '📂', run: openFileDialog },
     { label: tr('サンプル'), icon: '✨', run: makeSample },
-    files.supported ? { label: tr('ローカルファイルを直接編集…'), icon: '📂', run: fileModeDialog } : null,
     isPwa() ? { label: tr('URL から開く…'), icon: '🌐', run: () => openUrlDialog($('db-search')) } : null,
   ].filter(Boolean);
   const close = () => {
@@ -753,14 +757,15 @@ function onSearchKey(e) {
   } else searchSel = 0;
 }
 
-// 「ローカルファイルを直接編集」：主のモードとは別のモードなので、説明と入口をこのダイアログにまとめる（履歴には積まない）
-async function fileModeDialog() {
+// 「📂 ファイルから開く…」：.sqlite も .sqlitesheet も開ける。Chrome / Edge では最近開いたファイルも出す
+async function openFileDialog() {
+  if (!files.supported) return pickAndOpen();
   const recent = await files.list();
   const list = el('div.recent-list');
   const renderList = (rows) => list.replaceChildren(...(rows.length
     ? [el('h3', tr('最近開いたファイル')), ...rows.map((r) => el('div.recent-item',
-      el('button.recent-row', { title: tr('「{0}」を開く', [r.name]), on: { click: () => { m.close(); openRecent(r); } } },
-        el('span.recent-icon', '📄'), el('span.recent-name', r.name), el('span.recent-ago', ago(r.at))),
+      el('button.recent-row', { title: tr('「{0}」を開く', [r.name]), on: { click: () => { m.close(); openHandle(r.handle, { recentId: r.id }); } } },
+        el('span.recent-icon', /\.sqlitesheet$/i.test(r.name) ? '📦' : '📄'), el('span.recent-name', r.name), el('span.recent-ago', ago(r.at))),
       el('button.icon-btn.recent-x', {
         title: tr('一覧から消す（ファイルは消えません）'), 'aria-label': tr('「{0}」を一覧から消す', [r.name]),
         on: { click: async () => { await files.remove(r.id); renderList(await files.list()); } },
@@ -768,13 +773,12 @@ async function fileModeDialog() {
     : []));
   renderList(recent);
   const m = modal([
-    el('h2', tr('📂 ローカルファイルを直接編集')),
-    el('p', tr('パソコンの .sqlite ファイルをそのまま開いて編集します。')),
+    el('h2', tr('📂 ファイルから開く')),
     el('ul.file-mode-notes',
-      el('li', tr('保存は手動です（{0}S）', [MOD])),
-      el('li', tr('ほかのアプリでファイルが変更されていたら、保存するときに知らせます')),
-      el('li', tr('閉じても、このアプリには何も残りません'))),
-    el('button.btn.primary.file-mode-pick', { on: { click: () => { m.close(); openFileDialog(); } } }, tr('📂 ファイルを選ぶ…')),
+      el('li', tr('.sqlite（データベース）と .sqlitesheet（プロジェクト）を開けます')),
+      el('li', tr('保存（{0}S）すると、開いたファイルに上書きします。ほかのアプリでファイルが変更されていたら知らせます', [MOD])),
+      el('li', tr('「別の場所に保存」でブラウザに保存すると、以後は自動で保存されます'))),
+    el('button.btn.primary.file-mode-pick', { on: { click: () => { m.close(); pickAndOpen(); } } }, tr('📂 ファイルを選ぶ…')),
     list,
     el('div.modal-actions', el('button.btn', { on: { click: () => m.close() } }, tr('閉じる'))),
   ], { className: 'file-mode' });
@@ -805,6 +809,17 @@ async function openDb(name, key, param) {
   await showDb(key, param);
 }
 
+/** DB 名の欄のツールチップ：何を開いていて、保存するとどうなるか */
+function dbNameTitle() {
+  const m = state.manual;
+  if (!m) return tr('クリックして名前を変更');
+  if (m.target) return tr('ファイル「{0}」を開いています（保存すると、このファイルに上書きします）', [m.target.handle.name]);
+  if (m.embed) return tr('リンクに埋め込まれたデータを開いています（保存すると、保存先を選べます）');
+  if (m.project) return tr('プロジェクトのファイルから読み込んでいます（保存すると、保存先を選べます）：{0}', [m.project]);
+  if (m.kind === 'url') return tr('URL から読み込んでいます（保存すると、保存先を選べます）：{0}', [m.url]);
+  return tr('ファイルから開いています（保存すると、保存先を選べます）');
+}
+
 // DB を開いた直後の画面づくり（データベース・ローカルファイル共通）
 async function showDb(key, param) {
   const name = state.dbName;
@@ -816,11 +831,7 @@ async function showDb(key, param) {
   undo.clear();
   Object.assign($('db-name'), {
     value: dbLabel(), hidden: false, readOnly: !!state.manual,
-    title: state.manual?.embed ? tr('リンクに埋め込まれたデータを開いています（保存すると、データベースとして残ります）')
-      : state.manual?.project ? tr('プロジェクトのファイルから読み込んでいます（保存すると、データベースとして残ります）：{0}', [state.manual.project])
-      : state.manual?.noUrl ? tr('手元のプロジェクトのファイルから開いています（保存すると、データベースとして残ります）')
-      : state.manual?.kind === 'url' ? tr('URL から読み込んでいます（保存すると、データベースとして残ります）：{0}', [state.manual.url])
-      : state.manual ? tr('ローカルファイルを直接編集しています') : tr('クリックして名前を変更'),
+    title: dbNameTitle(),
   });
   await refreshObjects();
   const keys = allKeys();
@@ -895,18 +906,18 @@ async function settleTx() {
 
 function setDirty(v) {
   state.dirty = !!v;
-  if (!v) state.queriesDirty = false; // 読み込み・保存・破棄で、クエリの変更も済んだことになる
+  if (!v) { state.queriesDirty = false; state.dataDirty = false; } // 読み込み・保存・破棄で、クエリの変更も済んだことになる
   const b = $('save-state');
   if (!b) return;
   b.hidden = !state.manual;
   if (state.manual) {
-    const url = state.manual.kind === 'url';
+    const saved = !!state.manual.target;
     b.replaceChildren(el('span.ss-mark', state.dirty ? '●' : '✓'),
-      el('span.ss-text', state.dirty ? tr('未保存') : url ? tr('変更なし') : tr('保存済み')));
+      el('span.ss-text', state.dirty ? tr('未保存') : saved ? tr('保存済み') : tr('変更なし')));
     b.classList.toggle('dirty', state.dirty);
     b.disabled = !state.dirty;
-    b.title = !state.dirty ? (url ? tr('URL から読んだときのままです') : tr('ファイルに保存されています'))
-      : url ? tr('クリックしてデータベースとして保存（{0}S）', [MOD]) : tr('クリックしてファイルに保存（{0}S）', [MOD]);
+    b.title = !state.dirty ? (saved ? tr('ファイルに保存されています') : tr('開いたときのままです'))
+      : saved ? tr('クリックしてファイルに上書き保存（{0}S）', [MOD]) : tr('クリックして保存先を選ぶ（{0}S）', [MOD]);
   }
   if (state.dbName) setUrl(); // タブのタイトルの「● 」
 }
@@ -930,77 +941,273 @@ async function leaveCurrent() {
   return false;
 }
 
-async function pickToOpen() {
-  try {
-    const [handle] = await window.showOpenFilePicker({ types: files.PICKER_TYPES, id: 'sqlite-sheet' });
-    return handle;
-  } catch (e) {
-    if (e.name !== 'AbortError') toast(friendlyError(e.message), 'error');
-    return null;
+// ======================================================================
+// ファイルから開く・保存する
+// 開いたものはどれもメモリにある（state.manual）。保存（Ctrl+S）は保存先（state.manual.target）に上書きする。
+// 保存先は、開いたファイルか、初めて保存したときに選んだもの：
+//   { kind: 'sqlite', handle, stamp }
+//   { kind: 'project', handle, stamp, db: { path } | { embed: true }, dbHandle, dbStamp }
+// 保存先がまだ無ければ、保存するときに「ブラウザに保存」「.sqlite」「.sqlitesheet」から選んでもらう。
+// ブラウザに保存すると、ブラウザの DB（OPFS）になり、以後は自動保存
+// ======================================================================
+const stampOf = (f) => `${f.lastModified}:${f.size}`;
+const OPEN_TYPES = [{
+  description: tr('SQLite データベース・SQLiteシートのプロジェクト'),
+  accept: { 'application/x-sqlite3': ['.sqlite', '.sqlite3', '.db'], 'application/json': [project.EXT] },
+}];
+const isUrlLike = (s) => /^[a-z][a-z0-9+.-]*:/i.test(s);
+
+async function pickAndOpen() {
+  if (files.supported) {
+    let handle;
+    try { [handle] = await window.showOpenFilePicker({ types: OPEN_TYPES, id: 'sqlite-sheet' }); } catch (e) {
+      if (e.name !== 'AbortError') toast(friendlyError(e.message), 'error');
+      return;
+    }
+    return openHandle(handle);
   }
+  // スマホのファイル選択は、知らない拡張子（.sqlite など）を選べなくすることがあるので絞らない。中身で見分ける
+  const f = await pickFile(isTouch ? '' : `.sqlite,.sqlite3,.db,${project.EXT},application/x-sqlite3,application/json`);
+  if (f) await openBytesFile(new Uint8Array(await f.arrayBuffer()), f.name, null, null);
 }
 
-async function openFileDialog() {
-  if (!(await leaveCurrent())) return;
-  const handle = await pickToOpen();
-  if (handle) await enterFile(handle);
-}
-
-async function openRecent(r) {
-  if (!(await leaveCurrent())) return;
-  await enterFile(r.handle, { recentId: r.id });
-}
-
-async function enterFile(handle, { recentId = null } = {}) {
+/** ファイルハンドルから開く（Chrome / Edge。最近開いたファイルにも加える） */
+async function openHandle(handle, { recentId = null } = {}) {
+  let f;
   try {
-    if (!(await files.ensurePermission(handle))) { toast(tr('ファイルの読み書きが許可されなかったため、開けませんでした'), 'error'); return; }
-    await db.openFile(FILE + handle.name, handle);
+    if (!(await files.ensurePermission(handle, 'read'))) { toast(tr('ファイルを読むことが許可されなかったため、開けませんでした'), 'error'); return; }
+    f = await handle.getFile();
   } catch (e) {
     if (e.name === 'NotFoundError' && recentId != null) {
       if (await confirmDialog({ title: tr('「{0}」が見つかりません', [handle.name]), body: tr('ファイルが移動・削除・名前の変更をされた可能性があります。最近開いたファイルの一覧から消しますか？'), okLabel: tr('一覧から消す') })) {
         await files.remove(recentId);
       }
-      if (!state.dbName) showWelcome();
       return;
     }
     toast(friendlyError(e.message), 'error');
     return;
   }
   files.add(handle).catch(() => {});
-  state.manual = { kind: 'file', handle, name: handle.name };
-  state.dbName = FILE + handle.name;
-  setDirty(false);
-  await showDb(null);
+  await openBytesFile(new Uint8Array(await f.arrayBuffer()), handle.name, handle, stampOf(f));
 }
 
-/** ファイルへ保存する。保存できたら true */
-async function saveFile(force = false, { open = true } = {}) {
-  if (!state.manual) return false;
-  if (state.grid && !(await state.grid.flushDraft())) return false;
-  if (state.manual.kind === 'url') return saveUrlAsDb({ open });
-  try {
-    await db.save(force);
-    toast(tr('「{0}」に保存しました', [state.manual.name]), 'success');
-    return true;
-  } catch (e) {
-    if (e.message === 'CONFLICT') return resolveConflict({ saving: true });
-    toast(friendlyError(e.message), 'error');
-    return false;
-  }
+/** 手元のファイルの中身を開く。.sqlite か .sqlitesheet かは中身で見分ける。handle があれば、保存でそこに上書きする */
+async function openBytesFile(bytes, filename, handle, stamp) {
+  if (project.looksLikeProject(bytes)) return openProjectFile(bytes, filename, handle, stamp);
+  if (!isSqlite(bytes)) { toast(tr('SQLite のデータベースファイルでも、SQLiteシートのプロジェクトでもありません'), 'error'); return; }
+  if (!(await leaveCurrent())) return;
+  await openLoaded(bytes, {
+    key: FILE + filename, name: filename, file: true, keepSettings: true,
+    target: handle ? { kind: 'sqlite', handle, stamp } : null,
+  });
 }
 
 /**
- * URL から読んだものを、名前を聞いてデータベース（OPFS）として保存する。
- * open なら保存したデータベースに切り替える（以後は自動保存）。保存できたら true
+ * 手元の .sqlitesheet を開く。db が相対パスなら、ブラウザはパスからファイルを開けないので、その DB ファイルを選んでもらう
+ * （選んだファイルは、保存するときの DB の書き込み先にもなる）
  */
-async function saveUrlAsDb({ open = true } = {}) {
+async function openProjectFile(bytes, filename, handle, stamp) {
+  const r = project.parseProjectFile(new TextDecoder().decode(bytes));
+  if (r.error) { toast(r.error, 'error', 8000); return; }
+  if (!(await leaveCurrent())) return;
+  for (const w of r.warnings) toast(w, 'info', 6000);
+  const p = r.project;
+  let dbBytes, dbUrl = null, dbHandle = null, dbStamp = null;
+  if (p.db_embed) {
+    dbBytes = await decodeEmbed(p.db_embed);
+    if (!dbBytes) { toast(tr('プロジェクトに埋め込まれた DB（db_embed）を読めませんでした'), 'error'); return; }
+  } else if (isUrlLike(p.db)) {
+    const url = httpUrl(p.db);
+    if (!url) { toast(tr('読み込めない URL です：{0}', [p.db]), 'error'); return; }
+    dbUrl = url.href;
+    dbBytes = await fetchUrl(url);
+    if (!dbBytes) return;
+  } else {
+    const picked = await pickDbFile(p.db, 'read');
+    if (!picked) return;
+    ({ bytes: dbBytes, handle: dbHandle, stamp: dbStamp } = picked);
+  }
+  if (!isSqlite(dbBytes)) { toast(tr('SQLite のデータベースファイルではありません'), 'error'); return; }
+  const name = filename.replace(/\.sqlitesheet$/i, '') || tr('プロジェクト');
+  await openLoaded(dbBytes, {
+    key: FILE + filename, name, file: true, url: dbUrl, sheets: p.sheets,
+    target: handle ? { kind: 'project', handle, stamp, db: p.db ? { path: p.db } : { embed: true }, dbHandle, dbStamp } : null,
+  });
+}
+
+/**
+ * プロジェクトが相対パスで指す DB ファイルを選んでもらう。mode は 'read'（開くとき）か 'readwrite'（保存するとき）。
+ * 返り値 { bytes, handle, stamp }（handle は選べるブラウザだけ）か、やめたら null
+ */
+async function pickDbFile(path, mode) {
+  const ok = await confirmDialog({
+    title: tr('DB ファイル「{0}」を選んでください', [path]),
+    body: tr('このプロジェクトは DB を相対パスで指しています。ブラウザはパスからファイルを開けないので、そのファイルを選んでください。'),
+    okLabel: tr('ファイルを選ぶ…'),
+  });
+  if (!ok) return null;
+  const want = path.split('/').pop();
+  if (files.supported) {
+    let handle;
+    try { [handle] = await window.showOpenFilePicker({ types: files.PICKER_TYPES, id: 'sqlite-sheet-db' }); } catch (e) {
+      if (e.name !== 'AbortError') toast(friendlyError(e.message), 'error');
+      return null;
+    }
+    if (!(await files.ensurePermission(handle, mode))) { toast(tr('ファイルの読み書きが許可されませんでした'), 'error'); return null; }
+    if (handle.name !== want) toast(tr('選んだファイル「{0}」は、プロジェクトに書かれた名前「{1}」と違います', [handle.name, want]), 'info', 6000);
+    const f = await handle.getFile();
+    return { bytes: new Uint8Array(await f.arrayBuffer()), handle, stamp: stampOf(f) };
+  }
+  if (mode === 'readwrite') return null;
+  const f = await pickFile(isTouch ? '' : '.sqlite,.sqlite3,.db,application/x-sqlite3');
+  if (!f) return null;
+  if (f.name !== want) toast(tr('選んだファイル「{0}」は、プロジェクトに書かれた名前「{1}」と違います', [f.name, want]), 'info', 6000);
+  return { bytes: new Uint8Array(await f.arrayBuffer()), handle: null, stamp: null };
+}
+
+/** 「💾 保存」（Ctrl+S）：保存先があれば上書き、なければ保存先を選ぶ。保存できたら true */
+async function saveFile(force = false, { open = true } = {}) {
+  if (!state.manual) return false;
+  if (state.grid && !(await state.grid.flushDraft())) return false;
   if (state.inTx) { toast(tr('トランザクション中です。先に確定か取り消しをしてください'), 'error'); return false; }
-  let def = state.manual.wanted || state.manual.name, i = 2;
+  if (!state.manual.target) return saveAs({ open });
+  return writeTarget(state.manual.target, force);
+}
+
+/** 「💾 別の場所に保存…」：ブラウザ・.sqlite・.sqlitesheet から選ぶ */
+async function saveAs({ open = true } = {}) {
+  if (!state.manual) return false;
+  if (state.grid && !(await state.grid.flushDraft())) return false;
+  if (state.inTx) { toast(tr('トランザクション中です。先に確定か取り消しをしてください'), 'error'); return false; }
+  const c = await choiceDialog({
+    title: tr('保存先を選んでください'),
+    body: files.supported ? tr('ファイルに保存すると、次からは {0}S でそのファイルに上書きします。', [MOD])
+      : tr('このブラウザでは、ファイルに上書き保存できません（書き出すだけです）。'),
+    choices: [
+      { label: tr('キャンセル'), value: null },
+      { label: tr('ブラウザに保存'), hint: tr('このブラウザの中に名前を付けて置き、以後は自動で保存します'), value: 'browser' },
+      { label: tr('.sqlite ファイル'), hint: tr('データだけを保存します'), value: 'sqlite' },
+      { label: tr('.sqlitesheet ファイル'), hint: tr('データと、クエリシート・列の幅などのシートの設定を保存します'), value: 'project', primary: true },
+    ],
+  });
+  if (c === 'browser') return saveToBrowser({ open });
+  if (c === 'sqlite' || c === 'project') return saveToNewFile(c);
+  return false;
+}
+
+/** 新しいファイルに保存し、以後の保存先にする（上書きできないブラウザでは書き出すだけ） */
+async function saveToNewFile(kind) {
+  const m = state.manual;
+  const base = (m.wanted || m.name).replace(/\.(sqlite3?|db|sqlitesheet)$/i, '');
+  const ext = kind === 'sqlite' ? '.sqlite' : project.EXT;
+  // プロジェクトの DB：URL から開いて変更が無ければその URL を指し、それ以外は埋め込む
+  const dbMode = kind === 'project' && m.url && !state.dataDirty ? { path: new URL(m.url, location.href).href } : { embed: true };
+  if (typeof window.showSaveFilePicker !== 'function') {
+    try {
+      const bytes = kind === 'sqlite' ? await db.exportDb(state.dbName) : new TextEncoder().encode(await projectFileText(dbMode));
+      await exportFile(bytes, base + ext, kind === 'sqlite' ? 'application/x-sqlite3' : 'application/json');
+      return true;
+    } catch (e) { toast(friendlyError(e.message), 'error'); return false; }
+  }
+  let handle;
+  try {
+    handle = await window.showSaveFilePicker({
+      suggestedName: base + ext, types: kind === 'sqlite' ? files.PICKER_TYPES : project.PICKER_TYPES,
+      id: kind === 'sqlite' ? 'sqlite-sheet' : 'sqlite-sheet-project',
+    });
+  } catch (e) {
+    if (e.name !== 'AbortError') toast(friendlyError(e.message), 'error');
+    return false;
+  }
+  const target = kind === 'sqlite' ? { kind, handle, stamp: null } : { kind, handle, stamp: null, db: dbMode, dbHandle: null, dbStamp: null };
+  if (!(await writeTarget(target, true))) return false;
+  m.target = target;
+  m.name = kind === 'sqlite' ? handle.name : handle.name.replace(/\.sqlitesheet$/i, '');
+  files.add(handle).catch(() => {});
+  Object.assign($('db-name'), { value: dbLabel(), title: dbNameTitle() });
+  setDirty(false);
+  return true;
+}
+
+/** プロジェクトのファイルの中身（dbMode は { path } か { embed: true }） */
+async function projectFileText(dbMode) {
+  const embed = dbMode.embed ? toBase64Url(await deflate(await db.exportDb(state.dbName))) : null;
+  return project.projectText({ db: dbMode.path || null, embed, sheets: project.collectSheets(state.dbName, allKeys(), state.queries) });
+}
+
+/** ファイルに書く（createWritable は一時ファイルに書いて閉じたときに差し替えるので、途中で失敗しても元は壊れない） */
+async function writeHandle(handle, bytes) {
+  if (!(await files.ensurePermission(handle, 'readwrite'))) throw new Error(tr('ファイルに書き込むことが許可されませんでした'));
+  const w = await handle.createWritable();
+  try { await w.write(bytes); await w.close(); } catch (e) {
+    await w.abort().catch(() => {});
+    throw new Error(tr('ファイルに保存できませんでした：{0}', [e?.message ?? e]));
+  }
+  return stampOf(await handle.getFile());
+}
+
+/** 開いた（保存した）後に、ほかのアプリでファイルが変わったか */
+async function changedOutside(handle, stamp) {
+  if (!stamp) return false;
+  try { return stampOf(await handle.getFile()) !== stamp; } catch { return false; }
+}
+
+/**
+ * 保存先に上書きする。force でなければ、ほかのアプリでの変更を確かめる。
+ * プロジェクトの DB がパスなら、データが変わったときだけ DB ファイルにも書く（書き込み先は初回に選んでもらう）
+ */
+async function writeTarget(t, force = false) {
+  try {
+    if (!force && await changedOutside(t.handle, t.stamp)) return resolveConflict({ saving: true });
+    if (t.kind === 'sqlite') {
+      t.stamp = await writeHandle(t.handle, await db.exportDb(state.dbName));
+    } else {
+      if (t.db.path && state.dataDirty && !(await writeProjectDb(t))) return false;
+      t.stamp = await writeHandle(t.handle, new TextEncoder().encode(await projectFileText(t.db)));
+    }
+  } catch (e) { toast(friendlyError(e.message), 'error'); return false; }
+  await db.markClean();
+  setDirty(false);
+  toast(tr('「{0}」に保存しました', [t.handle.name]), 'success');
+  return true;
+}
+
+/** パスで指す DB ファイルに書く。書けない（URL・選ばなかった）ときは、埋め込みに切り替えるか尋ねる。続けてよければ true */
+async function writeProjectDb(t) {
+  if (!t.dbHandle) {
+    const picked = isUrlLike(t.db.path) ? null : await pickDbFile(t.db.path, 'readwrite');
+    if (!picked) {
+      const c = await choiceDialog({
+        title: tr('DB の変更を「{0}」に書き込めません', [t.db.path]),
+        body: isUrlLike(t.db.path) ? tr('このプロジェクトは DB を URL で指しているので、ブラウザから書き換えられません。') : tr('DB ファイルが選ばれなかったので、書き込めません。'),
+        choices: [
+          { label: tr('キャンセル'), value: null },
+          { label: tr('DB を埋め込んで保存'), hint: tr('プロジェクトのファイルの中に DB を入れます'), value: 'embed', primary: true },
+        ],
+      });
+      if (c !== 'embed') return false;
+      t.db = { embed: true };
+      return true;
+    }
+    t.dbHandle = picked.handle; t.dbStamp = picked.stamp;
+  }
+  if (await changedOutside(t.dbHandle, t.dbStamp)
+    && !(await confirmDialog({ title: tr('「{0}」は、開いた後にほかのアプリで変更されています', [t.dbHandle.name]), body: tr('上書きすると、ほかのアプリでの変更は失われます。'), okLabel: tr('上書き保存'), danger: true }))) return false;
+  t.dbStamp = await writeHandle(t.dbHandle, await db.exportDb(state.dbName));
+  return true;
+}
+
+/**
+ * 「ブラウザに保存」：名前を聞いて、ブラウザの DB（OPFS）として保存する。
+ * open なら保存した DB に切り替える（以後は自動保存）。保存できたら true
+ */
+async function saveToBrowser({ open = true } = {}) {
+  let def = (state.manual.wanted || state.manual.name).replace(/\.(sqlite3?|db|sqlitesheet)$/i, ''), i = 2;
   const base = def;
   while (state.dbs.includes(def)) def = `${base} (${i++})`;
   const anchor = $('save-state').offsetParent ? $('save-state') : $('file-btn');
   const name = await ask(anchor, {
-    title: tr('データベースとして保存する名前'), value: def, okLabel: tr('保存'),
+    title: tr('ブラウザに保存する名前'), value: def, okLabel: tr('保存'),
     validate: (v) => validDbName(v) || (state.dbs.includes(v) ? tr('「{0}」は既にあります', [v]) : null),
   });
   if (!name) return false;
@@ -1013,20 +1220,21 @@ async function saveUrlAsDb({ open = true } = {}) {
     requestPersist();
     state.dbs = await db.list();
   } catch (e) { toast(friendlyError(e.message), 'error'); return false; }
-  toast(tr('「{0}」としてデータベースに保存しました', [name]), 'success');
-  // 保存できたので、メモリの方は捨ててよい。URL も ?db= から保存したデータベースのものに置き換える（「戻る」で読み直さない）
+  toast(tr('ブラウザに「{0}」として保存しました。以後は自動で保存されます', [name]), 'success');
+  // 保存できたので、メモリの方は捨ててよい。URL も保存した DB のものに置き換える（「戻る」で読み直さない）
   await db.close(); state.manual = null; state.dbName = null; setDirty(false);
   if (open) { history.replaceState(null, '', urlOf(name)); await openDb(name, key); }
   return true;
 }
 
-/** ファイルを読み直す（この画面の未保存の変更は捨てる） */
+/** 保存先のファイルを読み直す（この画面の未保存の変更は捨てる） */
 async function reloadFile() {
-  const { handle } = state.manual, key = state.key;
-  try { await db.openFile(FILE + handle.name, handle); } catch (e) { toast(friendlyError(e.message), 'error'); return false; }
+  const t = state.manual?.target;
+  if (!t) return false;
   setDirty(false);
-  await showDb(key);
-  toast(tr('「{0}」を読み直しました', [handle.name]));
+  await db.markClean();
+  await openHandle(t.handle);
+  toast(tr('「{0}」を読み直しました', [t.handle.name]));
   return true;
 }
 
@@ -1036,7 +1244,7 @@ async function resolveConflict({ saving = false } = {}) {
   if (askingConflict) return false;
   askingConflict = true;
   try {
-    const name = state.manual.name;
+    const name = state.manual.target.handle.name;
     if (!saving && !state.dirty) {
       // こちらに未保存の変更がなければ、読み直すかどうかだけ
       if (await confirmDialog({ title: tr('「{0}」がほかのアプリで変更されました', [name]), body: tr('読み直して、ファイルの今の内容を表示しますか？'), okLabel: tr('読み直す') })) return reloadFile();
@@ -1059,35 +1267,16 @@ async function resolveConflict({ saving = false } = {}) {
 
 let lastCheckedStamp = null;
 async function checkExternalChange() {
-  if (!state.manual?.handle || askingConflict) return;
+  const t = state.manual?.target;
+  if (!t?.stamp || askingConflict) return;
   try {
-    const r = await db.checkFile();
-    if (!r.changed) { lastCheckedStamp = null; return; }
+    const now = stampOf(await t.handle.getFile());
+    if (now === t.stamp) { lastCheckedStamp = null; return; }
     // 同じ変更について何度も尋ねない（キャンセルしたら、次に保存するときまで黙る）
-    const f = await state.manual.handle.getFile();
-    const stamp = `${f.lastModified}:${f.size}`;
-    if (stamp === lastCheckedStamp) return;
-    lastCheckedStamp = stamp;
+    if (now === lastCheckedStamp) return;
+    lastCheckedStamp = now;
     await resolveConflict();
   } catch { /* ファイルが消えた等は、保存しようとしたときに知らせる */ }
-}
-
-// ローカルファイルを直接編集しているときに、その内容をデータベースとして取り込む
-async function importFileToBrowser() {
-  const base = state.manual.name.replace(/\.(sqlite3?|db)$/i, '') || 'imported';
-  let def = base, i = 2;
-  while (state.dbs.includes(def)) def = `${base} (${i++})`;
-  const name = await ask($('file-btn'), { title: tr('データベースとして取り込む名前'), value: def, okLabel: tr('取り込む'), validate: (v) => validDbName(v) || (state.dbs.includes(v) ? tr('「{0}」は既にあります', [v]) : null) });
-  if (!name) return;
-  try {
-    if (state.grid && !(await state.grid.flushDraft())) return;
-    const bytes = await db.exportDb(state.dbName);
-    await db.importDb(name, bytes);
-    store.copyDb(state.dbName, name);
-    requestPersist();
-    state.dbs = await db.list();
-    toast(tr('「{0}」としてデータベースに取り込みました（このファイルはそのまま開いています）', [name]), 'success');
-  } catch (e) { toast(friendlyError(e.message), 'error'); }
 }
 
 // ファイルを閉じてホームへ
@@ -1141,40 +1330,6 @@ async function makeSample() {
     state.dbName = null;
     await openDb(name);
     toast(tr('サンプルの DB を作成しました'), 'success');
-  } catch (e) { toast(friendlyError(e.message), 'error'); }
-}
-
-// スマホのファイル選択は、知らない拡張子（.sqlite など）を選べなくすることがあるので絞らない。中身は importFile が確かめる
-async function pickSqlite() {
-  const f = await pickFile(isTouch ? '' : `.sqlite,.sqlite3,.db,${project.EXT},application/x-sqlite3`);
-  if (f) importFile(f);
-}
-
-async function importFile(file) {
-  const bytes = new Uint8Array(await file.arrayBuffer());
-  // プロジェクト（.sqlitesheet）は、中身で見分けてメモリで開く
-  if (project.looksLikeProject(bytes)) return openProjectFile(bytes, file.name);
-  importBytes(bytes, file.name.replace(/\.(sqlite3?|db)$/i, ''));
-}
-
-/** SQLite のファイルの中身を、名前を聞いてからデータベースとして取り込んで開く（sheet は開く ?sheet= の値） */
-async function importBytes(bytes, defName, sheet = null) {
-  const header = new TextDecoder().decode(bytes.slice(0, 15));
-  if (header !== 'SQLite format 3') { toast(tr('SQLite のデータベースファイルではありません'), 'error'); return; }
-  let name = defName || 'imported';
-  const base = name; let i = 2;
-  while (state.dbs.includes(name)) name = `${base} (${i++})`;
-  name = await ask($('file-btn'), { title: tr('このファイルを読み込む名前'), value: name, okLabel: tr('読み込む'), validate: (v) => validDbName(v) || (state.dbs.includes(v) ? tr('「{0}」は既にあります', [v]) : null) });
-  if (!name) return;
-  if (!(await leaveCurrent())) return;
-  try {
-    store.removeDb(name);
-    await db.importDb(name, bytes);
-    requestPersist();
-    state.dbs = await db.list();
-    state.dbName = null;
-    await openDb(name, null, sheet);
-    toast(tr('「{0}」を読み込みました', [name]), 'success');
   } catch (e) { toast(friendlyError(e.message), 'error'); }
 }
 
@@ -1252,23 +1407,8 @@ async function loadProjectUrl(link) {
   await openProject(r.project, { base: url.href, key: 'url:project:' + url.href, name, link, projectUrl: link.project });
 }
 
-/** 手元の .sqlitesheet ファイルを開く。ファイルの場所はわからないので、db は絶対 URL でなければならない。URL には載せない */
-async function openProjectFile(bytes, filename) {
-  const text = new TextDecoder().decode(bytes);
-  const r = project.parseProjectFile(text);
-  if (r.error) { toast(r.error, 'error', 8000); return; }
-  if (r.project.db && !/^[a-z][a-z0-9+.-]*:/i.test(r.project.db)) {
-    toast(tr('手元のファイルから開くプロジェクトでは、db に相対パスは使えません（ファイルの場所がわからないため）：{0}', [r.project.db]), 'error', 8000);
-    return;
-  }
-  if (!(await leaveCurrent())) return;
-  for (const w of r.warnings) toast(w, 'info', 6000);
-  const name = filename.replace(/\.sqlitesheet$/i, '') || tr('プロジェクト');
-  await openProject(r.project, { base: location.href, key: 'url:file:' + project.fingerprint(text), name, link: null, noUrl: true });
-}
-
-/** 読んだプロジェクトの DB を読み込んで開く（?project= と手元のファイルで共通） */
-async function openProject(p, { base, key, name, link, projectUrl = null, noUrl = false }) {
+/** ?project= で読んだプロジェクトの DB を読み込んで開く */
+async function openProject(p, { base, key, name, link, projectUrl = null }) {
   let bytes, dbUrl = null;
   if (p.db) {
     const url = httpUrl(p.db, base);
@@ -1281,25 +1421,26 @@ async function openProject(p, { base, key, name, link, projectUrl = null, noUrl 
     if (!bytes) return loadFail(tr('プロジェクトに埋め込まれた DB（db_embed）を読めませんでした'));
   }
   if (!isSqlite(bytes)) return loadFail(tr('SQLite のデータベースファイルではありません'));
-  await openLoaded(bytes, { url: dbUrl, key, name, link, sheets: p.sheets, projectUrl, noUrl });
+  await openLoaded(bytes, { url: dbUrl, key, name, link, sheets: p.sheets, projectUrl });
 }
 
 /**
  * 読み込んだ DB をメモリで開き、シートの設定（sheets）を端末側に入れて表示する（?db=・#db_embed=・?project=・手元のファイル共通）。
- * link は開いた URL（parseUrl() の結果。手元のファイルなら null）、sheets はシートの設定（省けば link のもの）
+ * link は開いた URL（parseUrl() の結果。手元のファイルなら null）、sheets はシートの設定（省けば link のもの）。
+ * file：手元のファイルから開いた（URL に載せない）。keepSettings：端末側の設定を消さずに使う（.sqlite のファイル）。target：保存先
  */
-async function openLoaded(bytes, { url = null, embed = null, key, name, link, sheets = link?.sheets || [], projectUrl = null, noUrl = false }) {
+async function openLoaded(bytes, { url = null, embed = null, key, name, link = null, sheets = link?.sheets || [], projectUrl = null, file = false, keepSettings = false, target = null }) {
   try { await db.openBytes(key, bytes); } catch (e) { return loadFail(friendlyError(e.message)); }
   // 端末側データ（列幅など）のキー。名前に「:」を含むので OPFS の DB とは重ならない。
   // シートの設定（クエリシート・並び・列幅など）を入れる（クエリシートは SELECT しか通らないので読み取り専用）。
   // ?db= などは URL にも残すので、リロード・共有で同じものが開く
   state.manual = {
-    kind: 'url', url, embed, project: projectUrl, name, wanted: link?.dbName || null,
-    keep: link?.keep || [], sig: noUrl ? null : link?.sig ?? null, noUrl,
+    kind: file ? 'file' : 'url', url, embed, project: projectUrl, name, wanted: link?.dbName || null,
+    keep: link?.keep || [], sig: file ? null : link?.sig ?? null, target,
   };
   state.dbName = key;
-  store.removeDb(state.dbName);
-  await project.applySheets(state.dbName, sheets, async (t) => {
+  if (!keepSettings) store.removeDb(state.dbName);
+  if (!keepSettings || sheets.length) await project.applySheets(state.dbName, sheets, async (t) => {
     try { return (await readTable(t)).pk; } catch { return null; }
   });
   setDirty(false);
@@ -1599,8 +1740,8 @@ async function exportCurrent(name = state.dbName) {
 function dbActions(name, { anchor, home = false } = {}) {
   return [
     home ? { label: tr('開く'), icon: '↗', action: () => openDb(name) } : null,
-    { label: tr('ファイルに書き出す…'), icon: '⤓', action: () => exportCurrent(name) },
-    { label: tr('プロジェクトとして書き出す…'), icon: '📦', action: async () => { if (home) await openDb(name); if (state.dbName === name) exportProject(); } },
+    { label: tr('.sqlite に書き出す…'), icon: '⤓', action: () => exportCurrent(name) },
+    { label: tr('.sqlitesheet に書き出す…'), icon: '📦', action: async () => { if (home) await openDb(name); if (state.dbName === name) exportProject(); } },
     { label: tr('名前を変更…'), icon: '✎', action: () => (home ? renameDbAsk(name, anchor) : (() => { $('db-name').focus(); $('db-name').select(); })()) },
     { label: tr('複製…'), icon: '⧉', action: () => copyDb(name, anchor) },
     // 共有はシートやクエリシートを選ぶので、ホームからは開いてから
@@ -1612,20 +1753,13 @@ function dbActions(name, { anchor, home = false } = {}) {
 function dbMenu(anchor, { list = false } = {}) {
   const items = [];
   // 今開いているもの
-  if (state.manual?.kind === 'url') {
-    items.push({ header: tr('🌐 {0}（URL から読み込み中）', [state.manual.name]) },
-      { label: tr('データベースとして保存…'), icon: '💾', kbd: `${MOD}S`, action: () => saveFile() },
-      { label: tr('ファイルに書き出す…'), icon: '⤓', action: () => exportCurrent() },
-      { label: tr('プロジェクトとして書き出す…'), icon: '📦', action: exportProject },
+  if (state.manual) {
+    const t = state.manual.target;
+    items.push({ header: t ? tr('📄 {0}', [t.handle.name]) : state.manual.kind === 'url' ? tr('🌐 {0}（URL から読み込み中）', [state.manual.name]) : tr('📄 {0}', [state.manual.name]) },
+      { label: t ? tr('保存') : tr('保存…'), icon: '💾', kbd: `${MOD}S`, disabled: !!t && !state.dirty, action: () => saveFile() },
+      { label: tr('別の場所に保存…'), icon: '💾', action: () => saveAs() },
       { label: tr('共有…'), icon: '🔗', action: shareDialog },
       { label: tr('閉じる'), icon: '✕', action: closeFile }, '-');
-  } else if (state.manual) {
-    items.push({ header: tr('📄 {0}（ローカルファイルを直接編集中）', [state.manual.name]) },
-      { label: tr('保存'), icon: '💾', kbd: `${MOD}S`, disabled: !state.dirty, action: () => saveFile() },
-      { label: tr('データベースとして取り込む…'), icon: '⤒', action: importFileToBrowser },
-      { label: tr('プロジェクトとして書き出す…'), icon: '📦', action: exportProject },
-      { label: tr('共有…'), icon: '🔗', action: shareDialog },
-      { label: tr('ファイルを閉じる'), icon: '✕', action: closeFile }, '-');
   } else if (state.dbName) {
     items.push({ header: el('span.menu-header-db', appIcon(), state.dbName) }, ...dbActions(state.dbName, { anchor }), '-',
       { label: tr('ホームへ（データベースの一覧）'), icon: '⌂', action: goHome });
@@ -1638,10 +1772,9 @@ function dbMenu(anchor, { list = false } = {}) {
   items.push({ header: tr('データベース') });
   for (const n of state.dbs) items.push({ label: n, icon: n === state.dbName ? '✓' : appIcon(), action: () => { if (n !== state.dbName) openDb(n); } });
   items.push({ label: tr('新規作成…'), icon: tr('＋'), action: () => newDb(anchor) },
-    { label: tr('.sqlite ファイルを取り込む…'), icon: '⤒', action: pickSqlite },
+    { label: tr('ファイルから開く…'), icon: '📂', action: openFileDialog },
     { label: tr('サンプルを作成'), icon: '✨', action: makeSample });
-  if (files.supported || isPwa()) items.push('-');
-  if (files.supported) items.push({ label: tr('ローカルファイルを直接編集…'), icon: '📂', action: fileModeDialog });
+  if (isPwa()) items.push('-');
   if (isPwa()) items.push({ label: tr('URL から開く…'), icon: '🌐', action: () => openUrlDialog(anchor) });
   if (list) return items;
   menu(anchor, items);
@@ -2029,7 +2162,7 @@ function saveQueries() {
   store.setQueries(state.dbName, state.queries);
   // URL から読んだものは、保存するまでクエリも残らないので未保存にする
   // （ローカルファイルのクエリは端末側に保存されていて、ファイルの保存とは関係ない）
-  if (state.manual?.kind === 'url') { state.queriesDirty = true; setDirty(true); }
+  if (state.manual && state.manual.target?.kind !== 'sqlite') { state.queriesDirty = true; setDirty(true); }
 }
 
 async function newTable(anchor) {
@@ -3621,15 +3754,16 @@ function palette() {
     { label: tr('新しいクエリ'), icon: tr('＋'), run: () => newQuery() },
     { label: tr('SQL コンソールを開く'), icon: '⌨', run: () => toggleConsole(true) },
     state.model ? { label: tr('テーブルの設計を開く'), icon: '⚙', run: () => togglePanel(true) } : null,
-    state.manual ? null : { label: tr('DB をファイルに書き出す'), icon: '⤓', run: () => exportCurrent() },
+    state.manual ? null : { label: tr('.sqlite に書き出す'), icon: '⤓', run: () => exportCurrent() },
     ...(state.inTx
       ? [{ label: tr('トランザクションを確定（COMMIT）'), icon: '✓', run: commitTx },
         { label: tr('トランザクションを取り消し（ROLLBACK）'), icon: '↶', run: rollbackTx }]
       : [{ label: tr('トランザクションを開始'), icon: '⧗', run: beginTx }]),
     { label: tr('CSV からテーブルを作成'), icon: '⤒', run: importCsv },
     { label: tr('共有…'), icon: '🔗', run: shareDialog },
-    { label: tr('プロジェクトとして書き出す…'), icon: '📦', run: exportProject },
-    state.manual ? { label: state.manual.kind === 'url' ? tr('データベースとして保存') : tr('ファイルに保存'), icon: '💾', run: () => saveFile() } : null,
+    state.manual ? null : { label: tr('.sqlitesheet に書き出す'), icon: '📦', run: exportProject },
+    state.manual ? { label: tr('保存'), icon: '💾', run: () => saveFile() } : null,
+    state.manual ? { label: tr('別の場所に保存…'), icon: '💾', run: () => saveAs() } : null,
     ...state.dbs.filter((n) => n !== state.dbName).map((n) => ({ label: n, hint: tr('DB を開く'), icon: appIcon(), run: () => openDb(n) })),
   ].filter(Boolean);
   const input = el('input.input.palette-input', { placeholder: tr('シートやコマンドを検索…'), autofocus: true });

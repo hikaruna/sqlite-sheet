@@ -1,10 +1,10 @@
 import { t as tr } from './i18n.js';
-// 「ローカルファイルを直接編集」モードの補助：最近開いたファイルと、読み書きの許可。
+// 「ファイルから開く」の補助：最近開いたファイルと、読み書きの許可（Chrome / Edge）。
 // 最近開いたファイルはファイルハンドルだけを IndexedDB に持つ（中身は持たない）。
 //   { id: 連番, name: ファイル名, handle: FileSystemFileHandle, at: 開いた時刻 }
 const DB_NAME = 'sqlite-sheet-recent', STORE = 'recent', MAX = 10;
 
-/** File System Access API（ファイルの直接編集）が使えるか（Chrome / Edge） */
+/** File System Access API（開いたファイルへの上書き保存）が使えるか（Chrome / Edge） */
 export const supported = typeof window.showOpenFilePicker === 'function';
 
 export const PICKER_TYPES = [{ description: tr('SQLite データベース'), accept: { 'application/x-sqlite3': ['.sqlite', '.sqlite3', '.db'] } }];
@@ -57,11 +57,12 @@ export async function add(handle) {
 export const remove = (id) => tx('readwrite', (s) => s.delete(id));
 
 /**
- * 読み書きの許可を確かめ、まだなら尋ねる（ユーザーの操作の直後でないと尋ねられない）。
+ * 許可を確かめ、まだなら尋ねる（ユーザーの操作の直後でないと尋ねられない）。mode は 'read' か 'readwrite'
  * @returns {Promise<boolean>}
  */
-export async function ensurePermission(handle) {
-  const opts = { mode: 'readwrite' };
+export async function ensurePermission(handle, mode = 'readwrite') {
+  const opts = { mode };
+  if (typeof handle.queryPermission !== 'function') return true; // OPFS のハンドルなど、許可の仕組みが無いもの
   if ((await handle.queryPermission(opts)) === 'granted') return true;
   return (await handle.requestPermission(opts)) === 'granted';
 }

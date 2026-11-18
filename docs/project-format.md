@@ -40,11 +40,12 @@ SQLiteシートの「プロジェクト」は、**DB と、その DB を見る�
 | 中身 | [Project](#project) |
 
 - 中身は UTF-8 の JSON で、最上位は [`Project`](#project) のオブジェクトです。
-- 取り込むときは、拡張子ではなく中身で判定します（JSON として読めて `format` が `"sqlite-sheet"` なら、プロジェクトのファイル）。
+- 開くときは、拡張子ではなく中身で判定します（JSON として読めて `format` が `"sqlite-sheet"` なら、プロジェクトのファイル）。
 - `format` と `version` は必須です。`db` と `db_embed` は、どちらか一方だけが必須です。
 - ファイルには、URL だけのキー（`db_name`・`project`・`sheet`・`sort`・`filter`・`range`）は書けません。書いてあれば無視して知らせます。
 - 知らないキーは無視します（新しい版で増えたキーを古いアプリで開いても壊れないように）。`version` が知っている版より大きいときは、知らせてから、わかる範囲で開きます。
-- `db` が相対パスなら、**そのファイルの場所**を基準にします（`https://example.com/a/shop.sqlitesheet` の中の `"db": "shop.sqlite"` は `https://example.com/a/shop.sqlite`）。
+- `db` が相対パスなら、**そのファイルの場所**を基準にします（`https://example.com/a/shop.sqlitesheet` の中の `"db": "shop.sqlite"` は `https://example.com/a/shop.sqlite`）。手元のファイルを開いたときは、ブラウザがパスからファイルを開けないので、その DB ファイルを選んでもらいます。
+- アプリで開いたファイルに上書き保存するときは、DB の指し方をファイルのとおりに保ちます。`db_embed` なら中のデータを書き換え、`db` がパスならデータが変わったときだけその DB ファイルを書き換えます。`db` が URL なら書き換えられないので、`db_embed` に切り替えるか尋ねます
 - 開いたときの「保存するときの名前の候補」は、ファイル名から拡張子を除いたものです（`売上2025.sqlitesheet` → `売上2025`）。
 
 例：
