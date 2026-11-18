@@ -1934,7 +1934,8 @@ function placeInfo(cell, img, info) {
 function thumb(src, external = false) {
   if (external && failedImages.has(src)) return '';
   const img = el('img.blob-thumb', { src, alt: '', draggable: false });
-  if (external) { img.loading = 'lazy'; img.referrerPolicy = 'no-referrer'; }
+  // lazy にはしない：描くのは見えている行の前後だけで、表に掛けた CSS の zoom と合わさると読み始めないことがある
+  if (external) img.referrerPolicy = 'no-referrer';
   img.addEventListener('error', () => { if (external) failedImages.add(src); img.remove(); }, { once: true });
   return img;
 }
