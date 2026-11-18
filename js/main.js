@@ -5,7 +5,7 @@ import { el, toast, menu, popover, closePopover, ask, confirmDialog, choiceDialo
 import { listObjects, readTable, createTableSql, migrationSql, constantDefault, TYPES, affinity } from './schema.js';
 import { Grid, CELL_FORMATS } from './grid.js';
 import { sniff, asText, hexDump } from './blob.js';
-import { TableSource, QuerySource, FILTER_OPS, friendlyError, convertInput, formText, formToDefault } from './sources.js';
+import { TableSource, QuerySource, ViewSource, viewWriteOps, FILTER_OPS, friendlyError, convertInput, formText, formToDefault } from './sources.js';
 import { txMarks } from './txmarks.js';
 import { DesignPanel } from './design-panel.js';
 import { SqlConsole } from './console.js';
@@ -2388,8 +2388,12 @@ async function showSheet(key, { keepView = true } = {}) {
     } else {
       state.prots = [];
       state.model = null;
-      const sql = kind === 'v' ? `SELECT * FROM ${q(name)}` : state.queries.find((x) => x.name === name)?.sql || 'SELECT 1';
-      state.source = await new QuerySource(`${state.dbName}/${key}`, sql, view).init();
+      const ops = kind === 'v' ? await viewWriteOps(name) : null;
+      if (ops && (ops.update || ops.insert || ops.delete)) state.source = await new ViewSource(`${state.dbName}/${key}`, name, view, ops).init();
+      else {
+        const sql = kind === 'v' ? `SELECT * FROM ${q(name)}` : state.queries.find((x) => x.name === name)?.sql || 'SELECT 1';
+        state.source = await new QuerySource(`${state.dbName}/${key}`, sql, view).init();
+      }
     }
   } catch (e) {
     state.source = null; state.grid = null;
@@ -2707,7 +2711,9 @@ function gridHooks(kind) {
     },
     onAddColumn: isTable ? (anchor) => quickAddColumn(anchor) : null,
     onContextMenu: (pos, range) => cellMenu(pos, range),
-    onReadonlyEdit: (col) => toast(isTable ? (col ? tr('「{0}」は生成列のため編集できません', [col.name]) : tr('編集できません')) : tr('{0}の結果は編集できません。元のテーブルで編集してください', [KIND_NAME[kind]])),
+    onReadonlyEdit: (col) => toast(isTable ? (col ? tr('「{0}」は生成列のため編集できません', [col.name]) : tr('編集できません'))
+      : state.source?.ops ? tr('このビューにはセルを変える INSTEAD OF UPDATE トリガーがありません')
+      : tr('{0}の結果は編集できません。元のテーブルで編集してください', [KIND_NAME[kind]])),
     onBlobEdit: (r, c) => blobMenu(r, c),
     onBlobView: (r, c) => viewBlob(r, c),
     onProtectedEdit: (prots) => toast(tr('🔒 {0}（{1}）', [prots[0].note || tr('保護されています'), describe(state.model, prots[0])])),
@@ -2718,7 +2724,7 @@ function gridHooks(kind) {
       return true;
     } : null,
     onFkPick: isTable ? (r, c, anchor) => fkPicker(r, c, anchor) : null,
-    onDeleteRows: isTable ? () => deleteSelectedRows() : null,
+    onDeleteRows: isTable || state.source?.ops?.delete ? () => deleteSelectedRows() : null,
   };
 }
 
@@ -2731,7 +2737,7 @@ function updateFx(s) {
   const draft = s.isNew && g.hasDraft;
   ref.textContent = col ? (s.isNew ? (g.draft ? `✎ ${draft ? tr('未保存') : tr('新しい行')} · ${col.name}` : tr('＋ 行を追加（クリックか Enter）')) : tr('{0} · {1}行目', [col.name, s.r + 1])) : '';
   const v = s.isNew ? (g.draft ? g.draft.values[s.c] : undefined) : s.row?.values[s.c];
-  fx.readOnly = !state.source.editable || col?.readonly || v instanceof Uint8Array;
+  fx.readOnly = !(s.isNew ? g.canInsert : g.canUpdate) || col?.readonly || v instanceof Uint8Array;
   fx.classList.toggle('null', false);
   // グリッドでフォームを開いたときと同じ文字列（下書きの未入力は空で、INSERT で入るものを placeholder に）
   fx.value = v instanceof Uint8Array ? tr('BLOB（{0} バイト）', [v.length]) : !col ? '' : s.isNew ? (g.draft ? g.formAt(s.r, s.c) : '') : s.row ? formText(v) : '';
@@ -3382,6 +3388,9 @@ async function cellMenu(pos, range) {
     const rows = Math.min(range.r1, g.rowCount - 1) - range.r0 + 1;
     const many = rows > 1;
     const items = [many ? { header: tr('{0} 行', [rows]) } : null, rows >= 1 ? sizeItem('row', [range.r0], pos) : null];
+    const vops = state.source?.ops;
+    if (!isTable && vops?.insert) items.push('-',
+      { label: many ? tr('{0} 行を複製', [rows]) : tr('行を複製'), icon: '⧉', disabled: rows < 1, action: async () => { try { await state.source.duplicateRows(await g.rowsBetween(range.r0, range.r0 + rows - 1)); await g.reload(); } catch (e) { toast(friendlyError(e.message), 'error'); } } });
     if (isTable) items.push('-',
       { label: many ? tr('{0} 行を複製', [rows]) : tr('行を複製'), icon: '⧉', disabled: rows < 1, action: async () => { try { await state.source.duplicateRows(await g.rowsBetween(range.r0, range.r0 + rows - 1)); await g.reload(); } catch (e) { toast(friendlyError(e.message), 'error'); } } },
       '-',
@@ -3389,7 +3398,7 @@ async function cellMenu(pos, range) {
       ...unprotectHere());
     items.push(...cellSection('row'));
     items.push(...linkItems());
-    if (isTable) items.push('-',
+    if (isTable || vops?.delete) items.push('-',
       { label: many ? tr('{0} 行を削除', [rows]) : tr('行を削除'), icon: '🗑', kbd: `${MOD}-`, danger: true, disabled: rows < 1, action: () => deleteSelectedRows() });
     return menu(pos, items.filter(Boolean));
   }

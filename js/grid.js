@@ -59,8 +59,11 @@ export class Grid {
   }
 
   get cols() { return this.source.columns; }
-  get totalRows() { return this.rowCount + (this.source.editable ? 1 : 0); }
-  get newRowIndex() { return this.source.editable ? this.rowCount : -1; }
+  /** 行の追加・セルの変更ができるか（ビューはトリガーのある操作だけ。表は editable のとおり） */
+  get canInsert() { return !!this.source.editable && this.source.ops?.insert !== false; }
+  get canUpdate() { return !!this.source.editable && this.source.ops?.update !== false; }
+  get totalRows() { return this.rowCount + (this.canInsert ? 1 : 0); }
+  get newRowIndex() { return this.canInsert ? this.rowCount : -1; }
   get hasDraft() { return !!this.draft && this.draft.values.some((v) => v !== undefined); }
 
   openDraft() {
@@ -1383,6 +1386,7 @@ export class Grid {
 
   canEdit(r, c) {
     if (!this.source.editable) return false;
+    if (r !== this.newRowIndex && !this.canUpdate) return false;
     const col = this.cols[c];
     if (!col || col.readonly) return false;
     if (r !== this.newRowIndex && !this.rowAt(r)) return false;
@@ -1392,11 +1396,11 @@ export class Grid {
   }
 
   /** 入力なしでも記録として成り立つ表（必須の列がない）か */
-  get canInsertEmpty() { return this.source.editable && !this.cols.some((c) => c.required); }
+  get canInsertEmpty() { return this.canInsert && !this.cols.some((c) => c.required); }
 
   /** 「＋」の操作：入力の要らない表は即 INSERT、それ以外は下書きの行を開く */
   async addRow() {
-    if (!this.source.editable) return;
+    if (!this.canInsert) return;
     if (this.editing) await this.commitEdit({ move: null });
     if (!this.canInsertEmpty) {
       this.openDraft();
@@ -1546,8 +1550,9 @@ export class Grid {
     try {
       if (updates.length) {
         const res = await this.source.update(updates);
+        if (res == null) await this.reload(); // ビューなど、変えた行を見つけ直せない書き込み
         const touched = new Set();
-        for (const { row, rowObj } of res) {
+        for (const { row, rowObj } of res ?? []) {
           const p = Math.floor(row / PAGE);
           const page = this.pages.get(p);
           if (page) { page[row - p * PAGE] = rowObj; touched.add(p); }

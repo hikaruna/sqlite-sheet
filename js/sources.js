@@ -528,3 +528,100 @@ export class QuerySource {
     return r.rows.map((values) => ({ values }));
   }
 }
+
+// ------------------------------------------------------------------------
+
+/** ビューの INSTEAD OF トリガーの種類。{update, insert, delete} */
+export async function viewWriteOps(name) {
+  const r = await db.query(`SELECT sql FROM sqlite_schema WHERE type = 'trigger' AND tbl_name = ?`, [name]);
+  const ops = { update: false, insert: false, delete: false };
+  for (const [sql] of r.rows) {
+    const m = /\bINSTEAD\s+OF\s+(UPDATE|INSERT|DELETE)\b/i.exec(sql || '');
+    if (m) ops[m[1].toLowerCase()] = true;
+  }
+  return ops;
+}
+
+/**
+ * INSTEAD OF トリガーのあるビュー。書き込みはビューへの UPDATE / INSERT / DELETE で、中身はトリガーに任せる。
+ * ビューには行の鍵がないので、行は全列の値で見分ける（同じ値の行が複数あればまとめて変わる）
+ */
+export class ViewSource extends QuerySource {
+  constructor(widthKey, name, view, ops) {
+    super(widthKey, `SELECT * FROM ${q(name)}`, view);
+    this.name = name;
+    this.t = q(name);
+    this.ops = ops;
+    this.editable = ops.update || ops.insert || ops.delete;
+  }
+
+  async init() {
+    await super.init();
+    const info = await db.query(`SELECT name, type FROM pragma_table_info(?)`, [this.name]);
+    const types = new Map(info.rows.map(([n, t]) => [n, t]));
+    for (const c of this.columns) c.type = types.get(c.name) || '';
+    return this;
+  }
+
+  rowWhere(rowObj) {
+    return { sql: this.columns.map((c) => `${q(c.name)} IS ?`).join(' AND '), bind: rowObj.values.slice(0, this.columns.length) };
+  }
+
+  toSqlPart(v, col, newRow) { return TableSource.prototype.toSqlPart.call(this, v, col, newRow); }
+
+  async run(stmts, what, n) {
+    const r = await db.batchTracked(stmts);
+    pushChanges(tr('「{0}」の{1}', [this.name, what(n)]), 'v:' + this.name, r);
+  }
+
+  /** 書き込み後はどの行がどこへ行ったか分からないので null（読み直してもらう） */
+  async update(changes) {
+    if (!this.ops.update) throw new Error(tr('このビューは編集できません'));
+    const byRow = new Map();
+    for (const ch of changes) {
+      if (!byRow.has(ch.row)) byRow.set(ch.row, { rowObj: ch.rowObj, cols: [], parts: [] });
+      const col = this.columns[ch.col];
+      const r = byRow.get(ch.row);
+      r.cols.push(col); r.parts.push(this.toSqlPart(ch.value, col, false));
+    }
+    const stmts = [...byRow.values()].map(({ rowObj, cols, parts }) => {
+      const w = this.rowWhere(rowObj);
+      return {
+        sql: `UPDATE ${this.t} SET ${cols.map((c, i) => `${q(c.name)} = ${parts[i].sql}`).join(', ')} WHERE ${w.sql}`,
+        bind: [...parts.flatMap((p) => p.bind ?? []), ...w.bind],
+        checks: parts.filter((p) => p.check).map((p) => p.check),
+      };
+    });
+    await this.run(stmts, (n) => (n > 1 ? tr('{0} セルの変更', [n]) : tr('セルの変更')), changes.length);
+    return null;
+  }
+
+  async insert(rows) {
+    if (!this.ops.insert) throw new Error(tr('このビューには行を追加できません'));
+    const stmts = rows.map((vals) => {
+      const cols = [], parts = [];
+      vals.forEach((v, c) => {
+        if (v === undefined) return;
+        cols.push(this.columns[c]); parts.push(this.toSqlPart(v, this.columns[c], true));
+      });
+      return {
+        sql: cols.length
+          ? `INSERT INTO ${this.t} (${cols.map((c) => q(c.name)).join(', ')}) VALUES (${parts.map((p) => p.sql).join(', ')})`
+          : `INSERT INTO ${this.t} DEFAULT VALUES`,
+        bind: parts.flatMap((p) => p.bind ?? []),
+        checks: parts.filter((p) => p.check).map((p) => p.check),
+      };
+    });
+    await this.run(stmts, (n) => (n > 1 ? tr('{0} 行の追加', [n]) : tr('行の追加')), rows.length);
+  }
+
+  async deleteRows(rowObjs) {
+    if (!this.ops.delete) throw new Error(tr('このビューの行は削除できません'));
+    const stmts = rowObjs.map((x) => { const w = this.rowWhere(x); return { sql: `DELETE FROM ${this.t} WHERE ${w.sql}`, bind: w.bind }; });
+    await this.run(stmts, (n) => (n > 1 ? tr('{0} 行の削除', [n]) : tr('行の削除')), rowObjs.length);
+  }
+
+  async duplicateRows(rowObjs) {
+    await this.insert(rowObjs.map((r) => r.values.slice(0, this.columns.length)));
+  }
+}
