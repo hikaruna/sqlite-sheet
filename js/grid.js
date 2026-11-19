@@ -18,7 +18,7 @@ const MIN_H = 18;        // 行の高さの最小
 const MAX_WRAP_H = 600;  // 折り返した文字に合わせて伸ばす高さの上限
 const MAX_TEXT = 5000;   // セルに表示する文字数の上限（表示を軽くするため）
 const MAX_RESIZE_ROWS = 5000; // まとめて高さを変えられる行数の上限
-const IMG_DWELL = 250;   // URL の画像を読み始めるまでに、セルが画面にとどまる時間（ms）
+const IMG_DWELL = 1000;  // URL の画像を読み始めるまでに、行が描く範囲にとどまる時間（ms）
 const ROW_MARGIN = 0.5;  // 見えている行の上下に余分に描く高さ（画面の高さに対する割合）。速いスクロールでも空の行を見せない
 // 表の拡大率（タッチ端末で二本指でつまむ）。見出しと表の中身に CSS の zoom を掛ける。
 // スクロール位置・表示の大きさは拡大後の値なので、行や列の位置と比べるときは z で割る
@@ -921,8 +921,8 @@ export class Grid {
       for (let r = s.last + 1; r <= last; r++) frag.append(this.rowEl(r, ctx));
       this.body.append(frag);
       this.shown = { first, last };
+      this.loadImages();
     }
-    this.loadImages();
     this.placeSink(); // 編集中の入力欄は、横の位置で幅が変わる
   }
 
@@ -985,26 +985,21 @@ export class Grid {
   }
 
   /**
-   * URL の画像は、画面に IMG_DWELL ms とどまったセルの分だけ読む（速く通り過ぎる行の画像で、相手のサーバーに負荷をかけない）。
-   * 見えている URL ごとに見え始めた時刻を覚え、見えなくなったら忘れる。タイマーは一番早く届くものに合わせて1つだけ。
-   * 列幅や行の高さを測るために作るセルは表の行ではないので、ここでは読まない
+   * URL の画像は、行が描く範囲に IMG_DWELL ms とどまってから読む（速く通り過ぎる行の画像で、相手のサーバーに負荷をかけない）。
+   * この表で一度読んだ URL は待たずに出す（同じページで読んだ画像は、ふつうブラウザが通信なしで出す）。
+   * タイマーは一番早く届くものに合わせて1つだけ。列幅や行の高さを測るために作るセルは表の行ではないので、ここでは読まない
    */
   loadImages() {
     clearTimeout(this.imgTimer);
     if (!this.body.isConnected) return; // 別のシートに移って捨てられた表
-    const s = this.scroll, z = this.z, now = performance.now(), seen = new Map();
-    const top = s.scrollTop / z, left = s.scrollLeft / z + RHW;
-    const bottom = top + s.clientHeight / z - HH, right = left - RHW + s.clientWidth / z;
+    const loaded = this.imgLoaded ??= new Set(), now = performance.now();
     let wait = Infinity;
-    for (const img of this.body.querySelectorAll(':scope > .gr[data-r] img[data-url]')) {
-      const r = +img.closest('.gr').dataset.r, c = +img.closest('.gc').dataset.c, y = this.rowY(r), x = this.colX(c);
-      if (y + this.rowH(r) <= top || y >= bottom || x + this.colW(c) <= left || x >= right) continue;
-      const url = img.dataset.url, t = this.imgSeen?.get(url) ?? now;
-      seen.set(url, t);
-      if (now - t < IMG_DWELL) wait = Math.min(wait, t + IMG_DWELL - now);
-      else if (!img.hasAttribute('src')) img.src = url;
+    for (const img of this.body.querySelectorAll(':scope > .gr[data-r] img[data-url]:not([src])')) {
+      const url = img.dataset.url, left = +(img.dataset.born ??= now) + IMG_DWELL - now;
+      if (left > 0 && !loaded.has(url)) { wait = Math.min(wait, left); continue; }
+      img.src = url;
+      loaded.add(url);
     }
-    this.imgSeen = seen;
     if (wait < Infinity) this.imgTimer = setTimeout(() => this.loadImages(), wait);
   }
 
@@ -1999,7 +1994,7 @@ function thumb(src, external = false) {
   const img = el('img.blob-thumb', { alt: '', draggable: false });
   // lazy にはしない：描くのは見えている行の前後だけで、表に掛けた CSS の zoom と合わさると読み始めないことがある
   if (external) img.referrerPolicy = 'no-referrer';
-  // 外の URL は src を付けずに作り、画面にとどまったら Grid.loadImages() が付ける。data: の URL と BLOB はすぐ出す
+  // 外の URL は src を付けずに作り、行が描く範囲にとどまったら Grid.loadImages() が付ける。data: の URL と BLOB はすぐ出す
   if (external && !/^data:/i.test(src)) img.dataset.url = src; else img.src = src;
   img.addEventListener('error', () => { if (external) failedImages.add(src); img.remove(); }, { once: true });
   return img;
