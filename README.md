@@ -5,7 +5,7 @@
 
 ## できること
 
-- **スプレッドシートの操作感**：セルを選んで打てば即 `UPDATE`。矢印/Tab/Enter 移動、範囲選択、`Ctrl+C / V`（Excel・Google スプレッドシートと TSV で相互にコピペ）、`Ctrl+D` 下へコピー、`Ctrl+Z / Y` 元に戻す・やり直し
+- **スプレッドシートの操作感**：セルを選んで打てば即 `UPDATE`。矢印/Tab/Enter 移動、範囲選択、`Ctrl+C / V`（Excel・Google スプレッドシート・メモ帳と TSV で相互にコピペ。このアプリ同士なら型・NULL・BLOB（画像）まで元どおり）、`Ctrl+D` 下へコピー、`Ctrl+Z / Y` 元に戻す・やり直し
 - **最下行に打てば行の追加**、貼り付けがはみ出せば複数行をまとめて `INSERT`（1トランザクション。1つでも失敗すれば全部取り消し）
 - **3種類のシート**：テーブル ▦（編集可）／ビュー ◫／クエリ ⌕（任意の `SELECT`。「ビューとして保存」で昇格）
 - **設計パネル（⚙ 設計）**：列の型・NOT NULL・DEFAULT・CHECK・COLLATE・生成列、**複合 PRIMARY KEY、複数の UNIQUE、複数列の FOREIGN KEY（ON DELETE/UPDATE）**、表の CHECK、`STRICT` / `WITHOUT ROWID` / `AUTOINCREMENT`、インデックス

@@ -208,6 +208,7 @@ export class TableSource {
         required: !!c.notnull && c.defaultSql == null && !c.generated && model.rowidAlias !== c.name,
         align: a === 'INTEGER' || a === 'REAL' || a === 'NUMERIC' ? 'right' : 'left',
         // STRICT の数値の列は空文字列を入れられないので、入力を空で確定したら NULL にする
+        strict: !!model.strict,
         emptyIsNull: !!model.strict && (a === 'INTEGER' || a === 'REAL' || a === 'NUMERIC'),
         fk: this.fkByCol.get(c.name) || null,
         sort: sortInfo(view.sorts, c.name),

@@ -5,6 +5,7 @@ import { el, toast, menu, popover, closePopover, ask, confirmDialog, choiceDialo
 import { listObjects, readTable, createTableSql, migrationSql, constantDefault, TYPES, affinity } from './schema.js';
 import { Grid, CELL_FORMATS } from './grid.js';
 import { sniff, asText, hexDump } from './blob.js';
+import { parseTsv } from './clipboard.js';
 import { TableSource, QuerySource, ViewSource, viewWriteOps, FILTER_OPS, friendlyError, convertInput, formText, formToDefault } from './sources.js';
 import { txMarks } from './txmarks.js';
 import { DesignPanel } from './design-panel.js';
@@ -3435,7 +3436,7 @@ async function pasteFromMenu(g) {
       if (image || text || html) return g.pasteClipboard({ file: image, text, html });
     } catch { /* 下の readText() に任せる */ }
   }
-  try { g.paste(await navigator.clipboard.readText()); } catch { toast(tr('{0}V で貼り付けてください', [MOD])); }
+  try { g.paste(parseTsv(await navigator.clipboard.readText())); } catch { toast(tr('{0}V で貼り付けてください', [MOD])); }
 }
 
 /**
@@ -3811,7 +3812,6 @@ async function importCsv() {
   const f = await pickFile('.csv,.tsv,.txt,text/csv');
   if (!f) return;
   const text = (await f.text()).replace(/^﻿/, '');
-  const { parseTsv } = await import('./grid.js');
   const tsv = f.name.endsWith('.tsv') || (text.split('\n')[0].includes('\t') && !text.split('\n')[0].includes(','));
   const rows = tsv ? parseTsv(text) : parseCsv(text);
   if (rows.length < 1) { toast(tr('データがありません'), 'error'); return; }

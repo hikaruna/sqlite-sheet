@@ -1,0 +1,118 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>clipboard.js のテスト</title>
+<!-- 開き方: python tools/dev-server.py --port 8000 のあと http://localhost:8000/tests/clipboard.test.html -->
+<pre id="out"></pre>
+<script type="module">
+import { toTsv, parseTsv, toClipboard, fromHtml, fit, BLOB_LIMIT } from '../js/clipboard.js';
+
+const out = document.getElementById('out');
+let failed = 0;
+const show = (v) => JSON.stringify(v, (k, x) => (typeof x === 'bigint' ? `${x}n` : x instanceof Uint8Array ? `bytes:${[...x].join(',')}` : x === undefined ? '(undefined)' : x));
+function test(name, fn) {
+  try { fn(); out.append(`ok  ${name}\n`); } catch (e) { failed++; out.append(`NG  ${name}\n    ${e.message}\n`); }
+}
+function eq(actual, expected) {
+  if (show(actual) !== show(expected)) throw new Error(`期待 ${show(expected)}\n    実際 ${show(actual)}`);
+}
+
+const jpeg = new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 1, 2, 3]);
+const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 9]);
+const bin = new Uint8Array([0, 1, 2, 255]);
+const wrap = (cells) => `<table><tr>${cells}</tr></table>`;
+const strict = (type, notnull = false) => ({ type, strict: true, notnull });
+
+// ---------- TSV ----------
+test('toTsv: 行は \\n、列は \\t。NULL と BLOB は空', () => {
+  eq(toTsv([[1, 'a', null, jpeg], [2.5, '', 'b', null]]), '1\ta\t\t\n2.5\t\tb\t');
+});
+test('toTsv: タブ・改行・" を含む値は "…" で囲み、" は ""', () => {
+  eq(toTsv([['a\tb', 'x\ny', 'say "hi"']]), '"a\tb"\t"x\ny"\t"say ""hi"""');
+});
+test('parseTsv: クォートの中のタブ・改行・"" を 1 つのセルに', () => {
+  eq(parseTsv('"a\tb"\t"x\ny"\t"say ""hi"""\n1\t2\t3'), [['a\tb', 'x\ny', 'say "hi"'], ['1', '2', '3']]);
+});
+test('parseTsv: 末尾の改行・\\r\\n・空のセル', () => {
+  eq(parseTsv('a\t\tb\r\nc\td\te\n'), [['a', '', 'b'], ['c', 'd', 'e']]);
+});
+test('toTsv → parseTsv で文字が元に戻る', () => {
+  const rows = [['a\tb', 'x\ny', 'say "hi"', ''], [' 前後 ', '"', '\t', '終']];
+  eq(parseTsv(toTsv(rows)), rows);
+});
+
+// ---------- HTML の表 ----------
+const mixed = [
+  [null, '', 0, -5, 1.5, 9007199254740993n],
+  ['a\tb', 'x\ny', 'say "hi"', '  前  後  ', '<b>&</b>', '1,200'],
+  [jpeg, png, bin, new Uint8Array(0), 'text', 7],
+];
+test('toClipboard → fromHtml で、型・NULL・空文字・BLOB が元どおり', () => {
+  const t = fromHtml(toClipboard(mixed).html);
+  eq(t.own, true);
+  eq(t.cells, mixed);
+});
+test('NULL と空文字を区別する', () => {
+  const [[a, b]] = fromHtml(toClipboard([[null, '']]).html).cells;
+  eq([a, b], [null, '']);
+});
+test('画像の BLOB は元の形式のまま <img>、それ以外は data-blob', () => {
+  const { html } = toClipboard([[jpeg, png, bin]]);
+  eq(html.includes('<img src="data:image/jpeg;base64,'), true);
+  eq(html.includes('<img src="data:image/png;base64,'), true);
+  eq(html.includes('data-blob="'), true);
+  eq(html.includes('image/png;base64,/9j'), false);
+});
+test('自アプリ製の印と、セルの型の印が付く', () => {
+  const { html } = toClipboard([[1, 1.5, 'a', null, jpeg]]);
+  eq(html.startsWith('<table data-sqlite-sheet="1">'), true);
+  eq(['integer', 'real', 'text', 'null', 'blob'].every((t) => html.includes(`data-type="${t}"`)), true);
+});
+test('上限を超えたら BLOB の中身は入れず、文字や数値は運ぶ', () => {
+  const big = new Uint8Array(BLOB_LIMIT + 1);
+  const out = toClipboard([['a', big, 3]]);
+  eq(out.omitted, true);
+  eq(out.html.length < 1000, true);
+  eq(fromHtml(out.html).cells, [['a', undefined, 3]]);
+  eq(toClipboard([['a', jpeg]]).omitted, false);
+});
+test('ほかのアプリの表：<img> の data URL だけ画像になり、ほかは undefined', () => {
+  const b64 = btoa(String.fromCharCode(...jpeg));
+  const t = fromHtml(wrap(`<td>1</td><td><img src="data:image/jpeg;base64,${b64}"></td><td><img src="file:///x.png"></td><td><img src="https://example.com/a.png"></td>`));
+  eq(t.own, false);
+  eq(t.cells, [[undefined, jpeg, undefined, undefined]]);
+});
+test('ほかのアプリの表：壊れた base64 でも落ちない', () => {
+  eq(fromHtml(wrap('<td><img src="data:image/png;base64,!!!"></td>')).cells, [[undefined]]);
+});
+test('表がなければ null', () => {
+  eq([fromHtml(''), fromHtml(undefined), fromHtml('<p>text</p>')], [null, null, null]);
+});
+
+// ---------- fit ----------
+test('fit: NULL と、STRICT でない列は何でもそのまま', () => {
+  eq([fit(null, strict('INTEGER')), fit('abc', { type: 'INTEGER' }), fit(jpeg, { type: 'TEXT' }), fit('x', { type: 'BLOB' })], [null, 'abc', jpeg, 'x']);
+});
+test('fit: STRICT の数値の列は、数に直せる文字だけ入る', () => {
+  eq([fit('12', strict('INTEGER')), fit('1,200', strict('INTEGER')), fit('abc', strict('INTEGER')), fit('1.5', strict('INTEGER')), fit(1.5, strict('INTEGER'))], [12, 1200, undefined, undefined, undefined]);
+  eq([fit('1.5', strict('REAL')), fit('2', strict('REAL')), fit('abc', strict('REAL')), fit(9007199254740993n, strict('INTEGER'))], [1.5, 2, undefined, 9007199254740993n]);
+});
+test('fit: STRICT の数値の列の空文字は NULL', () => {
+  eq([fit('', strict('INTEGER')), fit('', strict('REAL')), fit('', strict('TEXT'))], [null, null, '']);
+});
+test('fit: blankIsNull なら空欄は NULL。NOT NULL の列は空文字のまま', () => {
+  eq([fit('', { type: 'TEXT' }, true), fit('', { type: 'INTEGER' }, true), fit('', strict('TEXT'), true)], [null, null, null]);
+  eq([fit('', { type: 'TEXT', notnull: true }, true), fit('', strict('TEXT', true), true)], ['', '']);
+});
+test('fit: blankIsNull がなければ（このアプリ同士のコピー）空文字は空文字', () => {
+  eq([fit('', { type: 'TEXT' }), fit('', { type: 'INTEGER' }), fit('', strict('TEXT'))], ['', '', '']);
+});
+test('fit: STRICT の TEXT に BLOB は入らず、BLOB の列には BLOB だけ入る', () => {
+  eq([fit(jpeg, strict('TEXT')), fit(jpeg, strict('INTEGER')), fit(jpeg, strict('BLOB')), fit('a', strict('BLOB')), fit(1, strict('BLOB'))], [undefined, undefined, jpeg, undefined, undefined]);
+});
+test('fit: STRICT の ANY は何でも入る', () => {
+  eq([fit('a', strict('ANY')), fit(jpeg, strict('ANY')), fit(3, strict('ANY'))], ['a', jpeg, 3]);
+});
+
+out.append(`\n${failed ? `${failed} 件失敗` : 'すべて成功'}\n`);
+document.title = failed ? 'FAIL' : 'PASS';
+</script>
