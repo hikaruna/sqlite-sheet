@@ -13,11 +13,38 @@ const VFS = 'sqlite-sheet';
 
 async function init() {
   sqlite3 = await sqlite3InitModule({ print: () => {}, printErr: () => {} });
-  pool = await sqlite3.installOpfsSAHPoolVfs({ name: VFS, initialCapacity: 8 });
   return { version: sqlite3.version.libVersion };
 }
 
-function list() {
+// OPFS（sahpool）は中のファイルすべてを独占するので、同時に持てるのは1つのタブだけ。
+// 一覧・ブラウザの DB を使うときに取り（acquire）、メモリで開いたら手放す（release）。
+// こうして、メモリで開いたタブはいくつでも並べられる。ほかのタブが持っていれば BUSY を投げる
+async function acquire() {
+  try {
+    // preserveOnInitFailure：取れなかったときに、ライブラリがプールのフォルダーごと消そうとするのを止める（既定は消す）
+    if (!pool) {
+      pool = await sqlite3.installOpfsSAHPoolVfs({
+        name: VFS, initialCapacity: 8, forceReinitIfPreviouslyFailed: true, preserveOnInitFailure: true,
+      });
+    }
+    else if (pool.isPaused()) await pool.unpauseVfs();
+  } catch (e) {
+    const msg = String(e?.message || e);
+    if (/access handle|NoModificationAllowed|locked|InvalidState/i.test(msg)) throw new Error('BUSY');
+    throw e;
+  }
+  return true;
+}
+
+/** OPFS を手放す（開いている DB がメモリのものか、何も開いていないときだけ呼ぶ） */
+function release() {
+  if (kind === 'opfs') return false;
+  if (pool && !pool.isPaused()) pool.pauseVfs();
+  return true;
+}
+
+async function list() {
+  await acquire();
   return pool.getFileNames()
     .filter((f) => f.endsWith('.sqlite3'))
     .map((f) => decodeURIComponent(f.slice(1, -'.sqlite3'.length)))
@@ -96,6 +123,7 @@ function setup(d) {
 
 async function open(name) {
   await close();
+  await acquire();
   await pool.reserveMinimumCapacity(pool.getFileNames().length + 4);
   db = new pool.OpfsSAHPoolDb(fileOf(name));
   setup(db);
@@ -128,6 +156,7 @@ async function openBytes(name, bytes) {
     setup(d);
   } catch (e) { d.close(); throw e; }
   db = d; currentName = name; kind = 'file'; handle = null; stamp = null;
+  release();
   return true;
 }
 
@@ -147,9 +176,11 @@ const foldCase = (s) => s.replace(/[A-Z]/g, (c) => c.toLowerCase());
 /** つないでいる DB 名（foldCase 済み） */
 const attachedSchemas = () => new Set(need().selectValues('SELECT name FROM pragma_database_list').map(foldCase));
 
+// メモリで開いているときは OPFS に触れない（ほかの DB は参照できない）
 function ensureAttached(sql) {
-  if (!sql.includes('.')) return;
-  const dbs = new Set(list());
+  if (kind !== 'opfs' || !sql.includes('.')) return;
+  const dbs = new Set(pool.getFileNames().filter((f) => f.endsWith('.sqlite3'))
+    .map((f) => decodeURIComponent(f.slice(1, -'.sqlite3'.length))));
   let have = null;
   for (const [, id, dot] of sql.matchAll(TOKEN_RE)) {
     if (!dot) continue;
@@ -574,7 +605,7 @@ function rebuild(stmts) {
 }
 
 async function create(name) {
-  if (list().includes(name)) throw new Error(`「${name}」は既にあります`);
+  if ((await list()).includes(name)) throw new Error(`「${name}」は既にあります`);
   await open(name);
   return true;
 }
@@ -586,8 +617,9 @@ function exec(sql, bind) {
   return r;
 }
 
-function exportDb(name) {
+async function exportDb(name) {
   if (name === currentName && kind === 'file') return sqlite3.capi.sqlite3_js_db_export(db);
+  await acquire();
   if (name === currentName) need().exec('PRAGMA wal_checkpoint');
   const bytes = pool.exportFile(fileOf(name));
   return bytes;
@@ -595,6 +627,7 @@ function exportDb(name) {
 
 async function importDb(name, bytes) {
   if (name === currentName) await close();
+  await acquire();
   detach(name);
   await pool.reserveMinimumCapacity(pool.getFileNames().length + 4);
   // 作ったばかりでまだ何も書いていない DB は 0 バイト。importDb は受け付けないので、空の DB として作る
@@ -605,26 +638,27 @@ async function importDb(name, bytes) {
 
 async function remove(name) {
   if (name === currentName) await close();
+  await acquire();
   detach(name);
   pool.unlink(fileOf(name));
   return true;
 }
 
 async function rename(from, to) {
-  if (list().includes(to)) throw new Error(`「${to}」は既にあります`);
-  const bytes = exportDb(from);
+  if ((await list()).includes(to)) throw new Error(`「${to}」は既にあります`);
+  const bytes = await exportDb(from);
   await importDb(to, bytes);
   await remove(from);
   return true;
 }
 
 async function copy(from, to) {
-  if (list().includes(to)) throw new Error(`「${to}」は既にあります`);
-  await importDb(to, exportDb(from));
+  if ((await list()).includes(to)) throw new Error(`「${to}」は既にあります`);
+  await importDb(to, await exportDb(from));
   return true;
 }
 
-const api = { init, list, open, openFile, openBytes, close, save, checkFile, markClean, begin, commit, rollback, run, exec, checkQuery, checkTrigger, readQuery, batch, batchTracked, applyChangeset, consoleRun, rebuild, create, exportDb, importDb, remove, rename, copy };
+const api = { init, acquire, release, list, open, openFile, openBytes, close, save, checkFile, markClean, begin, commit, rollback, run, exec, checkQuery, checkTrigger, readQuery, batch, batchTracked, applyChangeset, consoleRun, rebuild, create, exportDb, importDb, remove, rename, copy };
 
 // 呼び出しは1つずつ順に処理する（ファイルの読み書きを待つ間に、次の呼び出しが割り込まないように）
 let queue = Promise.resolve();

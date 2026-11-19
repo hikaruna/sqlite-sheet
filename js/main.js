@@ -52,23 +52,32 @@ async function boot() {
   } catch (e) {
     return showFatal(e);
   }
-  state.dbs = await db.list();
-  // 消えた DB の端末側データを掃除（最近開いたファイルの分は残す）
-  store.sweep([...state.dbs, ...(await files.list()).map((r) => FILE + r.name)]);
+  // ブラウザの DB（OPFS）は、一覧かブラウザの DB を開くときに初めて取る（メモリで開くだけのタブは取らない）
   restoreUrl();
   addEventListener('popstate', route);
   await route();
 }
 
+let swept = false;
+/**
+ * ブラウザの DB の一覧を読み直す。このとき OPFS を取る（同時に持てるのは1つのタブだけ）。
+ * ほかのタブが持っていれば false
+ */
+async function refreshDbs() {
+  try { state.dbs = await db.list(); } catch (e) {
+    if (e.message === 'BUSY') return false;
+    throw e;
+  }
+  // 消えた DB の端末側データを掃除（最近開いたファイルの分は残す）。一覧を初めて読めたときに1回だけ
+  if (!swept) { swept = true; store.sweep([...state.dbs, ...(await files.list()).map((r) => FILE + r.name)]); }
+  return true;
+}
+
 function showFatal(e) {
-  const msg = String(e?.message || e);
-  const busy = /access handle|NoModificationAllowed|locked|InvalidState/i.test(msg);
   $('app').replaceChildren(el('div.fatal',
-    el('h1', busy ? tr('別のタブで開かれています') : tr('起動できませんでした')),
-    el('p', busy
-      ? tr('SQLiteシートは同時に1つのタブでしか使えません。他のタブを閉じてから再試行してください。')
-      : msg),
-    busy ? null : el('p.muted', tr('http(s) で配信されたページを、最近の Chrome / Edge / Firefox / Safari で開いてください。')),
+    el('h1', tr('起動できませんでした')),
+    el('p', String(e?.message || e)),
+    el('p.muted', tr('http(s) で配信されたページを、最近の Chrome / Edge / Firefox / Safari で開いてください。')),
     el('button.btn.primary', { on: { click: () => location.reload() } }, tr('再試行'))));
 }
 
@@ -419,6 +428,7 @@ async function routeInner() {
     if (!(await leaveCurrent())) { setUrl(); return; }
   }
   // / は最初の画面。前回の DB を勝手には開かない
+  if (dbName && !(await refreshDbs())) return showWelcome(); // ほかのタブが使っている（ホームでそう知らせる）
   if (!dbName || !state.dbs.includes(dbName)) {
     if (dbName) toast(tr('DB「{0}」は見つかりません', [dbName]), 'error');
     if (state.grid && !(await state.grid.flushDraft())) return setUrl();
@@ -638,10 +648,13 @@ function toggleConsole(force) {
 // ======================================================================
 // ようこそ画面
 // ======================================================================
-function showWelcome() {
+async function showWelcome() {
   document.body.classList.add('at-home'); // ホームでは上部バーをホーム用（アプリ名・検索）にし、下のバーを隠す
   sqlConsole?.toggle(false);
-  if (state.manual) db.close().catch(() => {}); // 未保存の確認は呼ぶ側で済ませている
+  if (state.manual) await db.close().catch(() => {}); // 未保存の確認は呼ぶ側で済ませている
+  // ホームに来たら OPFS を取って一覧を読み直す。ほかのタブが持っていれば、一覧の代わりにそう知らせる
+  let busy = false;
+  try { busy = !(await refreshDbs()); } catch (e) { toast(friendlyError(e.message), 'error'); }
   state.dbName = null; state.key = null; state.grid = null; state.source = null; state.model = null;
   state.manual = null; setDirty(false);
   $('db-name').hidden = true;
@@ -667,7 +680,10 @@ function showWelcome() {
           el('h2', tr('データベース')),
           state.dbs.length > 1 ? el('button.tool-btn.home-sort', { title: tr('並べ替え'), on: { click: (e) => sortMenu(e.currentTarget) } },
             tr('並べ替え：{0}', [SORTS[homeSort()]]), el('span.caret', ' ▾')) : null),
-        state.dbs.length
+        busy
+          ? el('div.home-empty.home-busy', el('p', tr('ほかのタブでブラウザの DB（一覧やブラウザに保存した DB）を使っています。そのタブで、ファイルや URL から開いた DB に切り替えるか、タブを閉じてから再試行してください。')),
+            el('button.btn', { on: { click: () => showWelcome() } }, tr('再試行')))
+          : state.dbs.length
           ? el('div.home-list', el('div.home-cols', el('span', tr('名前')), el('span', tr('最終閲覧'))), sortedDbs().map((n) => el('div.home-item',
             el('button.home-row', { title: tr('「{0}」を開く', [n]), on: { click: () => openDb(n) } },
               el('span.home-row-icon', appIcon()), el('span.home-row-name', n),
@@ -1205,6 +1221,11 @@ async function writeProjectDb(t) {
  * open なら保存した DB に切り替える（以後は自動保存）。保存できたら true
  */
 async function saveToBrowser({ open = true } = {}) {
+  // 名前の重なりを確かめるため、先に OPFS を取って一覧を読む。やめたら手放す（メモリで開いたまま）
+  let ok;
+  try { ok = await refreshDbs(); } catch (e) { toast(friendlyError(e.message), 'error'); return false; }
+  if (!ok) { toast(friendlyError('BUSY'), 'error', 8000); return false; }
+  const giveUp = () => { db.release().catch(() => {}); return false; };
   let def = (state.manual.wanted || state.manual.name).replace(/\.(sqlite3?|db|sqlitesheet)$/i, ''), i = 2;
   const base = def;
   while (state.dbs.includes(def)) def = `${base} (${i++})`;
@@ -1213,7 +1234,7 @@ async function saveToBrowser({ open = true } = {}) {
     title: tr('ブラウザに保存する名前'), value: def, okLabel: tr('保存'),
     validate: (v) => validDbName(v) || (state.dbs.includes(v) ? tr('「{0}」は既にあります', [v]) : null),
   });
-  if (!name) return false;
+  if (!name) return giveUp();
   const key = state.key;
   try {
     const bytes = await db.exportDb(state.dbName);
@@ -1221,8 +1242,8 @@ async function saveToBrowser({ open = true } = {}) {
     await db.importDb(name, bytes);
     store.copyDb(state.dbName, name);
     requestPersist();
-    state.dbs = await db.list();
-  } catch (e) { toast(friendlyError(e.message), 'error'); return false; }
+    await refreshDbs();
+  } catch (e) { toast(friendlyError(e.message), 'error'); return giveUp(); }
   toast(tr('ブラウザに「{0}」として保存しました。以後は自動で保存されます', [name]), 'success');
   // 保存できたので、メモリの方は捨ててよい。URL も保存した DB のものに置き換える（「戻る」で読み直さない）
   await db.close(); state.manual = null; state.dbName = null; setDirty(false);
@@ -1311,7 +1332,7 @@ async function newDb(anchor) {
     await db.create(name);
     requestPersist();
     state.manual = null; setDirty(false);
-    state.dbs = await db.list();
+    await refreshDbs();
     state.dbName = null;
     await openDb(name);
     toast(tr('「{0}」を作成しました', [name]), 'success');
@@ -1336,7 +1357,7 @@ async function makeSample() {
     await db.importDb(name, bytes);
     requestPersist();
     state.manual = null; setDirty(false);
-    state.dbs = await db.list();
+    await refreshDbs();
     state.dbName = null;
     await db.open(name); // シートの設定を当てるのに主キーを読む
     await project.applySheets(name, p.sheets, async (t) => {
@@ -1935,7 +1956,7 @@ async function commitDbName(value) {
     if (state.grid && !(await state.grid.flushDraft())) { input.value = from; return; }
     await db.rename(from, to);
     store.renameDb(from, to);
-    state.dbs = await db.list();
+    await refreshDbs();
     // 名前を変えただけなので履歴は置き換える（「戻る」で古い名前の URL に戻らない）
     history.replaceState(null, '', urlOf(to, state.key));
     state.dbName = null;
@@ -1954,7 +1975,7 @@ async function renameDbAsk(from, anchor) {
   try {
     await db.rename(from, to);
     store.renameDb(from, to);
-    state.dbs = await db.list();
+    await refreshDbs();
     showWelcome();
     toast(tr('「{0}」を「{1}」に変更しました', [from, to]));
   } catch (e) { toast(friendlyError(e.message), 'error'); }
@@ -1971,7 +1992,7 @@ async function copyDb(from = state.dbName, anchor = $('file-btn')) {
     await db.copy(from, to);
     requestPersist();
     store.duplicateDb(from, to);
-    state.dbs = await db.list();
+    await refreshDbs();
     if (opened) { state.dbName = null; await openDb(to); } else showWelcome();
     toast(tr('「{0}」を作成しました', [to]), 'success');
   } catch (e) { toast(friendlyError(e.message), 'error'); }
@@ -1982,7 +2003,7 @@ async function deleteDb(name = state.dbName) {
   try {
     await db.remove(name);
     store.removeDb(name);
-    state.dbs = await db.list();
+    await refreshDbs();
     toast(tr('「{0}」を削除しました', [name]));
     if (name === state.dbName) state.dbName = null;
     showWelcome();
@@ -3853,7 +3874,8 @@ function palette() {
     state.manual ? null : { label: tr('.sqlitesheet に書き出す'), icon: '📦', run: exportProject },
     state.manual ? { label: tr('保存'), icon: '💾', run: () => saveFile() } : null,
     state.manual ? { label: tr('別の場所に保存…'), icon: '💾', run: () => saveAs() } : null,
-    ...state.dbs.filter((n) => n !== state.dbName).map((n) => ({ label: n, hint: tr('DB を開く'), icon: appIcon(), run: () => openDb(n) })),
+    // メモリで開いているときはブラウザの DB に触れない（ほかの DB を開くならホームから）
+    ...(state.manual ? [] : state.dbs).filter((n) => n !== state.dbName).map((n) => ({ label: n, hint: tr('DB を開く'), icon: appIcon(), run: () => openDb(n) })),
   ].filter(Boolean);
   const input = el('input.input.palette-input', { placeholder: tr('シートやコマンドを検索…'), autofocus: true });
   const list = el('div.palette-list');

@@ -44,6 +44,10 @@ async function logged(fn, items, source) {
 
 export const db = {
   init: () => call('init'),
+  /** OPFS（ブラウザの DB）を取る。ほかのタブが持っていれば 'BUSY' で失敗する */
+  acquire: () => call('acquire'),
+  /** OPFS を手放す（ブラウザの DB を開いているときは何もしない） */
+  release: () => call('release'),
   list: () => call('list'),
   open: (name) => call('open', name),
   /** 端末のファイル（FileSystemFileHandle）をメモリに読み込んで開く（読み直しにも使う） */

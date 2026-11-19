@@ -113,6 +113,7 @@ export function friendlyError(msg) {
   if ((r = m.match(/no such column: (.+)/))) return tr('列 {0} がありません', [r[1]]);
   if ((r = m.match(/near "(.+?)": syntax error/))) return tr('SQL の構文エラー（"{0}" 付近）', [r[1]]);
   // Worker（db-worker.js）が出す日本語のエラーも、英語のときは訳す
+  if (m === 'BUSY' || m.endsWith(': BUSY')) return tr('ほかのタブでブラウザの DB を使っています。そのタブで一覧やブラウザに保存した DB を閉じてから、もう一度お試しください');
   if (m.includes('クエリシートでは読み取り（SELECT）だけ使えます。データを変更する SQL は SQL コンソールで実行してください')) return tr('クエリシートでは読み取り（SELECT）だけ使えます。データを変更する SQL は SQL コンソールで実行してください');
   if (m.includes('クエリシートには SQL を1文だけ書けます')) return tr('クエリシートには SQL を1文だけ書けます');
   if ((r = m.match(/^「(.+)」は既にあります$/))) return tr('「{0}」は既にあります', [r[1]]);
