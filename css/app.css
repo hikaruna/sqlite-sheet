@@ -383,6 +383,12 @@ body.at-home .toolbar, body.at-home .fxbar { display: none; }
 .gc.fk { color: var(--fk); }
 .fk-label { color: var(--text-3); margin-left: 6px; font-size: 11.5px; }
 .gc.num .fk-label { float: left; margin: 0 6px 0 0; }
+/* 外部キー：入りきらないときは値とラベルがそれぞれ「…」で縮む（値は最低 2em 残す。折り返す列は今まで通り） */
+.gc.has-label:not(.wrap) { display: flex; align-items: center; }
+.gc.has-label:not(.wrap) > span { overflow: hidden; text-overflow: ellipsis; }
+.gc.has-label:not(.wrap) > .fk-val { min-width: 2em; }
+.gc.num.has-label:not(.wrap) { justify-content: flex-end; }
+.gc.num.has-label:not(.wrap) .fk-label { float: none; order: -1; margin: 0 6px 0 0; }
 .gr.new .gc { background: transparent; }
 .gr.new .placeholder { color: var(--text-3); font-size: 12px; }
 /* 押せるのは「＋」だけ（行は「＋」を左に残すために表の幅いっぱいにしている） */
