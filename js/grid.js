@@ -19,6 +19,7 @@ const MAX_WRAP_H = 600;  // 折り返した文字に合わせて伸ばす高さ�
 const MAX_TEXT = 5000;   // セルに表示する文字数の上限（表示を軽くするため）
 const MAX_RESIZE_ROWS = 5000; // まとめて高さを変えられる行数の上限
 const IMG_DWELL = 250;   // URL の画像を読み始めるまでに、セルが画面にとどまる時間（ms）
+const ROW_MARGIN = 0.5;  // 見えている行の上下に余分に描く高さ（画面の高さに対する割合）。速いスクロールでも空の行を見せない
 // 表の拡大率（タッチ端末で二本指でつまむ）。見出しと表の中身に CSS の zoom を掛ける。
 // スクロール位置・表示の大きさは拡大後の値なので、行や列の位置と比べるときは z で割る
 const ZOOM_MIN = 0.5, ZOOM_MAX = 2;
@@ -184,7 +185,7 @@ export class Grid {
       this.placeHandle();
       this.syncFast(false);
     }, true);
-    this.scroll.addEventListener('scroll', () => { this.render(); this.syncFast(true); }, { passive: true });
+    this.scroll.addEventListener('scroll', () => { this.onScroll(); this.syncFast(true); }, { passive: true });
     new ResizeObserver(() => this.render()).observe(this.scroll);
     this.body.addEventListener('mousedown', (e) => this.onMouseDown(e));
     this.body.addEventListener('pointerdown', (e) => this.onTouchDown(e));
@@ -873,81 +874,114 @@ export class Grid {
   }
 
   // ---------- 描画 ----------
+  /** 描く行の範囲：見えている行と、その上下に画面の高さの ROW_MARGIN 倍 */
+  rowRange() {
+    const st = this.scroll.scrollTop / this.z, vh = this.scroll.clientHeight / this.z, m = vh * ROW_MARGIN;
+    return { first: Math.max(0, this.rowAtY(st - HH - m)), last: Math.min(this.totalRows - 1, this.rowAtY(st + vh + m)) };
+  }
+
+  /** 描画の中身を選び直さずに済む情報（行ごとの描画で共通） */
+  rowCtx() {
+    return { ...this.range(), widths: this.cols.map((_, c) => this.colW(c)) };
+  }
+
+  /** 全部の行を描き直す。スクロールだけのときは onScroll() が出入りした行だけを扱う */
   render() {
     // つまんでいる間は描き直さない。指の下のセルを作り直すと、iPhone はその指の続きの操作を届けなくなる
     if (this.pinching) return;
-    const st = this.scroll.scrollTop / this.z;
-    const vh = this.scroll.clientHeight / this.z;
-    const first = Math.max(0, this.rowAtY(st - HH) - 4);
-    const last = Math.min(this.totalRows - 1, this.rowAtY(st + vh) + 4);
-    const { r0, r1, c0, c1 } = this.range();
+    const { first, last } = this.rowRange(), ctx = this.rowCtx();
     const frag = document.createDocumentFragment();
-    const widths = this.cols.map((_, c) => this.colW(c));
     this.blobUsed = new Set();
-    for (let r = first; r <= last; r++) {
-      const isNew = r === this.newRowIndex;
-      if (isNew && !this.draft) {
-        // 下書きを開いていないときは、行番号欄の「＋」だけ（列追加の「＋」と対になる見た目）
-        const here = this.cur.r === r;
-        // 行は表の幅いっぱいにする（行番号の欄と同じく、横にスクロールしても「＋」が左に残るように）
-        frag.append(el('div.gr.row-adder', { class: here ? 'cur' : '', style: { top: this.rowY(r) + 'px', width: this.totalW() + 'px' }, dataset: { r } },
-          el('div.gr-head', { style: { width: RHW + 'px' }, title: tr('行を追加（最後の行で ↓ でも開きます）') }, tr('＋'))));
-        continue;
-      }
-      const row = isNew ? null : this.rowAt(r);
-      const rowSel = r >= r0 && r <= r1;
-      const draft = isNew ? this.draft : null;
-      const h = this.rowH(r);
-      const rowEl = el('div.gr', {
-        class: [isNew ? 'new draft' : (row && this.source.isPendingRow?.(row) ? 'pending' : ''), h > RH ? 'tall' : ''].join(' ').trim(),
-        // 行の高さを変えても文字が縦の真ん中に来るよう、行の line-height をセルが受け継ぐ
-        style: { top: this.rowY(r) + 'px', width: this.totalW() + 'px', ...(h !== RH ? { height: h + 'px', lineHeight: (h - 1) + 'px' } : {}) },
-        dataset: { r },
-      });
-      rowEl.append(el('div.gr-head', {
-        class: rowSel ? 'hl' : '',
-        style: { width: RHW + 'px' },
-        title: isNew ? tr('新しい行（行を離れると保存・Esc で取り消し）') : '',
-      }, isNew ? '✎' : String(r + 1), isNew ? null : this.rowResizer(r)));
-      for (let c = 0; c < this.cols.length; c++) {
-        const cell = el('div.gc', { style: { width: widths[c] + 'px' }, dataset: { c } });
-        const col = this.cols[c];
-        if (col.align === 'right') cell.classList.add('num');
-        if (col.readonly || !this.source.editable) cell.classList.add('ro');
-        if (rowSel && c >= c0 && c <= c1) cell.classList.add('sel');
-        if (r === this.cur.r && c === this.cur.c) cell.classList.add('cur');
-        if (draft) {
-          const v = draft.values[c];
-          // 未入力は INSERT で入るものを薄く、それ以外はフォームの文字列をそのまま
-          if (v === undefined) { cell.classList.add('ph'); cell.textContent = this.placeholderFor(c); }
-          else if (v instanceof Uint8Array) this.fillCell(cell, v, col, { values: draft.values }, r, c);
-          else cell.textContent = v.replaceAll('\n', ' ⏎ ');
-          if (draft.errors[c]) { cell.classList.add('err'); cell.title = draft.errors[c]; }
-        } else if (!row) {
-          cell.classList.add('loading');
-        } else {
-          this.fillCell(cell, row.values[c], col, row, r, c);
-          if (this.source.isPendingCell?.(row, c)) cell.classList.add('pending');
-          if (this.isFlash(r, c)) cell.classList.add('flash');
-          if (this.source.protect?.(row.values, c).length) cell.classList.add('prot');
-        }
-        if (col.fk && this.source.editable && r === this.cur.r && c === this.cur.c && this.hooks.onFkPick) {
-          cell.append(el('button.fk-drop', {
-            title: tr('参照先から選ぶ（Alt+↓）'),
-            on: { mousedown: (e) => { e.preventDefault(); e.stopPropagation(); this.hooks.onFkPick(r, c, e.currentTarget); } },
-          }, '▾'));
-        }
-        rowEl.append(cell);
-      }
-      frag.append(rowEl);
-    }
+    for (let r = first; r <= last; r++) frag.append(this.rowEl(r, ctx));
     this.body.replaceChildren(frag);
+    this.shown = { first, last };
     this.loadImages();
     this.host.classList.toggle('no-sel', this.none);
     this.releaseBlobUrls();
     this.blobUsed = null;
     this.placeSink();
     this.renderEmpty();
+  }
+
+  /**
+   * スクロールでは、描く範囲から出た行を外し、入ってきた行だけを作る。残った行はそのまま（横のスクロールでは何も作らない）。
+   * 外した行の BLOB の Object URL は、次の render() でまとめて解放する
+   */
+  onScroll() {
+    if (this.pinching) return;
+    const { first, last } = this.rowRange(), s = this.shown;
+    if (!s || first > s.last || last < s.first) return this.render(); // 重なりがなければ全部描く
+    if (first !== s.first || last !== s.last) {
+      for (const rowEl of this.body.querySelectorAll(':scope > .gr[data-r]')) {
+        const r = +rowEl.dataset.r;
+        if (r < first || r > last) rowEl.remove();
+      }
+      const ctx = this.rowCtx(), frag = document.createDocumentFragment();
+      for (let r = first; r < s.first; r++) frag.append(this.rowEl(r, ctx));
+      for (let r = s.last + 1; r <= last; r++) frag.append(this.rowEl(r, ctx));
+      this.body.append(frag);
+      this.shown = { first, last };
+    }
+    this.loadImages();
+    this.placeSink(); // 編集中の入力欄は、横の位置で幅が変わる
+  }
+
+  /** 1 行分の要素 */
+  rowEl(r, { r0, r1, c0, c1, widths }) {
+    const isNew = r === this.newRowIndex;
+    if (isNew && !this.draft) {
+      // 下書きを開いていないときは、行番号欄の「＋」だけ（列追加の「＋」と対になる見た目）
+      const here = this.cur.r === r;
+      // 行は表の幅いっぱいにする（行番号の欄と同じく、横にスクロールしても「＋」が左に残るように）
+      return el('div.gr.row-adder', { class: here ? 'cur' : '', style: { top: this.rowY(r) + 'px', width: this.totalW() + 'px' }, dataset: { r } },
+        el('div.gr-head', { style: { width: RHW + 'px' }, title: tr('行を追加（最後の行で ↓ でも開きます）') }, tr('＋')));
+    }
+    const row = isNew ? null : this.rowAt(r);
+    const rowSel = r >= r0 && r <= r1;
+    const draft = isNew ? this.draft : null;
+    const h = this.rowH(r);
+    const rowEl = el('div.gr', {
+      class: [isNew ? 'new draft' : (row && this.source.isPendingRow?.(row) ? 'pending' : ''), h > RH ? 'tall' : ''].join(' ').trim(),
+      // 行の高さを変えても文字が縦の真ん中に来るよう、行の line-height をセルが受け継ぐ
+      style: { top: this.rowY(r) + 'px', width: this.totalW() + 'px', ...(h !== RH ? { height: h + 'px', lineHeight: (h - 1) + 'px' } : {}) },
+      dataset: { r },
+    });
+    rowEl.append(el('div.gr-head', {
+      class: rowSel ? 'hl' : '',
+      style: { width: RHW + 'px' },
+      title: isNew ? tr('新しい行（行を離れると保存・Esc で取り消し）') : '',
+    }, isNew ? '✎' : String(r + 1), isNew ? null : this.rowResizer(r)));
+    for (let c = 0; c < this.cols.length; c++) {
+      const cell = el('div.gc', { style: { width: widths[c] + 'px' }, dataset: { c } });
+      const col = this.cols[c];
+      if (col.align === 'right') cell.classList.add('num');
+      if (col.readonly || !this.source.editable) cell.classList.add('ro');
+      if (rowSel && c >= c0 && c <= c1) cell.classList.add('sel');
+      if (r === this.cur.r && c === this.cur.c) cell.classList.add('cur');
+      if (draft) {
+        const v = draft.values[c];
+        // 未入力は INSERT で入るものを薄く、それ以外はフォームの文字列をそのまま
+        if (v === undefined) { cell.classList.add('ph'); cell.textContent = this.placeholderFor(c); }
+        else if (v instanceof Uint8Array) this.fillCell(cell, v, col, { values: draft.values }, r, c);
+        else cell.textContent = v.replaceAll('\n', ' ⏎ ');
+        if (draft.errors[c]) { cell.classList.add('err'); cell.title = draft.errors[c]; }
+      } else if (!row) {
+        cell.classList.add('loading');
+      } else {
+        this.fillCell(cell, row.values[c], col, row, r, c);
+        if (this.source.isPendingCell?.(row, c)) cell.classList.add('pending');
+        if (this.isFlash(r, c)) cell.classList.add('flash');
+        if (this.source.protect?.(row.values, c).length) cell.classList.add('prot');
+      }
+      if (col.fk && this.source.editable && r === this.cur.r && c === this.cur.c && this.hooks.onFkPick) {
+        cell.append(el('button.fk-drop', {
+          title: tr('参照先から選ぶ（Alt+↓）'),
+          on: { mousedown: (e) => { e.preventDefault(); e.stopPropagation(); this.hooks.onFkPick(r, c, e.currentTarget); } },
+        }, '▾'));
+      }
+      rowEl.append(cell);
+    }
+    return rowEl;
   }
 
   /**
