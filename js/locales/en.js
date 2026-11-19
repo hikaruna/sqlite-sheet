@@ -124,6 +124,8 @@ export default {
   "ファイルに保存されています": "Saved to the file",
   "「{0}」への変更を保存しますか？": "Save changes to \"{0}\"?",
   "保存しないと、開いてから行った変更は失われます。": "If you don't save, the changes you made since opening it will be lost.",
+  "「{0}」を保存しますか？": "Save \"{0}\"?",
+  "まだどこにも保存していないので、閉じると開き直せないことがあります。": "It hasn't been saved anywhere yet, so you may not be able to open it again after closing.",
   "保存しない": "Don't save",
   "保存する": "Save",
   "ファイルの読み書きが許可されなかったため、開けませんでした": "Could not open the file because reading and writing were not allowed",

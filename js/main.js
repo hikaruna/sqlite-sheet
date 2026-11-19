@@ -553,8 +553,8 @@ function buildChrome() {
     document.querySelector(sel).addEventListener('gesturestart', (e) => { if (!document.body.classList.contains('at-home')) e.preventDefault(); });
   }
   // 未保存の新しい行があるまま閉じようとしたら確認
-  // ファイルに保存していない変更があるときも確認
-  addEventListener('beforeunload', (e) => { if (state.grid?.hasDraft || state.inTx || (state.manual && state.dirty)) { e.preventDefault(); e.returnValue = ''; } });
+  // ファイルに保存していない変更があるとき、URL や埋め込みから開いてまだ保存していないときも確認
+  addEventListener('beforeunload', (e) => { if (state.grid?.hasDraft || state.inTx || (state.manual && (state.dirty || unsaved()))) { e.preventDefault(); e.returnValue = ''; } });
   // .sqlite ファイルのドラッグ＆ドロップ
   document.documentElement.style.setProperty('--drop-label', JSON.stringify(tr('.sqlite・.sqlitesheet ファイルをドロップして開く')));
   addEventListener('dragover', (e) => { if (e.dataTransfer?.types.includes('Files')) { e.preventDefault(); document.body.classList.add('dropping'); } });
@@ -922,14 +922,17 @@ function setDirty(v) {
   if (state.dbName) setUrl(); // タブのタイトルの「● 」
 }
 
+/** URL や埋め込みから開いて、まだ保存先がないか（元の URL を失うと開き直せない） */
+function unsaved() { return state.manual?.kind === 'url' && !state.manual.target; }
+
 /** 今の DB から離れてよいか。未保存の新しい行は保存し、ファイルの未保存の変更は保存するか尋ねる */
 async function leaveCurrent() {
   if (state.grid && !(await state.grid.flushDraft())) return false;
   if (!(await settleTx())) return false;
-  if (!state.manual || !state.dirty) return true;
+  if (!state.manual || !(state.dirty || unsaved())) return true;
   const c = await choiceDialog({
-    title: tr('「{0}」への変更を保存しますか？', [state.manual.name]),
-    body: tr('保存しないと、開いてから行った変更は失われます。'),
+    title: state.dirty ? tr('「{0}」への変更を保存しますか？', [state.manual.name]) : tr('「{0}」を保存しますか？', [state.manual.name]),
+    body: state.dirty ? tr('保存しないと、開いてから行った変更は失われます。') : tr('まだどこにも保存していないので、閉じると開き直せないことがあります。'),
     choices: [
       { label: tr('キャンセル'), value: null },
       { label: tr('保存しない'), value: 'discard' },
