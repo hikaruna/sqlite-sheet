@@ -982,7 +982,10 @@ export class Grid {
     if (col.fk) {
       cell.classList.add('fk');
       const label = row.labels?.[c];
-      if (label != null) cell.append(el('span.fk-label', String(label)));
+      if (label != null) {
+        cell.classList.add('has-label');
+        cell.replaceChildren(el('span.fk-val', cell.textContent), el('span.fk-label', String(label)));
+      }
     }
     void r;
   }
