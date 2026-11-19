@@ -18,6 +18,7 @@ const MIN_H = 18;        // 行の高さの最小
 const MAX_WRAP_H = 600;  // 折り返した文字に合わせて伸ばす高さの上限
 const MAX_TEXT = 5000;   // セルに表示する文字数の上限（表示を軽くするため）
 const MAX_RESIZE_ROWS = 5000; // まとめて高さを変えられる行数の上限
+const IMG_DWELL = 250;   // URL の画像を読み始めるまでに、セルが画面にとどまる時間（ms）
 // 表の拡大率（タッチ端末で二本指でつまむ）。見出しと表の中身に CSS の zoom を掛ける。
 // スクロール位置・表示の大きさは拡大後の値なので、行や列の位置と比べるときは z で割る
 const ZOOM_MIN = 0.5, ZOOM_MAX = 2;
@@ -941,11 +942,36 @@ export class Grid {
       frag.append(rowEl);
     }
     this.body.replaceChildren(frag);
+    this.loadImages();
     this.host.classList.toggle('no-sel', this.none);
     this.releaseBlobUrls();
     this.blobUsed = null;
     this.placeSink();
     this.renderEmpty();
+  }
+
+  /**
+   * URL の画像は、画面に IMG_DWELL ms とどまったセルの分だけ読む（速く通り過ぎる行の画像で、相手のサーバーに負荷をかけない）。
+   * 見えている URL ごとに見え始めた時刻を覚え、見えなくなったら忘れる。タイマーは一番早く届くものに合わせて1つだけ。
+   * 列幅や行の高さを測るために作るセルは表の行ではないので、ここでは読まない
+   */
+  loadImages() {
+    clearTimeout(this.imgTimer);
+    if (!this.body.isConnected) return; // 別のシートに移って捨てられた表
+    const s = this.scroll, z = this.z, now = performance.now(), seen = new Map();
+    const top = s.scrollTop / z, left = s.scrollLeft / z + RHW;
+    const bottom = top + s.clientHeight / z - HH, right = left - RHW + s.clientWidth / z;
+    let wait = Infinity;
+    for (const img of this.body.querySelectorAll(':scope > .gr[data-r] img[data-url]')) {
+      const r = +img.closest('.gr').dataset.r, c = +img.closest('.gc').dataset.c, y = this.rowY(r), x = this.colX(c);
+      if (y + this.rowH(r) <= top || y >= bottom || x + this.colW(c) <= left || x >= right) continue;
+      const url = img.dataset.url, t = this.imgSeen?.get(url) ?? now;
+      seen.set(url, t);
+      if (now - t < IMG_DWELL) wait = Math.min(wait, t + IMG_DWELL - now);
+      else if (!img.hasAttribute('src')) img.src = url;
+    }
+    this.imgSeen = seen;
+    if (wait < Infinity) this.imgTimer = setTimeout(() => this.loadImages(), wait);
   }
 
   renderEmpty() {
@@ -1936,9 +1962,11 @@ function placeInfo(cell, img, info) {
 /** セルのサムネイル（BLOB と URL で共通）。大きさは CSS でセルの高さに合わせる。読めなければ消して文字だけにする */
 function thumb(src, external = false) {
   if (external && failedImages.has(src)) return '';
-  const img = el('img.blob-thumb', { src, alt: '', draggable: false });
+  const img = el('img.blob-thumb', { alt: '', draggable: false });
   // lazy にはしない：描くのは見えている行の前後だけで、表に掛けた CSS の zoom と合わさると読み始めないことがある
   if (external) img.referrerPolicy = 'no-referrer';
+  // 外の URL は src を付けずに作り、画面にとどまったら Grid.loadImages() が付ける。data: の URL と BLOB はすぐ出す
+  if (external && !/^data:/i.test(src)) img.dataset.url = src; else img.src = src;
   img.addEventListener('error', () => { if (external) failedImages.add(src); img.remove(); }, { once: true });
   return img;
 }

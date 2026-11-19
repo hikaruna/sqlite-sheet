@@ -360,6 +360,8 @@ body.at-home .toolbar, body.at-home .fxbar { display: none; }
   height: calc(100% - 6px); max-width: 50%; margin: 3px 6px 0 -4px; float: left;
   object-fit: contain; border-radius: 2px; background: var(--surface-2);
 }
+/* まだ読んでいない URL の画像も正方形で場所を取る（列幅を中身に合わせるときに画像の分も数える。読み終えたときに文字がずれにくい） */
+.blob-thumb:not([src]) { aspect-ratio: 1; }
 /* 高さを変えた行では、画像を優先して幅いっぱいまで使う（種類名は入りきらなければ隠れる） */
 .gr.tall .blob-thumb { max-width: 100%; }
 /* 画像で表示する URL：サムネイルは BLOB と同じ。URL の文字ははみ出た分を省略 */
