@@ -1047,3 +1047,6 @@ button.view-ops:hover { text-decoration: underline; }
 .modal.triggers { width: min(640px, calc(100vw - 32px)); }
 .trig-add { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 12px; }
 .trig-sql { width: 100%; min-height: 200px; box-sizing: border-box; }
+/* 外から来たシートの設定を許可するまでの知らせ */
+.trust-bar { flex: none; display: flex; align-items: center; gap: 10px; padding: 6px 12px; border-bottom: 1px solid var(--pending); background: var(--pending-soft); color: var(--text); font-size: 12px; }
+.trust-bar > span { flex: 1; min-width: 0; }

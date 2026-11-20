@@ -54,6 +54,8 @@ export const db = {
   openFile: (name, handle) => call('openFile', name, handle),
   openBytes: (name, bytes) => call('openBytes', name, bytes),
   close: () => call('close'),
+  /** 端末のほかの DB を参照してよいか（開くたびに false に戻る） */
+  allowAttach: (on) => call('allowAttach', on),
   /** ファイルへ保存する。ほかのアプリで変更されていれば force でない限り 'CONFLICT' で失敗する */
   save: (force = false) => call('save', force),
   markClean: () => call('markClean'),

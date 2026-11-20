@@ -4,12 +4,13 @@
 //   last-sheet:<DB>  最後に開いたシート
 //   w:<DB>/<シート>  列の幅（h: は行の高さ、wrapc: などはセルの書式。まとめて perSheet）
 //   meta:<DB>        {created, viewed, updated}：作成・最後に開いた・最後に書き込んだ時刻（ミリ秒）
+//   untrusted:<DB>   外から来たシートの設定を、まだ許可していない（'1'）
 // DB の名前変更・複製・削除・作り直しに合わせて、ここでまとめて付け替える・消す。
 import { t as tr } from './i18n.js';
 import { toast } from './ui.js';
 import { CELL_FORMATS } from './grid.js';
 
-const exact = ['queries:', 'order:', 'last-sheet:', 'meta:'];
+const exact = ['queries:', 'order:', 'last-sheet:', 'meta:', 'untrusted:'];
 // シートごとの値（<接頭辞><DB>/<シート>）
 const perSheet = ['w:', 'h:', ...Object.values(CELL_FORMATS).map((f) => f.store)];
 const sheetPrefix = (k) => perSheet.find((p) => k.startsWith(p));
@@ -79,6 +80,18 @@ export function setQueries(db, list) {
     toast(tr('クエリを保存できませんでした（ブラウザの保存領域がいっぱいかもしれません）'), 'error');
     throw e;
   }
+}
+
+/**
+ * 外から来たシートの設定（クエリ・URL の画像表示）を、まだ許可していないか。
+ * 許可するまで外の画像を読まず、端末のほかの DB も参照しない（値を URL に埋め込んで外へ送れてしまうため）。読めなければ許可していない側に倒す
+ */
+export function isUntrusted(db) {
+  try { return localStorage.getItem('untrusted:' + db) === '1'; } catch { return true; }
+}
+
+export function setUntrusted(db, on) {
+  try { if (on) localStorage.setItem('untrusted:' + db, '1'); else localStorage.removeItem('untrusted:' + db); } catch { /* 無視 */ }
 }
 
 /** {created, viewed, updated}（無いものは undefined） */

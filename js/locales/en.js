@@ -809,4 +809,6 @@ export default {
   "別の場所に保存…": "Save as…",
   "選んだファイル「{0}」は、プロジェクトに書かれた名前「{1}」と違います": "The chosen file “{0}” differs from the name in the project, “{1}”",
   "開いたときのままです": "Unchanged since opening",
+  "このシートの設定は外から読み込んだものです。値が外部に送られないよう、外部の画像の表示と、ほかのデータベースの参照を止めています": "These sheet settings came from outside. To keep values from being sent out, external images and references to other databases are blocked",
+  "アクセスを許可": "Allow access",
 };

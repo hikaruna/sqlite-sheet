@@ -602,7 +602,9 @@ export class Grid {
    */
   imageSrc(v, r, row, c) {
     if (v instanceof Uint8Array) { const k = sniff(v); return k.image && v.length ? this.blobUrl(v, k.mime) : null; }
-    return this.isFormat('image', r, row, c) ? imageUrlOf(v) : null;
+    const url = this.isFormat('image', r, row, c) ? imageUrlOf(v) : null;
+    // 外の URL は許可されたときだけ読む（値を URL に埋め込んで外へ送れてしまうため）。読まなければ文字で出す
+    return url && (/^data:/i.test(url) || this.hooks.externalImages?.() !== false) ? url : null;
   }
   /** そのセルにプレビューを出すか（今は画像だけ：BLOB の画像と、画像で表示する URL） */
   hasPreview(v, r, row, c) {
