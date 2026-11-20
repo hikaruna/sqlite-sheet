@@ -1609,8 +1609,10 @@ export class Grid {
       }
     }
     try {
+      // 変更と追加は1つのトランザクションで書く（どれかが失敗したら全部戻る）
+      const rows = [...inserts.keys()].sort((a, b) => a - b).map((k) => inserts.get(k));
+      const res = updates.length || rows.length ? await this.source.write(updates, rows) : [];
       if (updates.length) {
-        const res = await this.source.update(updates);
         if (res == null) await this.reload(); // ビューなど、変えた行を見つけ直せない書き込み
         const touched = new Set();
         for (const { row, rowObj } of res ?? []) {
@@ -1627,7 +1629,6 @@ export class Grid {
         const oldCount = this.rowCount;
         const intent = this.afterInsert;
         this.afterInsert = null;
-        await this.source.insert([...inserts.keys()].sort((a, b) => a - b).map((k) => inserts.get(k)));
         const keep = { ...this.cur };
         const keepExt = { ...this.ext };
         await this.reload();

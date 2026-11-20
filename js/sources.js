@@ -364,7 +364,43 @@ export class TableSource {
     return Object.fromEntries(this.model.pk.map((p) => [p, rowObj.values[this.model.columns.findIndex((c) => c.name === p)]]));
   }
 
-  async update(changes) {
+  /**
+   * セルの変更と行の追加を、1つのトランザクション（SAVEPOINT）・1つの元に戻す操作として書く。
+   * changes: [{row, col, value, rowObj}]、rows: 追加する行の値の配列。更新した行の新しい姿（{row, rowObj}）を返す
+   */
+  async write(changes, rows) {
+    const u = this.updatePlan(changes), i = this.insertPlan(rows);
+    const stmts = [...u.stmts, ...i.stmts];
+    if (!stmts.length) return [];
+    let r;
+    try { r = await db.batchTracked(stmts); } catch (e) { throw this.exprFailure(e, [...u.parts, ...i.parts], !changes.length); }
+    const out = [];
+    if (u.uniform) {
+      for (const p of u.plans) {
+        const fresh = await this.fetchByKey(p.rowObj.key);
+        if (fresh) out.push({ row: p.row, rowObj: fresh });
+      }
+    } else {
+      for (const [k, p] of u.plans.entries()) {
+        const ret = r.results[k].rows[0];
+        const fresh = ret && await this.fetchByKey(Object.fromEntries(this.keyCols().map((c, j) => [c, ret[j]])));
+        if (fresh) out.push({ row: p.row, rowObj: fresh });
+      }
+    }
+    const n = r.results.slice(u.stmts.length).filter((x) => x.rows[0]).length;
+    const what = [
+      changes.length && (changes.length > 1 ? tr('{0} セルの変更', [changes.length]) : tr('セルの変更')),
+      n && (n > 1 ? tr('{0} 行の追加', [n]) : tr('行の追加')),
+    ].filter(Boolean).join(tr('・'));
+    pushChanges(tr('「{0}」の{1}', [this.model.name, what]), 't:' + this.model.name, r);
+    return out;
+  }
+
+  update(changes) { return this.write(changes, []); }
+  async insert(rows) { await this.write([], rows); }
+
+  /** セルの変更の文。plans は行ごとの変更、uniform は同じ値を複数行にまとめた UPDATE のとき真 */
+  updatePlan(changes) {
     const byRow = new Map();
     for (const ch of changes) {
       if (!byRow.has(ch.row)) byRow.set(ch.row, { rowObj: ch.rowObj, cols: [], parts: [] });
@@ -373,19 +409,9 @@ export class TableSource {
       r.cols.push(col); r.parts.push(this.toSqlPart(ch.value, col, false));
     }
     const plans = [...byRow.entries()].map(([row, r]) => ({ row, ...r }));
-    const allParts = plans.flatMap((p) => p.parts);
+    const parts = plans.flatMap((p) => p.parts);
     const uniform = this.uniformUpdate(plans);
-    if (uniform) {
-      let r;
-      try { r = await db.batchTracked(uniform.stmts); } catch (e) { throw this.exprFailure(e, allParts, false); }
-      pushChanges(tr('「{0}」の{1}', [this.model.name, changes.length > 1 ? tr('{0} セルの変更', [changes.length]) : tr('セルの変更')]), 't:' + this.model.name, r);
-      const out = [];
-      for (const p of plans) {
-        const fresh = await this.fetchByKey(p.rowObj.key);
-        if (fresh) out.push({ row: p.row, rowObj: fresh });
-      }
-      return out;
-    }
+    if (uniform) return { plans, parts, stmts: uniform.stmts, uniform: true };
     // 式はこの UPDATE の中で計算され、RETURNING で計算結果と新しいキーを受け取る
     const stmts = plans.map(({ rowObj, cols, parts }) => {
       const kw = this.keyWhere(rowObj.key);
@@ -395,19 +421,7 @@ export class TableSource {
         checks: parts.filter((p) => p.check).map((p) => p.check),
       };
     });
-    let r;
-    try { r = await db.batchTracked(stmts); } catch (e) { throw this.exprFailure(e, allParts, false); }
-    const out = [];
-    plans.forEach((p, i) => {
-      const ret = r.results[i].rows[0];
-      if (ret) p.newKey = Object.fromEntries(this.keyCols().map((k, j) => [k, ret[j]]));
-    });
-    pushChanges(tr('「{0}」の{1}', [this.model.name, changes.length > 1 ? tr('{0} セルの変更', [changes.length]) : tr('セルの変更')]), 't:' + this.model.name, r);
-    for (const p of plans) {
-      const fresh = p.newKey && await this.fetchByKey(p.newKey);
-      if (fresh) out.push({ row: p.row, rowObj: fresh });
-    }
-    return out;
+    return { plans, parts, stmts, uniform: false };
   }
 
   /**
@@ -442,29 +456,27 @@ export class TableSource {
     return { stmts };
   }
 
-  async insert(rows) {
-    const allParts = [];
+  /** 行の追加の文 */
+  insertPlan(rows) {
+    const parts = [];
     const stmts = rows.map((vals) => {
-      const cols = [], parts = [];
+      const cols = [], ps = [];
       vals.forEach((v, c) => {
         if (v === undefined) return;
         const col = this.model.columns[c];
-        cols.push(col); parts.push(this.toSqlPart(v, col, true));
+        cols.push(col); ps.push(this.toSqlPart(v, col, true));
       });
-      allParts.push(...parts);
+      parts.push(...ps);
       const ret = ` RETURNING ${this.returningKey().join(', ')}`;
       return {
         sql: cols.length
-          ? `INSERT INTO ${this.t} (${cols.map((c) => q(c.name)).join(', ')}) VALUES (${parts.map((p) => p.sql).join(', ')})${ret}`
+          ? `INSERT INTO ${this.t} (${cols.map((c) => q(c.name)).join(', ')}) VALUES (${ps.map((p) => p.sql).join(', ')})${ret}`
           : `INSERT INTO ${this.t} DEFAULT VALUES${ret}`,
-        bind: parts.flatMap((p) => p.bind ?? []),
-        checks: parts.filter((p) => p.check).map((p) => p.check),
+        bind: ps.flatMap((p) => p.bind ?? []),
+        checks: ps.filter((p) => p.check).map((p) => p.check),
       };
     });
-    let r;
-    try { r = await db.batchTracked(stmts); } catch (e) { throw this.exprFailure(e, allParts, true); }
-    const n = r.results.filter((x) => x.rows[0]).length;
-    pushChanges(tr('「{0}」の{1}', [this.model.name, n > 1 ? tr('{0} 行の追加', [n]) : tr('行の追加')]), 't:' + this.model.name, r);
+    return { parts, stmts };
   }
 
   async deleteRows(rowObjs) {
@@ -605,6 +617,13 @@ export class ViewSource extends QuerySource {
     const after = await Promise.all(plans.map((p) => this.countLike(p.rowObj)));
     if (plans.some((p, i) => after[i] >= before[i])) this.onNotice?.(tr('変更がビューに反映されませんでした（トリガーがこの列を扱っていない可能性があります）'));
     return null;
+  }
+
+  /** ビューは変更と追加を別々に書く（それぞれ元に戻す1操作）。戻り値は update と同じ（変更があれば null） */
+  async write(changes, rows) {
+    const res = changes.length ? await this.update(changes) : [];
+    if (rows.length) await this.insert(rows);
+    return res;
   }
 
   async insert(rows) {
