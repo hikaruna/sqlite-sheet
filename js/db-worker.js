@@ -5,6 +5,7 @@ import { addRegexpFunctions } from './regexp.js';
 let sqlite3, pool, db = null, currentName = null;
 // 開いている DB の種類。'file' はメモリに読み込んだもの（手動保存）。handle があれば保存（save）したときにそのファイルへ書く
 let kind = null, handle = null, dirty = false;
+let attachOk = false; // 端末のほかの DB をつないでよいか（外から来たシートの設定を許可するまでは false。閉じると false に戻る）
 let stamp = null; // 最後に読み書きしたときのファイルの { lastModified, size }。ほかのアプリによる変更を見つけるため
 
 // sahpool はパスを URL のパス名として正規化（パーセントエンコード）して保存する
@@ -110,7 +111,7 @@ function markClean() { setDirty(false); return true; }
 // 未保存の変更は捨てる（保存するかどうかは main が先に尋ねる）
 async function close() {
   if (!db) return true;
-  db.close(); db = null; currentName = null; kind = null; handle = null; stamp = null;
+  db.close(); db = null; currentName = null; kind = null; handle = null; stamp = null; attachOk = false;
   setDirty(false);
   return true;
 }
@@ -178,7 +179,7 @@ const attachedSchemas = () => new Set(need().selectValues('SELECT name FROM prag
 
 // メモリで開いているときは OPFS に触れない（ほかの DB は参照できない）
 function ensureAttached(sql) {
-  if (kind !== 'opfs' || !sql.includes('.')) return;
+  if (kind !== 'opfs' || !attachOk || !sql.includes('.')) return;
   const dbs = new Set(pool.getFileNames().filter((f) => f.endsWith('.sqlite3'))
     .map((f) => decodeURIComponent(f.slice(1, -'.sqlite3'.length))));
   let have = null;
@@ -194,6 +195,8 @@ function ensureAttached(sql) {
     have.add(foldCase(name));
   }
 }
+
+function allowAttach(on) { attachOk = on; return true; }
 
 /** DB のファイルを書き換える・消す前に、つないでいれば外す */
 function detach(name) {
@@ -658,7 +661,7 @@ async function copy(from, to) {
   return true;
 }
 
-const api = { init, acquire, release, list, open, openFile, openBytes, close, save, checkFile, markClean, begin, commit, rollback, run, exec, checkQuery, checkTrigger, readQuery, batch, batchTracked, applyChangeset, consoleRun, rebuild, create, exportDb, importDb, remove, rename, copy };
+const api = { init, acquire, release, list, open, allowAttach, openFile, openBytes, close, save, checkFile, markClean, begin, commit, rollback, run, exec, checkQuery, checkTrigger, readQuery, batch, batchTracked, applyChangeset, consoleRun, rebuild, create, exportDb, importDb, remove, rename, copy };
 
 // 呼び出しは1つずつ順に処理する（ファイルの読み書きを待つ間に、次の呼び出しが割り込まないように）
 let queue = Promise.resolve();

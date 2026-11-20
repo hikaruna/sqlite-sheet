@@ -306,6 +306,9 @@ export function collectSheets(dbKey, keys, queries) {
   });
 }
 
+/** 許可が要るシートの設定か：クエリ（端末のほかの DB を参照できる）か、URL の画像表示（外へ値を送れる）がある */
+export const needsTrust = (sheets) => sheets.some((s) => s.type === 'query' || s.format?.image?.length > 0);
+
 /**
  * sheets を端末側の設定に入れる（読み込んだばかりの DB に使う。前の値は呼ぶ側で消しておく）。
  * クエリシートの一覧・シートの並び・列の幅・行の高さ・セルの書式。pkOf(テーブル名) は主キーの列名（無い表なら null）

@@ -528,6 +528,7 @@ function buildChrome() {
     el('main.workspace',
       el('section#sheet.sheet',
         el('div#sheet-head.sheet-head'),
+        el('div#trust-bar.trust-bar', { hidden: true }),
         el('div#grid-host.grid-host')),
       el('aside#panel.panel', { hidden: true })),
     el('section#console.console', { hidden: true }),
@@ -850,11 +851,34 @@ async function showDb(key, param) {
     value: dbLabel(), hidden: false, readOnly: !!state.manual,
     title: dbNameTitle(),
   });
+  await db.allowAttach(!store.isUntrusted(name));
+  renderTrustBar();
   await refreshObjects();
   const keys = allKeys();
   const last = localStorage.getItem('last-sheet:' + name);
   if (param) key = keyOfParam(param);
   await showSheet(keys.includes(key) ? key : keys.includes(last) ? last : keys[0] || null);
+}
+
+/**
+ * 外から来たシートの設定を許可するまでの知らせ（Google スプレッドシートの「外部とデータを送受信しようとしています」と同じ）。
+ * 許可は DB ごとに覚え、ブラウザに保存・名前の変更・複製をしても、許可するまで引き継ぐ
+ */
+function renderTrustBar() {
+  const bar = $('trust-bar'), name = state.dbName;
+  bar.hidden = !store.isUntrusted(name);
+  bar.replaceChildren(...(bar.hidden ? [] : [
+    el('span', tr('このシートの設定は外から読み込んだものです。値が外部に送られないよう、外部の画像の表示と、ほかのデータベースの参照を止めています')),
+    el('button.btn.sm.primary', { on: { click: () => allowExternal(name) } }, tr('アクセスを許可')),
+  ]));
+}
+
+async function allowExternal(name) {
+  if (state.dbName !== name) return;
+  store.setUntrusted(name, false);
+  await db.allowAttach(true);
+  renderTrustBar();
+  await reloadSheet();
 }
 
 // ======================================================================
@@ -1479,6 +1503,7 @@ async function openLoaded(bytes, { url = null, embed = null, key, name, link = n
   if (!keepSettings || sheets.length) await project.applySheets(state.dbName, sheets, async (t) => {
     try { return (await readTable(t)).pk; } catch { return null; }
   });
+  if (project.needsTrust(sheets)) store.setUntrusted(state.dbName, true);
   setDirty(false);
   await showDb(null, link?.sheet ?? null);
 }
@@ -2750,6 +2775,7 @@ function filterPopover(anchor, colName, index) {
 function gridHooks(kind) {
   const isTable = kind === 't';
   return {
+    externalImages: () => !store.isUntrusted(state.dbName),
     onSelect: (s) => {
       document.body.classList.toggle('has-sel', !!s);
       updateFormatButtons();
