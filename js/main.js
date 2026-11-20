@@ -69,8 +69,8 @@ async function refreshDbs() {
     if (e.message === 'BUSY') return false;
     throw e;
   }
-  // 消えた DB の端末側データを掃除（最近開いたファイルの分は残す）。一覧を初めて読めたときに1回だけ
-  if (!swept) { swept = true; store.sweep([...state.dbs, ...(await files.list()).map((r) => FILE + r.name)]); }
+  // 消えた DB の端末側データを掃除（最近開いたファイルと、今メモリで開いている DB の分は残す）。一覧を初めて読めたときに1回だけ
+  if (!swept) { swept = true; store.sweep([...state.dbs, ...(await files.list()).map((r) => FILE + r.name), ...(state.dbName ? [state.dbName] : [])]); }
   return true;
 }
 

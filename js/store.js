@@ -2,27 +2,32 @@
 //   queries:<DB>     保存クエリ [{name, sql}]
 //   order:<DB>       シートの並び順
 //   last-sheet:<DB>  最後に開いたシート
-//   w:<DB>/<表>      列の幅
+//   w:<DB>/<シート>  列の幅（h: は行の高さ、wrapc: などはセルの書式。まとめて perSheet）
 //   meta:<DB>        {created, viewed, updated}：作成・最後に開いた・最後に書き込んだ時刻（ミリ秒）
 // DB の名前変更・複製・削除・作り直しに合わせて、ここでまとめて付け替える・消す。
 import { t as tr } from './i18n.js';
 import { toast } from './ui.js';
+import { CELL_FORMATS } from './grid.js';
 
 const exact = ['queries:', 'order:', 'last-sheet:', 'meta:'];
+// シートごとの値（<接頭辞><DB>/<シート>）
+const perSheet = ['w:', 'h:', ...Object.values(CELL_FORMATS).map((f) => f.store)];
+const sheetPrefix = (k) => perSheet.find((p) => k.startsWith(p));
 
-/** その DB に属するキー（w: は「w:<DB>/」で一致させ、別 DB 名の前方一致を拾わない） */
+/** その DB に属するキー（シートごとの値は「<接頭辞><DB>/」で一致させ、別 DB 名の前方一致を拾わない） */
 function keysOf(db) {
   const own = new Set(exact.map((p) => p + db));
   const keys = [];
   for (let i = 0; i < localStorage.length; i++) {
     const k = localStorage.key(i);
-    if (own.has(k) || k.startsWith(`w:${db}/`)) keys.push(k);
+    if (own.has(k) || perSheet.some((p) => k.startsWith(`${p}${db}/`))) keys.push(k);
   }
   return keys;
 }
 
 function renameKey(k, from, to) {
-  return k.startsWith('w:') ? `w:${to}/` + k.slice(`w:${from}/`.length) : k.slice(0, k.length - from.length) + to;
+  const p = sheetPrefix(k);
+  return p ? `${p}${to}/` + k.slice(`${p}${from}/`.length) : k.slice(0, k.length - from.length) + to;
 }
 
 export function getQueries(db) {
@@ -35,11 +40,12 @@ export function getQueries(db) {
   } catch { return []; }
 }
 
-/** キー → 持ち主の DB 名（DB に属さないキーは null）。DB 名に「/」は使えないので w: は最初の「/」まで */
-function dbOfKey(k) {
-  for (const p of exact) if (k.startsWith(p)) return k.slice(p.length);
-  const m = k.match(/^w:([^/]*)\//);
-  return m ? m[1] : null;
+/** DB に属するキーで、その持ち主が live（DB 名の Set）に無いか。URL から開いた DB の名前は「/」を含むので、名前で前方一致させる */
+function orphan(k, live) {
+  const e = exact.find((p) => k.startsWith(p));
+  if (e) return !live.has(k.slice(e.length));
+  const p = sheetPrefix(k);
+  return !!p && ![...live].some((db) => k.startsWith(`${p}${db}/`));
 }
 
 function allKeys() {
@@ -52,15 +58,17 @@ function allKeys() {
 export function sweep(dbs) {
   try {
     const live = new Set(dbs);
-    for (const k of allKeys()) { const db = dbOfKey(k); if (db != null && !live.has(db)) localStorage.removeItem(k); }
+    for (const k of allKeys()) if (orphan(k, live)) localStorage.removeItem(k);
   } catch { /* 無視 */ }
 }
 
-/** DB を開いたとき：もう無い表・シートの列幅を消す。keep(rest) は「w:<DB>/」より後ろを受け取る */
+/** DB を開いたとき：もう無い表・シートの列幅・行の高さ・書式を消す。keep(rest) は「<接頭辞><DB>/」より後ろを受け取る */
 export function sweepWidths(db, keep) {
   try {
-    const prefix = `w:${db}/`;
-    for (const k of allKeys()) if (k.startsWith(prefix) && !keep(k.slice(prefix.length))) localStorage.removeItem(k);
+    for (const k of allKeys()) {
+      const p = sheetPrefix(k), own = p && `${p}${db}/`;
+      if (own && k.startsWith(own) && !keep(k.slice(own.length))) localStorage.removeItem(k);
+    }
   } catch { /* 無視 */ }
 }
 
