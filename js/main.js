@@ -663,6 +663,7 @@ async function showWelcome() {
   $('fx-ref').textContent = ''; $('fx-input').value = ''; $('status').textContent = '';
   $('tabs').replaceChildren();
   $('sheet-head').replaceChildren();
+  renderTrustBar();
   $('panel').hidden = true;
   setUrl();
   // 操作はすべて一覧より上に置く（一覧が長くなっても埋もれない）
@@ -866,7 +867,7 @@ async function showDb(key, param) {
  */
 function renderTrustBar() {
   const bar = $('trust-bar'), name = state.dbName;
-  bar.hidden = !store.isUntrusted(name);
+  bar.hidden = !name || !store.isUntrusted(name);
   bar.replaceChildren(...(bar.hidden ? [] : [
     el('span', tr('このシートの設定は外から読み込んだものです。値が外部に送られないよう、外部の画像の表示と、ほかのデータベースの参照を止めています')),
     el('button.btn.sm.primary', { on: { click: () => allowExternal(name) } }, tr('アクセスを許可')),
