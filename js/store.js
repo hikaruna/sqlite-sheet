@@ -2,6 +2,7 @@
 //   queries:<DB>     保存クエリ [{name, sql}]
 //   order:<DB>       シートの並び順
 //   last-sheet:<DB>  最後に開いたシート
+//   hidden:<DB>      タブから隠したシート
 //   w:<DB>/<シート>  列の幅（h: は行の高さ、wrapc: などはセルの書式。まとめて perSheet）
 //   meta:<DB>        {created, viewed, updated}：作成・最後に開いた・最後に書き込んだ時刻（ミリ秒）
 //   untrusted:<DB>   外から来たシートの設定を、まだ許可していない（'1'）
@@ -10,7 +11,7 @@ import { t as tr } from './i18n.js';
 import { toast } from './ui.js';
 import { CELL_FORMATS } from './grid.js';
 
-const exact = ['queries:', 'order:', 'last-sheet:', 'meta:', 'untrusted:'];
+const exact = ['queries:', 'order:', 'hidden:', 'last-sheet:', 'meta:', 'untrusted:'];
 // シートごとの値（<接頭辞><DB>/<シート>）
 const perSheet = ['w:', 'h:', ...Object.values(CELL_FORMATS).map((f) => f.store)];
 const sheetPrefix = (k) => perSheet.find((p) => k.startsWith(p));

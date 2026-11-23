@@ -583,14 +583,15 @@ body.at-home .toolbar, body.at-home .fxbar { display: none; }
 .tab.k-t .tab-icon { color: var(--accent); }
 .tab.k-v .tab-icon { color: var(--fk); }
 .tab.k-q .tab-icon { color: var(--warn); }
+.tab.hidden-tab { font-style: italic; opacity: .7; }
 .tab-nav { flex: none; display: flex; align-items: center; gap: 2px; }
 .tab-nav[hidden] { display: none; }
 .tab-nav-btn { width: 24px; height: 26px; border: 0; border-radius: 4px; background: none; color: var(--text-2); font-size: 18px; line-height: 1; }
 .tab-nav-btn:hover:not(:disabled) { background: var(--surface-3); color: var(--text); }
 .tab-nav-btn:disabled { opacity: .35; cursor: default; }
 @media (max-width: 760px) and (hover: none) and (pointer: coarse) { .tab-nav { display: none !important; } }
-.tab-add { flex: none; width: 34px; border: 0; background: none; color: var(--text-2); font-size: 17px; }
-.tab-add:hover { background: var(--surface-3); color: var(--accent); }
+.tab-add, .tab-list { flex: none; width: 34px; border: 0; background: none; color: var(--text-2); font-size: 17px; }
+.tab-add:hover, .tab-list:hover { background: var(--surface-3); color: var(--accent); }
 .status, .version { display: flex; align-items: center; font-size: 12px; color: var(--text-3); white-space: nowrap; }
 .version { padding-left: 12px; border-left: 1px solid var(--line); margin-left: 8px; font-size: 11px; }
 
@@ -896,7 +897,7 @@ body.dropping::after {
   .bottombar { height: 44px; }
   /* クエリ・ビューの定義を入力中で、キーボードが出ている間だけシートタブを隠す */
   html.kb-open body:has(.query-input:focus) .bottombar { display: none; }
-  .tab-add { width: 44px; }
+  .tab-add, .tab-list { width: 44px; }
   /* iOS は 16px 未満の入力欄にフォーカスすると画面を拡大するので、入力欄は 16px */
   input, textarea, select, .grid-sink { font-size: 16px; }
 }

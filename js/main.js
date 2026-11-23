@@ -533,6 +533,7 @@ function buildChrome() {
       el('aside#panel.panel', { hidden: true })),
     el('section#console.console', { hidden: true }),
     el('footer.bottombar',
+      el('button.tab-list', { title: tr('シートの一覧'), on: { click: (e) => sheetList(e.currentTarget) } }, '≡'),
       el('div#tabs.tabs', { on: { wheel: tabsWheel, scroll: updateTabNav } }),
       el('span#tab-nav.tab-nav', { hidden: true },
         el('button#tab-prev.tab-nav-btn', { title: tr('前のシートへスクロール'), on: { click: () => scrollTabs(-1) } }, '‹'),
@@ -2047,6 +2048,8 @@ async function refreshObjects() {
   const tables = new Set(state.objects.filter((o) => o.type === 'table').map((o) => o.name));
   const keys = new Set(allKeys());
   store.sweepWidths(state.dbName, (rest) => tables.has(rest) || keys.has(rest));
+  const hidden = loadHidden();
+  if ([...hidden].some((k) => !keys.has(k))) saveHidden(new Set([...hidden].filter((k) => keys.has(k))));
   // シート全体が保護されている表（タブに 🔒 を出す）
   state.lockedSheets = new Set((await db.query(`SELECT tbl_name FROM sqlite_schema WHERE type = 'trigger' AND name GLOB 'protect_[0-9]*_ins'`)).rows.map(([n]) => n));
   renderTabs();
@@ -2055,7 +2058,35 @@ async function refreshObjects() {
 // シートの並び順は端末ごとに保存（テーブルを作り直しても順番が変わらないように）
 function loadOrder() { try { return JSON.parse(localStorage.getItem('order:' + state.dbName) || '[]'); } catch { return []; } }
 function saveOrder(keys) { try { localStorage.setItem('order:' + state.dbName, JSON.stringify(keys)); } catch { /* 無視 */ } }
-function renameInOrder(from, to) { saveOrder(loadOrder().map((k) => (k === from ? to : k))); }
+function renameInOrder(from, to) {
+  saveOrder(loadOrder().map((k) => (k === from ? to : k)));
+  const h = loadHidden();
+  if (h.delete(from)) saveHidden(h.add(to));
+}
+
+// タブから隠したシート（端末ごと）。隠しても一覧（≡）とコマンドからは開ける
+function loadHidden() {
+  try { const v = JSON.parse(localStorage.getItem('hidden:' + state.dbName) || '[]'); return new Set(Array.isArray(v) ? v : []); } catch { return new Set(); }
+}
+function saveHidden(set) {
+  try { if (set.size) localStorage.setItem('hidden:' + state.dbName, JSON.stringify([...set])); else localStorage.removeItem('hidden:' + state.dbName); } catch { /* 無視 */ }
+}
+/** タブに出すシート。隠したシートでも、開いている間はタブに出す */
+function tabKeys() {
+  const h = loadHidden();
+  return allKeys().filter((k) => !h.has(k) || k === state.key);
+}
+/** タブから隠す・タブに戻す。開いているシートを隠したら、隣のタブへ移る */
+async function setHidden(key, on) {
+  const h = loadHidden(), vis = tabKeys(), i = vis.indexOf(key);
+  if (on) h.add(key); else h.delete(key);
+  saveHidden(h);
+  if (on && key === state.key) {
+    const rest = vis.filter((k) => k !== key);
+    if (rest.length) return showSheet(rest[Math.min(i, rest.length - 1)]);
+  }
+  renderTabs();
+}
 
 function allKeys() {
   const keys = [...state.objects.map((o) => (o.type === 'table' ? 't:' : 'v:') + o.name), ...state.queries.map((x) => 'q:' + x.name)];
@@ -2095,10 +2126,11 @@ function updateTabNav() {
 
 function renderTabs() {
   const tabs = $('tabs');
-  tabs.replaceChildren(...allKeys().map((key) => {
+  const hidden = loadHidden();
+  tabs.replaceChildren(...tabKeys().map((key) => {
     const kind = key[0], name = key.slice(2);
     return el('button.tab', {
-      class: (key === state.key ? 'on ' : '') + 'k-' + kind,
+      class: (key === state.key ? 'on ' : '') + (hidden.has(key) ? 'hidden-tab ' : '') + 'k-' + kind, dataset: { key },
       title: tr('{0}：{1}', [KIND_NAME[kind], name]),
       on: {
         // タッチ：開いているタブをもう一度タップするか、長押しでタブのメニュー（スプレッドシートのアプリと同じ）
@@ -2132,6 +2164,7 @@ function tabPointer(e, key) {
   let armed = !touch, dragging = false, to = -1, lastX = sx;
   const timer = touch ? setTimeout(() => { armed = true; navigator.vibrate?.(10); tab.classList.add('armed'); }, 450) : 0;
   const others = () => [...box.querySelectorAll('.tab')].filter((t) => t !== tab);
+  const nextVisible = tab.nextElementSibling?.dataset.key; // 動かす前の、右隣のタブ
   // 長押しのあとは、指を動かしてもタブの列がスクロールしないようにする
   const noScroll = (ev) => { if (armed) ev.preventDefault(); };
   const place = () => {
@@ -2175,9 +2208,10 @@ function tabPointer(e, key) {
       setTimeout(() => removeEventListener('click', eat, { capture: true }), 300);
     }
     if (!moved) { if (wasArmed) tabMenu(key, tab); return; }
-    const keys = allKeys(), from = keys.indexOf(key);
-    if (from < 0 || to < 0 || to === from) return;
-    keys.splice(from, 1); keys.splice(to, 0, key);
+    // to はタブに出ているものの中の位置。隠したシートも含む並びの中の位置に直す
+    const vis = others().map((t) => t.dataset.key), keys = allKeys().filter((k) => k !== key);
+    if (to < 0 || vis[to] === nextVisible) return;
+    keys.splice(to < vis.length ? keys.indexOf(vis[to]) : keys.indexOf(vis.at(-1)) + 1, 0, key);
     saveOrder(keys);
     renderTabs();
   };
@@ -2190,6 +2224,9 @@ function tabMenu(key, anchor) {
   menu(anchor, [
     { header: tr('{0}：{1}', [KIND_NAME[kind], name]) },
     { label: tr('名前を変更…'), icon: '✎', action: () => renameSheet(key, anchor) },
+    loadHidden().has(key)
+      ? { label: tr('タブに表示'), icon: '◉', action: () => setHidden(key, false) }
+      : { label: tr('タブから隠す'), icon: '◌', disabled: tabKeys().length < 2, action: () => setHidden(key, true) },
     kind === 't' ? { label: tr('複製…'), icon: '⧉', action: () => duplicateTable(name, anchor) } : null,
     kind === 't' ? (state.lockedSheets?.has(name)
       ? { label: tr('シートの保護を外す…'), icon: '🔓', action: () => withSheet(key, () => unprotect(state.prots.find((p) => p.kind === 'sheet'))) }
@@ -2347,14 +2384,14 @@ async function deleteSheet(key) {
   }
   if (!await confirmDialog({ title: tr('{0}「{1}」を削除しますか？', [KIND_NAME[kind], name]), body, okLabel: tr('削除'), danger: true })) return;
   try {
-    const idx = allKeys().indexOf(key); // 消す前の位置（隣のシートを開くため）
+    const idx = tabKeys().indexOf(key); // 消す前のタブの位置（隣のタブを開くため）
     if (kind === 't') await db.exec(`DROP TABLE ${q(name)}`);
     else if (kind === 'v') await db.exec(`DROP VIEW ${q(name)}`);
     else { state.queries = state.queries.filter((x) => x.name !== name); saveQueries(); }
     undo.clear();
     await refreshObjects();
-    const rest = allKeys();
-    await showSheet(rest[Math.min(idx, rest.length - 1)] || null);
+    const rest = tabKeys();
+    await showSheet(rest[Math.max(0, Math.min(idx, rest.length - 1))] || allKeys()[0] || null);
   } catch (e) { toast(friendlyError(e.message), 'error'); }
 }
 
@@ -3904,16 +3941,38 @@ function palette() {
     // メモリで開いているときはブラウザの DB に触れない（ほかの DB を開くならホームから）
     ...(state.manual ? [] : state.dbs).filter((n) => n !== state.dbName).map((n) => ({ label: n, hint: tr('DB を開く'), icon: appIcon(), run: () => openDb(n) })),
   ].filter(Boolean);
-  const input = el('input.input.palette-input', { placeholder: tr('シートやコマンドを検索…'), autofocus: true });
+  searchList({ x: innerWidth / 2 - 260, y: 72 }, commands, tr('シートやコマンドを検索…'));
+}
+
+/** すべてのシートの一覧（≡）。タブから隠したシートもここから開ける。種類の名前でも絞り込める */
+function sheetList(anchor) {
+  if (!state.dbName) return;
+  const hidden = loadHidden();
+  const items = allKeys().map((k) => ({
+    label: k.slice(2), icon: KIND_ICON[k[0]], run: () => showSheet(k),
+    hint: hidden.has(k) ? tr('{0}・隠し中', [KIND_NAME[k[0]]]) : KIND_NAME[k[0]],
+  }));
+  searchList(anchor, items, tr('シートを検索…'), Math.max(0, allKeys().indexOf(state.key)));
+}
+
+/** 検索欄つきの一覧。all: [{label, hint, icon, run}]。↑↓ で選び、Enter かクリックで run */
+function searchList(anchor, all, placeholder, start = 0) {
+  const input = el('input.input.palette-input', { placeholder, autofocus: true });
   const list = el('div.palette-list');
-  let items = commands, active = 0;
-  const render = () => list.replaceChildren(...items.map((c, i) => el('button.palette-item', {
-    class: i === active ? 'on' : '',
-    on: { mousedown: (e) => { e.preventDefault(); closePopover(); c.run(); } },
-  }, el('span.mi-icon', c.icon), el('span.mi-label', c.label), c.hint ? el('span.muted.sm', c.hint) : null)));
+  let items = all, active = start;
+  const render = () => {
+    list.replaceChildren(...items.map((c, i) => el('button.palette-item', {
+      class: i === active ? 'on' : '',
+      on: { mousedown: (e) => { e.preventDefault(); closePopover(); c.run(); } },
+    }, el('span.mi-icon', c.icon), el('span.mi-label', c.label), c.hint ? el('span.muted.sm', c.hint) : null)));
+    list.querySelector('.on')?.scrollIntoView({ block: 'nearest' });
+  };
   input.addEventListener('input', () => {
     const s = input.value.toLowerCase();
-    items = commands.filter((c) => c.label.toLowerCase().includes(s) || (c.hint || '').toLowerCase().includes(s));
+    // 名前がそのまま一致するもの、名前が前方一致するもの、それ以外の順（Enter で打った名前のものが開くように）
+    const rank = (c) => { const l = c.label.toLowerCase(); return l === s ? 0 : l.startsWith(s) ? 1 : 2; };
+    items = all.filter((c) => c.label.toLowerCase().includes(s) || (c.hint || '').toLowerCase().includes(s))
+      .sort((a, b) => rank(a) - rank(b));
     active = 0; render();
   });
   input.addEventListener('keydown', (e) => {
@@ -3921,8 +3980,9 @@ function palette() {
     if (e.key === 'ArrowUp') { e.preventDefault(); active = Math.max(0, active - 1); render(); }
     if (isEnter(e) && items[active]) { e.preventDefault(); closePopover(); items[active].run(); }
   });
-  render();
-  popover({ x: innerWidth / 2 - 260, y: 72 }, el('div.palette', input, list), { className: 'palette-pop', onClose: () => state.grid?.focus() });
+  render(); // 中身を入れてから出す（高さで上下どちらに出すかが決まる）
+  popover(anchor, el('div.palette', input, list), { className: 'palette-pop', onClose: () => state.grid?.focus() });
+  list.querySelector('.on')?.scrollIntoView({ block: 'nearest' });
 }
 
 // PWA：アプリのファイルを端末に保存して電波なしでも起動できるようにする（sw.js）。
