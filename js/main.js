@@ -2487,8 +2487,9 @@ function viewOf(key) {
 /** 外部キーの列ごとに、参照先の行のラベルの SQL 式（参照先の別名は __l0）。たどる先は labels.js */
 async function labelColumns(model) {
   const map = new Map(), cache = new Map();
+  // 複合外部キーは組の最初の列にだけ出す（ほかの列にも同じラベルが並ぶとうるさい）
   for (const f of model.fks) {
-    if (f.cols.length !== 1) continue;
+    if (map.has(f.cols[0])) continue;
     const x = await labelExpr(db, state.dbName, f.table, '__l0', f.refCols[0], { cache });
     if (x) map.set(f.cols[0], x);
   }
@@ -4017,7 +4018,7 @@ function fkPicker(r, c, anchor, ctx = sheetCtx()) {
   const pairs = (fk.cols ?? [col.name]).map((name, i) => [ctx.source.columns.findIndex((x) => x.name === name), (fk.refCols ?? [fk.refCol])[i]])
     .filter(([ci]) => ci === c || (ci >= 0 && !ctx.source.columns[ci].readonly));
   const refSel = pairs.map(([, rc]) => `__l0.${q(rc)}`);
-  const labelX = pairs.length === 1 ? ctx.source.labelCols.get(col.name) : null;
+  const labelX = ctx.source.labelCols.get(fk.cols?.[0] ?? col.name);
   const input = el('input.input', { placeholder: tr('{0} を検索', [fk.table]), autofocus: true });
   const list = el('div.fk-list');
   let items = [], active = 0;

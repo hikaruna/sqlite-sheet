@@ -1011,6 +1011,7 @@ export class Grid {
         if (this.source.protect?.(row.values, c).length) cell.classList.add('prot');
       }
       if (col.fk && this.source.editable && r === this.cur.r && c === this.cur.c && this.hooks.onFkPick) {
+        cell.classList.add('has-drop');
         cell.append(el('button.fk-drop', {
           title: tr('参照先から選ぶ（Alt+↓）'),
           on: { mousedown: (e) => { e.preventDefault(); e.stopPropagation(); this.hooks.onFkPick(r, c, e.currentTarget); } },

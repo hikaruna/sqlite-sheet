@@ -229,7 +229,9 @@ export class TableSource {
     const cols = this.model.columns.map((c) => `${this.t}.${q(c.name)}`);
     const labels = this.columns.map((c, i) => {
       const lx = c.fk && this.labelCols.get(c.name);
-      return lx ? `(SELECT ${lx} FROM ${q(c.fk.table)} AS __l0 WHERE __l0.${q(c.fk.refCol)} = ${this.t}.${q(c.name)} LIMIT 1) AS __l${i}` : null;
+      if (!lx) return null;
+      const on = c.fk.cols.map((name, j) => `__l0.${q(c.fk.refCols[j])} = ${this.t}.${q(name)}`).join(' AND ');
+      return `(SELECT ${lx} FROM ${q(c.fk.table)} AS __l0 WHERE ${on} LIMIT 1) AS __l${i}`;
     });
     this.labelIdx = labels.map((l) => !!l);
     const key = this.hasRowid ? [`${this.t}._rowid_`] : [];
