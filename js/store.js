@@ -3,7 +3,7 @@
 //   order:<DB>       シートの並び順
 //   last-sheet:<DB>  最後に開いたシート
 //   hidden:<DB>      タブから隠したシート
-//   w:<DB>/<シート>  列の幅（h: は行の高さ、wrapc: などはセルの書式。まとめて perSheet）
+//   w:<DB>/<シート>  列の幅（h: は行の高さ、label: はラベル列、wrapc: などはセルの書式。まとめて perSheet）
 //   meta:<DB>        {created, viewed, updated}：作成・最後に開いた・最後に書き込んだ時刻（ミリ秒）
 //   untrusted:<DB>   外から来たシートの設定を、まだ許可していない（'1'）
 // DB の名前変更・複製・削除・作り直しに合わせて、ここでまとめて付け替える・消す。
@@ -13,7 +13,7 @@ import { CELL_FORMATS } from './grid.js';
 
 const exact = ['queries:', 'order:', 'hidden:', 'last-sheet:', 'meta:', 'untrusted:'];
 // シートごとの値（<接頭辞><DB>/<シート>）
-const perSheet = ['w:', 'h:', ...Object.values(CELL_FORMATS).map((f) => f.store)];
+const perSheet = ['w:', 'h:', 'label:', ...Object.values(CELL_FORMATS).map((f) => f.store)];
 const sheetPrefix = (k) => perSheet.find((p) => k.startsWith(p));
 
 /** その DB に属するキー（シートごとの値は「<接頭辞><DB>/」で一致させ、別 DB 名の前方一致を拾わない） */

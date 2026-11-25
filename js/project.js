@@ -1,6 +1,6 @@
 // プロジェクト（DB と、その DB を見るための端末側の設定）をファイル（.sqlitesheet）と URL で表す。
 // 仕様は docs/openapi.json（人が読むのは docs/project-format.md）。ここは仕様どおりに読み書きするだけで、画面は main.js。
-//   ファイル：{ format, version, db | db_embed, sheets: [{ type, name, sql?, widths?, heights?, format? }] }
+//   ファイル：{ format, version, db | db_embed, sheets: [{ type, name, sql?, widths?, heights?, format?, labelColumn? }] }
 //   URL：同じキーをブラケット記法で（sheets[0][name]=…）。db_name はパス、db_embed は # の後ろ
 import { t as tr } from './i18n.js';
 import { CELL_FORMATS } from './grid.js';
@@ -48,7 +48,7 @@ export function parseKey(k) {
 /** 値をそのまま（文字列で）書く所か。それ以外は JSON で書く */
 function isStringPath(path) {
   if (path.length === 1) return ['format', 'db', 'db_embed', 'project'].includes(path[0]);
-  return path.length === 3 && path[0] === 'sheets' && typeof path[1] === 'number' && ['type', 'name', 'sql'].includes(path[2]);
+  return path.length === 3 && path[0] === 'sheets' && typeof path[1] === 'number' && ['type', 'name', 'sql', 'labelColumn'].includes(path[2]);
 }
 
 /**
@@ -108,7 +108,7 @@ function keyOf(path) {
 export function sheetsToParams(sheets) {
   const out = [];
   sheets.forEach((s, i) => {
-    for (const k of ['type', 'name', 'sql', 'widths', 'heights', 'format']) {
+    for (const k of ['type', 'name', 'sql', 'widths', 'heights', 'format', 'labelColumn']) {
       if (s[k] == null) continue;
       out.push([`sheets[${i}][${k}]`, typeof s[k] === 'string' ? s[k] : JSON.stringify(s[k])]);
     }
@@ -157,6 +157,7 @@ export function cleanSheets(list) {
       }
       if (Object.keys(f).length) x.format = f;
     }
+    if (typeof s.labelColumn === 'string' && s.labelColumn) x.labelColumn = s.labelColumn;
     out.push(x);
   }
   return { sheets: out, bad };
@@ -302,6 +303,7 @@ export function collectSheets(dbKey, keys, queries) {
       if (cells.length) f[name] = cells;
     }
     if (Object.keys(f).length) s.format = f;
+    try { const lc = localStorage.getItem('label:' + sk); if (lc) s.labelColumn = lc; } catch { /* 無視 */ }
     return s;
   });
 }
@@ -311,13 +313,15 @@ export const needsTrust = (sheets) => sheets.some((s) => s.type === 'query' || s
 
 /**
  * sheets を端末側の設定に入れる（読み込んだばかりの DB に使う。前の値は呼ぶ側で消しておく）。
- * クエリシートの一覧・シートの並び・列の幅・行の高さ・セルの書式。pkOf(テーブル名) は主キーの列名（無い表なら null）
+ * クエリシートの一覧・シートの並び・列の幅・行の高さ・セルの書式・ラベル列。pkOf(テーブル名) は主キーの列名（無い表なら null）
  */
 export async function applySheets(dbKey, sheets, pkOf) {
   writeJson('queries:' + dbKey, sheets.filter((s) => s.type === 'query').map(({ name, sql }) => ({ name, sql })));
   writeJson('order:' + dbKey, sheets.map((s) => TYPES[s.type] + ':' + s.name));
   for (const s of sheets) {
     const key = TYPES[s.type] + ':' + s.name, sk = sheetKey(dbKey, key);
+    // ラベル列は列名だけ（無い列なら使うときに自動に戻る）
+    if (s.labelColumn) try { localStorage.setItem('label:' + sk, s.labelColumn); } catch { /* 無視 */ }
     if (!s.widths && !s.heights && !s.format) continue;
     const pk = s.type === 'table' ? await pkOf(s.name) : null;
     if (s.type === 'table' && !pk) continue; // 無いテーブル

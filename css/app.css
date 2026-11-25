@@ -309,6 +309,9 @@ body.at-home .toolbar, body.at-home .fxbar { display: none; }
 .gh-badge.uq { color: var(--accent); background: none; padding: 0; font-size: 12px; }
 .gh-badge.nn { color: var(--danger); background: var(--danger-soft); }
 .gh-badge.gen { color: var(--text-2); font-style: italic; }
+.gh-badge.label { display: inline-flex; align-self: center; background: none; padding: 0; color: var(--text-2); }
+.gh-badge.label .ico { width: 14px; height: 14px; }
+.gh-badge.label.auto { opacity: .4; }
 .gh-sort, .gh-filter { color: var(--accent); font-size: 12px; }
 .gh-btn {
   flex: none; width: 20px; height: 22px; border: 0; border-radius: 4px; background: none;

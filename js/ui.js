@@ -294,6 +294,8 @@ const ICONS = {
   chevron: '<path d="m6 9 6 6 6-6"/>',
   wrap: '<path d="M3 6h18M3 12h15a3 3 0 0 1 0 6h-5"/><path d="m15 15.5-2.5 2.5 2.5 2.5"/><path d="M3 18h6"/>',
   info: '<circle cx="12" cy="12" r="9"/><path d="M12 11v6"/><path d="M12 7.5v.01"/>',
+  // ラベル列（塗りつぶしの札）
+  label: '<path d="M3 7.5A2.5 2.5 0 0 1 5.5 5h10.3l5.2 7-5.2 7H5.5A2.5 2.5 0 0 1 3 16.5z" fill="currentColor" stroke="none"/>',
   image: '<rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="2"/><path d="m21 16-5-5-9 9"/>',
 };
 export function icon(name) {

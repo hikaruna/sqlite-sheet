@@ -183,7 +183,7 @@ export class TableSource {
     this.hasRowid = !model.withoutRowid;
     this.fkByCol = new Map();
     for (const f of model.fks) if (f.cols.length === 1) this.fkByCol.set(f.cols[0], { table: f.table, refCol: f.refCols[0] });
-    this.labelCols = labelCols; // 列名 → 参照先の表示用列
+    this.labelCols = labelCols; // 列名 → 参照先の行のラベルの SQL 式（参照先の別名は __l0）
     const uniq = new Set(model.uniques.filter((u) => u.length === 1).map((u) => u[0]));
     this.columns = model.columns.map((c) => {
       const badges = [];
@@ -223,8 +223,8 @@ export class TableSource {
   selectList() {
     const cols = this.model.columns.map((c) => `${this.t}.${q(c.name)}`);
     const labels = this.columns.map((c, i) => {
-      const lc = c.fk && this.labelCols.get(c.name);
-      return lc ? `(SELECT ${q(lc)} FROM ${q(c.fk.table)} WHERE ${q(c.fk.refCol)} = ${this.t}.${q(c.name)} LIMIT 1) AS __l${i}` : null;
+      const lx = c.fk && this.labelCols.get(c.name);
+      return lx ? `(SELECT ${lx} FROM ${q(c.fk.table)} AS __l0 WHERE __l0.${q(c.fk.refCol)} = ${this.t}.${q(c.name)} LIMIT 1) AS __l${i}` : null;
     });
     this.labelIdx = labels.map((l) => !!l);
     const key = this.hasRowid ? [`${this.t}._rowid_`] : [];

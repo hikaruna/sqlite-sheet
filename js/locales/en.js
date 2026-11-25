@@ -815,4 +815,13 @@ export default {
   "開いたときのままです": "Unchanged since opening",
   "このシートの設定は外から読み込んだものです。値が外部に送られないよう、外部の画像の表示と、ほかのデータベースの参照を止めています": "These sheet settings came from outside. To keep values from being sent out, external images and references to other databases are blocked",
   "アクセスを許可": "Allow access",
+  "ラベル列": "Label column",
+  "ラベル列（自動）": "Label column (automatic)",
+  "自動": "Automatic",
+  "自動（{0}）": "Automatic ({0})",
+  "{0} → {1} のラベル": "{0} → label of {1}",
+  "ラベル列：{0}…": "Label column: {0}…",
+  "ラベル列にする": "Use as label column",
+  "ラベル列を自動に戻す": "Reset label column to automatic",
+  "なし": "None",
 };

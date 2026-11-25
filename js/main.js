@@ -17,6 +17,7 @@ import { APP_VERSION } from './version.js';
 import * as files from './files.js';
 import * as project from './project.js';
 import { readProtections, protectSql, unprotectSql, protectionChecker, canProtectRows, describe, KIND_ICON as PROT_ICON } from './protect.js';
+import { labelExpr, getLabelColumn, setLabelColumn, autoLabel } from './labels.js';
 
 const MOD = isMac ? '⌘' : 'Ctrl+';
 
@@ -481,7 +482,7 @@ function buildChrome() {
       el('nav.menubar',
         el('button#file-btn.menubar-btn', { on: { click: (e) => dbMenu(e.currentTarget) } }, tr('ファイル')),
         el('button.menubar-btn', { on: { click: (e) => menu(e.currentTarget, editItems()) } }, tr('編集')),
-        el('button.menubar-btn', { on: { click: (e) => menu(e.currentTarget, formatItems()) } }, tr('表示形式')),
+        el('button.menubar-btn', { on: { click: (e) => menu(e.currentTarget, [...formatItems(), ...labelItems(e.currentTarget)]) } }, tr('表示形式')),
         el('button.menubar-btn', { on: { click: (e) => menu(e.currentTarget, dataItems()) } }, tr('データ')),
         el('button.menubar-btn', { on: { click: (e) => menu(e.currentTarget, toolItems()) } }, tr('ツール'))),
       el('button#undo-btn2.tb-btn.phone-only', { title: tr('元に戻す'), disabled: true, on: { click: doUndo } }, icon('undo')),
@@ -1864,6 +1865,48 @@ function formatItems() {
   return FORMAT_UI.flatMap((f) => [{ header: tr(f.title) }, ...formatToggleItems(f)]);
 }
 
+// ---------- ラベル列 ----------
+/** 今のシートのラベル列を覚えるキー（テーブルは名前、ビュー・クエリは v:名前 など） */
+const labelKey = () => (state.key[0] === 't' ? state.key.slice(2) : state.key);
+
+/** 今のシートの列の情報（自動のラベル列を決めるため） */
+function sheetCols() {
+  const pk = state.model?.pk || [];
+  return (state.source?.columns || []).map((c) => ({ name: c.name, type: c.type, pk: pk.includes(c.name) }));
+}
+
+/** 今のシートのラベル列 { set: 選んだ列（自動なら null）, col: 実際に使う列 } */
+function sheetLabel() {
+  const cols = sheetCols();
+  const set = getLabelColumn(state.dbName, labelKey());
+  const ok = set && cols.some((c) => c.name === set) ? set : null;
+  return { set: ok, col: ok ?? autoLabel(cols) };
+}
+
+async function chooseLabel(col) {
+  setLabelColumn(state.dbName, labelKey(), col);
+  await showSheet(state.key);
+}
+
+/** 表示形式メニューの「ラベル列」：選ぶと同じ場所に列の一覧を出す */
+function labelItems(anchor) {
+  if (!state.source?.columns?.length) return [];
+  const { set, col } = sheetLabel();
+  const auto = autoLabel(sheetCols());
+  const fkName = (c) => state.source.columns.find((x) => x.name === c)?.fk;
+  const list = () => menu(anchor, [
+    { header: tr('ラベル列') },
+    { label: auto ? tr('自動（{0}）', [auto]) : tr('自動'), icon: set ? '' : '✓', action: () => chooseLabel(null) },
+    '-',
+    ...state.source.columns.filter((c) => !/BLOB/i.test(c.type || '') || c.name === set).map((c) => ({
+      label: c.fk ? tr('{0} → {1} のラベル', [c.name, c.fk.table]) : c.name,
+      icon: set === c.name ? '✓' : '', action: () => chooseLabel(c.name),
+    })),
+  ]);
+  const shown = col ? (fkName(col) ? tr('{0} → {1} のラベル', [col, fkName(col).table]) : col) : tr('なし');
+  return [{ header: tr('ラベル列') }, { label: tr('ラベル列：{0}…', [set ? shown : tr('自動（{0}）', [shown])]), icon: icon('label'), action: list }];
+}
+
 /** ツールバーの書式ボタン（押すとその書式の2択） */
 function formatButtons() {
   return FORMAT_UI.map((f) => el(`button#fmt-${f.name}-btn.tb-btn`, { title: tr(f.title), on: { click: (e) => { if (state.grid) menu(e.currentTarget, formatToggleItems(f)); } } }, icon(f.icon)));
@@ -1952,7 +1995,7 @@ function allMenu(anchor) {
   menu(anchor, [
     { header: tr('ファイル') }, ...dbMenu(anchor, { list: true }), '-',
     { header: tr('編集') }, ...editItems(), '-',
-    ...formatItems(), '-',
+    ...formatItems(), ...labelItems(anchor), '-',
     ...dataItems(), '-',
     { header: tr('ツール') }, ...toolItems(),
   ]);
@@ -2424,15 +2467,13 @@ function viewOf(key) {
   return state.views.get(key);
 }
 
+/** 外部キーの列ごとに、参照先の行のラベルの SQL 式（参照先の別名は __l0）。たどる先は labels.js */
 async function labelColumns(model) {
-  const map = new Map();
+  const map = new Map(), cache = new Map();
   for (const f of model.fks) {
     if (f.cols.length !== 1) continue;
-    try {
-      const info = (await db.query(`SELECT name, type FROM pragma_table_info(?) ORDER BY cid`, [f.table])).rows;
-      const pick = info.find(([n, t]) => n !== f.refCols[0] && affinity(t) === 'TEXT');
-      if (pick) map.set(f.cols[0], pick[0]);
-    } catch { /* 参照先がない */ }
+    const x = await labelExpr(db, state.dbName, f.table, '__l0', f.refCols[0], { cache });
+    if (x) map.set(f.cols[0], x);
   }
   return map;
 }
@@ -2510,6 +2551,9 @@ async function showSheet(key, { keepView = true } = {}) {
     return;
   }
   renderSheetHead(kind, name);
+  // ラベル列の見出しに札のアイコン（自動で選んだ列は薄く）
+  { const { set, col } = sheetLabel(); const lc = state.source.columns.find((x) => x.name === col);
+    if (lc) lc.badges = [...(lc.badges || []).filter((b) => !b.cls?.startsWith('label')), { icon: 'label', cls: set ? 'label' : 'label auto', title: set ? tr('ラベル列') : tr('ラベル列（自動）') }]; }
   state.grid = new Grid($('grid-host'), state.source, gridHooks(kind));
   if (carryDraft && carryDraft.values.length === state.source.columns.length) state.grid.draft = carryDraft;
   await state.grid.reload({ keepSelection: false });
@@ -3280,6 +3324,9 @@ function headerMenu(c, anchor) {
     '-',
     // 選んでいる範囲（列ごと選んだときは、その列の読み込み済みのセル）
     ...formatItems(),
+    sheetLabel().set === col.name
+      ? { label: tr('ラベル列を自動に戻す'), icon: icon('label'), action: () => chooseLabel(null) }
+      : { label: tr('ラベル列にする'), icon: icon('label'), action: () => chooseLabel(col.name) },
     '-', sizeItem('col', [c], anchor),
     ...cellSection('col'),
   ];
@@ -3450,7 +3497,7 @@ function fkPicker(r, c, anchor) {
   if (state.grid.editing) state.grid.cancelEdit();
   const col = state.source.columns[c];
   const fk = col.fk;
-  const labelCol = state.source.labelCols.get(col.name);
+  const labelX = state.source.labelCols.get(col.name);
   const input = el('input.input', { placeholder: tr('{0} を検索', [fk.table]), autofocus: true });
   const list = el('div.fk-list');
   let items = [], active = 0;
@@ -3470,10 +3517,10 @@ function fkPicker(r, c, anchor) {
   };
   const search = async () => {
     const s = input.value.trim();
-    const lsel = labelCol ? `, ${q(labelCol)}` : ', NULL';
-    const where = s ? ` WHERE CAST(${q(fk.refCol)} AS TEXT) LIKE ?1${labelCol ? ` OR ${q(labelCol)} LIKE ?1` : ''}` : '';
+    const lsel = labelX ? `, ${labelX}` : ', NULL';
+    const where = s ? ` WHERE CAST(__l0.${q(fk.refCol)} AS TEXT) LIKE ?1${labelX ? ` OR (${labelX}) LIKE ?1` : ''}` : '';
     try {
-      const res = await db.query(`SELECT ${q(fk.refCol)}${lsel} FROM ${q(fk.table)}${where} ORDER BY 1 LIMIT 100`, s ? [`%${s}%`] : undefined);
+      const res = await db.query(`SELECT __l0.${q(fk.refCol)}${lsel} FROM ${q(fk.table)} AS __l0${where} ORDER BY 1 LIMIT 100`, s ? [`%${s}%`] : undefined);
       items = res.rows; active = 0; renderList();
     } catch (e) { list.replaceChildren(el('div.field-error', friendlyError(e.message))); }
   };

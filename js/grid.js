@@ -1,6 +1,6 @@
 // スプレッドシート風グリッド：仮想スクロール、セル選択、編集、コピー＆ペースト
 import { t as tr } from './i18n.js';
-import { el, modKey, fmtBytes } from './ui.js';
+import { el, modKey, fmtBytes, icon } from './ui.js';
 import { sniff } from './blob.js';
 import { affinity } from './schema.js';
 import { convertInput, formText, form, defaultToForm } from './sources.js';
@@ -727,7 +727,7 @@ export class Grid {
       // 中身は .gh-inner に入れて、はみ出た分を切る（境界線のつまみは外に置いて切らない）
       el('div.gh-inner',
       el('span.gh-name', col.name),
-      ...(col.badges || []).map((b) => el('span.gh-badge', { class: b.cls || '', title: b.title || '' }, b.text)),
+      ...(col.badges || []).map((b) => el('span.gh-badge', { class: b.cls || '', title: b.title || '' }, b.icon ? icon(b.icon) : b.text)),
       el('span.gh-spacer'),
       col.sort ? el('span.gh-sort', { title: col.sort.total > 1 ? tr('並べ替えの第{0}基準', [col.sort.rank]) : tr('並べ替え中') },
         (col.sort.dir === 'asc' ? '↑' : '↓') + (col.sort.total > 1 ? col.sort.rank : '')) : null,
@@ -1928,7 +1928,7 @@ function autoWidth(col) {
   ctx.font = '600 13px system-ui, sans-serif';
   let w = ctx.measureText(col.name).width + 44;
   ctx.font = '600 10px system-ui, sans-serif';
-  for (const b of col.badges || []) w += ctx.measureText(b.text).width + 14;
+  for (const b of col.badges || []) w += (b.icon ? 14 : ctx.measureText(b.text).width) + 14;
   return Math.round(Math.min(360, Math.max(DEFAULT_W - 50, w)));
 }
 
