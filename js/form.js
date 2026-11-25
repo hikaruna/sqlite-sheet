@@ -293,7 +293,7 @@ export class FormView {
         this.fit(f.input);
       }
       // 外部キーは参照先の名前、ほかは書けない理由を添える
-      const label = row?.labels?.[c];
+      const label = this.isNew ? g.draft?.labels?.[c] : row?.labels?.[c];
       if (!err) f.note.textContent = col.fk ? (edit ? edit.label : label) != null ? `→ ${edit ? edit.label : label}` : `→ ${col.fk.table}.${col.fk.refCol}`
         : !f.editable && col.readonly ? tr('自動で決まる列です') : '';
       f.note.classList.toggle('fk-note', !!col.fk && !err);

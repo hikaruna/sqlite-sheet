@@ -4018,7 +4018,10 @@ function fkPicker(r, c, anchor, ctx = sheetCtx()) {
   const pairs = (fk.cols ?? [col.name]).map((name, i) => [ctx.source.columns.findIndex((x) => x.name === name), (fk.refCols ?? [fk.refCol])[i]])
     .filter(([ci]) => ci === c || (ci >= 0 && !ctx.source.columns[ci].readonly));
   const refSel = pairs.map(([, rc]) => `__l0.${q(rc)}`);
-  const labelX = ctx.source.labelCols.get(fk.cols?.[0] ?? col.name);
+  // ラベルは組の最初の列に出す（labelColumns と同じ）
+  const labelName = fk.cols?.[0] ?? col.name;
+  const labelX = ctx.source.labelCols.get(labelName);
+  const labelC = ctx.source.columns.findIndex((x) => x.name === labelName);
   const input = el('input.input', { placeholder: tr('{0} を検索', [fk.table]), autofocus: true });
   const list = el('div.fk-list');
   let items = [], active = 0;
@@ -4026,7 +4029,7 @@ function fkPicker(r, c, anchor, ctx = sheetCtx()) {
     closePopover();
     const g = ctx.grid;
     const changes = pairs.map(([ci], i) => ({ r, c: ci, value: vals[i] == null ? null : String(vals[i]) }));
-    if (r === g.newRowIndex) { pairs.forEach(([ci], i) => g.draftSet(ci, formText(vals[i]))); g.render(); g.emitSelect(); }
+    if (r === g.newRowIndex) { pairs.forEach(([ci], i) => g.draftSet(ci, formText(vals[i]), ci === labelC ? label : null)); g.render(); g.emitSelect(); }
     // 詳細カードでは保存するまで書かない
     else if (ctx.detail) for (const ch of changes) await ctx.detail.stage(ch.c, ch.value, ch.c === c ? label : undefined);
     else await g.write(changes, { reopen: !ctx.detail });
