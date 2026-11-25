@@ -1113,6 +1113,59 @@ textarea.form-input { font-family: inherit; }
 .form-value.is-null { color: var(--text-3); font-style: italic; font-size: 13px; }
 .form-close .fc-sp, .form-del .fd-sp { display: none; }
 .form-close { order: 99; }
+/* 外部キーの「›」（参照先を開く） */
+.form-value { display: flex; align-items: flex-start; gap: 8px; }
+.form-ref, .g-ref { flex: none; display: inline-grid; place-items: center; width: 32px; height: 32px; margin: -5px -6px -5px auto; padding: 0; border: 0; border-radius: 50%; background: none; color: var(--text-3); cursor: pointer; }
+.form-ref .ico, .g-ref .ico { width: 22px; height: 22px; stroke-width: 1.5; }
+.form-ref:hover, .g-ref:hover { background: var(--surface-2); color: var(--accent); }
+.g-ref { margin-left: 0; }
+/* Related（この行を外部キーで指している行）のカード */
+.form-body { display: flex; flex-direction: column; }
+.form-related { display: flex; flex-direction: column; gap: 12px; padding: 0 14px 24px; }
+.form-related:empty { display: none; }
+.rel-section { display: flex; align-items: center; gap: 10px; margin-top: 8px; color: var(--text-3); font-size: 12px; font-weight: 600; }
+.rel-section::after { content: ''; flex: 1; height: 1px; background: var(--line); }
+.rel-ones { display: flex; flex-direction: column; gap: 2px; }
+.form-add-one { margin-left: auto; }
+.rel-card { border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); overflow: hidden; }
+.rel-head { display: flex; align-items: center; gap: 8px; padding: 10px 14px; border-bottom: 1px solid var(--line); }
+.rel-title { font-size: 15px; font-weight: 600; }
+.rel-via { margin-left: 6px; color: var(--text-3); font-weight: 400; font-size: .85em; }
+.rel-count { padding: 0 6px; border-radius: 4px; background: var(--surface-3); color: var(--text-2); font-size: 12px; font-variant-numeric: tabular-nums; }
+.rel-scroll { overflow-x: auto; }
+.rel-table { border-collapse: collapse; font-size: 13px; min-width: 100%; }
+.rel-table th, .rel-table td { padding: 6px 12px; text-align: left; white-space: nowrap; max-width: 240px; overflow: hidden; text-overflow: ellipsis; border-bottom: 1px solid var(--line); }
+.rel-table th { font-weight: 600; color: var(--text-2); background: var(--surface-2); }
+.rel-table tbody tr { cursor: pointer; }
+.rel-table tbody tr:hover { background: var(--surface-2); }
+.rel-empty { padding: 12px 14px; font-size: 13px; }
+.rel-actions { display: flex; justify-content: flex-end; gap: 4px; padding: 6px 8px; }
+.rel-actions:empty { display: none; }
+.rel-expand .re-sp { display: none; }
+@media (max-width: 760px) { .rel-expand .re-pc { display: none; } .rel-expand .re-sp { display: inline; } }
+.rel-list-host { position: relative; flex: 1; min-height: 0; }
+/* 広げた表示（PC）：左に列、右に Related */
+@media (min-width: 761px) {
+  body.view-expanded .form-show .form-body { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; align-items: start; padding: 16px; }
+  body.view-expanded .form-show .form-fields { max-width: none; margin: 0; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); }
+  body.view-expanded .form-show .form-related { padding: 0; }
+  body.view-expanded .form-show .form-body:not(:has(.form-related:not(:empty))) { grid-template-columns: minmax(0, 760px); justify-content: center; }
+}
+/* 詳細カードのページ：参照先を開いているときのタブ（PC の並べた表示） */
+.detail-pages { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.detail-page { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.detail-page[hidden] { display: none; }
+.detail-tabs { flex: none; display: flex; overflow-x: auto; border-bottom: 1px solid var(--line); background: var(--surface-2); scrollbar-width: none; }
+.detail-tabs:empty { display: none; }
+.detail-tab { flex: none; max-width: 220px; display: flex; align-items: center; gap: 6px; height: 40px; padding: 0 8px 0 14px; border-right: 1px solid var(--line); color: var(--text-3); cursor: pointer; }
+.detail-tab.on { background: var(--surface); color: var(--text); font-weight: 600; margin-bottom: -1px; }
+.detail-tab-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.detail-tab-close { border: 0; background: none; color: inherit; padding: 2px 4px; border-radius: 4px; cursor: pointer; }
+.detail-tab-close:hover { background: var(--surface-3); }
+.detail-panel.has-tabs .form-title, .detail-panel.has-tabs .form-nav.is-show .form-close { display: none; }
+.form-crumb { border: 0; background: none; padding: 0; font: inherit; color: var(--text-2); cursor: pointer; }
+.form-crumb:hover { color: var(--accent); text-decoration: underline; }
+.form-crumb-sep { color: var(--text-3); white-space: pre; }
 .form-sep { width: 1px; height: 20px; background: var(--line); margin: 0 2px; }
 .form-title { min-width: 0; flex: 0 1 auto; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .form-title:empty { display: none; }

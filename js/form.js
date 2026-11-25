@@ -39,8 +39,14 @@ export class FormView {
   }
 
   destroy() {
+    this.relatedBox?._cleanup?.();
     this.releaseUrls();
     this.root.remove();
+  }
+
+  /** Related のカードを描き直す（show のときだけ） */
+  refreshRelated() {
+    if (this.relatedBox && this.mode === 'show' && !this.isNew) this.hooks.renderRelated(this, this.relatedBox);
   }
 
   get r() { return this.grid.cur.r; }
@@ -79,7 +85,11 @@ export class FormView {
     const row = this.isNew ? null : g.rowAt(this.r);
     const id = this.isNew ? 'new' : JSON.stringify(row?.key ?? null);
     // 別の行を開いたら show から（新しい行は edit）
-    if (this.modeId !== id) { this.mode = this.isNew ? 'edit' : 'show'; this.modeId = id; }
+    if (this.modeId !== id) {
+      const moved = this.modeId != null;
+      this.mode = this.isNew ? 'edit' : 'show'; this.modeId = id;
+      if (moved) this.hooks.onRowChange?.();
+    }
     if (this.built && this.built.r === this.r && this.built.id === id && this.built.mode === this.mode) this.refresh();
     else this.build(id);
   }
@@ -100,7 +110,7 @@ export class FormView {
     const close = el('button.btn.sm.form-close', { title: tr('閉じる（Esc）'), 'aria-label': tr('閉じる'), on: { click: () => this.hooks.onClose?.() } },
       el('span.fc-pc', '✕'), el('span.fc-sp', icon('back')));
     // ‹ › は show だけ（スマホの show では出さない）
-    const steps = show ? [
+    const steps = show && this.hooks.steps !== false ? [
       el('span.form-sep'),
       el('button.btn.sm.form-step', { title: tr('前の行（Alt+←）'), disabled: this.r <= 0, on: { click: () => this.go(this.r - 1) } }, '‹'),
       el('button.btn.sm.form-step', { title: tr('次の行（Alt+→）'), disabled: this.r >= total - 1, on: { click: () => this.go(this.r + 1) } }, '›'),
@@ -122,14 +132,19 @@ export class FormView {
           ...steps,
           expandBtn]
         : this.isNew
-        ? [total ? el('button.btn.sm', { on: { click: () => this.cancelNew() } }, tr('やめる')) : null,
+        ? [total || this.hooks.onCancelNew ? el('button.btn.sm', { on: { click: () => this.cancelNew() } }, tr('やめる')) : null,
           el('button.btn.sm.primary', { title: tr('保存（{0}）', [isMac ? '⌘S' : 'Ctrl+S']), on: { click: () => this.saveNew() } }, tr('保存'))]
         : [el('button.btn.sm', { on: { click: () => this.cancelEdit() } }, tr('やめる')),
           el('button.btn.sm.primary', { title: tr('保存（{0}）', [isMac ? '⌘S' : 'Ctrl+S']), on: { click: () => this.save() } }, tr('保存'))],
     );
     // スマホの show：編集は右下の丸いボタン
     const fab = show && canEdit ? el('button.form-fab', { title: tr('編集'), 'aria-label': tr('編集'), on: { click: () => this.setMode('edit') } }, '✎') : null;
-    this.root.replaceChildren(el('div.form-card', { class: show ? 'form-show' : '' }, nav, el('div.form-fields', this.fields.map((f) => f.box))), ...(fab ? [fab] : []));
+    // show では、この行を外部キーで指している行（Related）を列の後ろに並べる
+    this.relatedBox?._cleanup?.();
+    this.relatedBox = show && this.hooks.renderRelated ? el('div.form-related') : null;
+    const body = el('div.form-body', el('div.form-fields', this.fields.map((f) => f.box)), this.relatedBox);
+    this.root.replaceChildren(el('div.form-card', { class: show ? 'form-show' : '' }, nav, body), ...(fab ? [fab] : []));
+    this.refreshRelated();
     this.refresh();
     this.updateSave();
     this.updateTitle();
@@ -151,8 +166,12 @@ export class FormView {
   updateTitle() {
     if (!this.titleEl) return;
     const label = this.rowLabel();
-    // 広げた表示は「テーブル名 > 行ラベル」。行ラベルが空でも > は残す
-    this.titleEl.textContent = this.hooks.expanded?.() && this.mode === 'show' ? `${this.hooks.sheetName} > ${label}` : label;
+    // 広げた表示は「テーブル名 > たどってきた行 > 行ラベル」。行ラベルが空でも > は残す。途中の行は押すとそこへ戻る
+    if (this.hooks.expanded?.() && this.mode === 'show') {
+      const crumbs = this.hooks.crumbs?.() ?? [{ text: this.hooks.sheetName }];
+      this.titleEl.replaceChildren(...crumbs.flatMap((x) => [
+        x.go ? el('button.form-crumb', { on: { click: x.go } }, x.text) : el('span', x.text), el('span.form-crumb-sep', ' > ')]), el('span', label));
+    } else this.titleEl.textContent = label;
     this.titleEl.title = this.titleEl.textContent;
   }
 
@@ -178,6 +197,9 @@ export class FormView {
       }
       const label = row?.labels?.[c];
       f.value.textContent = label != null ? String(label) : String(v);
+      // 外部キー：参照先の行の show を開く「›」
+      const fk = g.cols[c].fk;
+      if (fk && this.hooks.onRef) f.value.append(el('button.form-ref', { title: tr('参照先を開く（{0}）', [fk.table]), 'aria-label': tr('参照先を開く（{0}）', [fk.table]), on: { click: () => this.hooks.onRef(fk, v) } }, icon('ref')));
     });
   }
 
@@ -372,6 +394,7 @@ export class FormView {
     }
     this.discard(); // 書いた値で入れ直す
     await this.setMode('show');
+    this.hooks.onChanged?.();
     return true;
   }
 
@@ -441,6 +464,7 @@ export class FormView {
     const g = this.grid;
     await this.commitFocused();
     if (!(await this.confirmLeave())) return;
+    if (this.hooks.beforeMove && !(await this.hooks.beforeMove())) return;
     if (this.isNew && r !== g.newRowIndex && g.hasDraft) { if (!(await this.saveNew({ stay: true }))) return; }
     r = Math.max(0, Math.min(r, g.canInsert ? g.newRowIndex : g.rowCount - 1));
     // 「＋」の行には下書きを開いてからでないと移れない
@@ -462,12 +486,17 @@ export class FormView {
       // 何も入れていない：入力の要らない表ならそのまま1行足す
       if (!g.canInsertEmpty) { this.hooks.onError?.(new Error(tr('値を入れてから追加してください'))); return false; }
       await g.addRow();
+      if (this.hooks.onSavedNew) { await this.hooks.onSavedNew(); return true; }
       await this.render();
+      this.hooks.onChanged?.();
       return true;
     }
     const before = g.rowCount;
     const ok = await g.flushDraft();
     if (!ok) { this.built = null; await this.render(); return false; }
+    // Related の「Add」：保存したら元のページへ戻る
+    if (this.hooks.onSavedNew) { await this.hooks.onSavedNew(); return true; }
+    this.hooks.onChanged?.();
     if (!stay) {
       // 並べ替えがなければ追加した行は末尾。並べ替え中は末尾とは限らないので、末尾の行を見せる
       g.moveTo(Math.max(0, Math.min(g.rowCount - 1, before)), g.cur.c);
@@ -478,6 +507,7 @@ export class FormView {
 
   async cancelNew() {
     this.grid.discardDraft();
+    if (this.hooks.onCancelNew) return this.hooks.onCancelNew();
     this.grid.moveTo(Math.max(0, this.grid.rowCount - 1), this.grid.cur.c);
     await this.render();
   }

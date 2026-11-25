@@ -2,7 +2,7 @@
 // 表（Grid）を裏で使う。行の読み込みは Grid のページをそのまま使い、選んだ行は grid.cur.r。
 // 見えている分のカードだけを描く。上のバー（スマホでは右下の丸いボタン）から行を足す
 import { t as tr } from './i18n.js';
-import { el, fmtBytes } from './ui.js';
+import { el, fmtBytes, icon } from './ui.js';
 import { sniff } from './blob.js';
 import { NULL_LABEL } from './grid.js';
 
@@ -30,9 +30,12 @@ export class GalleryView {
       this.list,
       grid.canInsert ? el('button.g-fab', { title: tr('行を追加'), 'aria-label': tr('行を追加'), on: { click: add } }, '＋') : null);
     host.append(this.root);
-    host.classList.add('gallery-mode');
-    // 数式バーは表のときの道具なので、ギャラリーでは出さない
-    document.body.classList.add('in-gallery');
+    // 詳細カードの中に埋め込むリスト（Related の Expand）は、シートの見た目を変えない
+    if (!hooks.embedded) {
+      host.classList.add('gallery-mode');
+      // 数式バーは表のときの道具なので、ギャラリーでは出さない
+      document.body.classList.add('in-gallery');
+    }
     this.ro = new ResizeObserver(() => { this.layout = null; this.render(); });
     this.ro.observe(this.list);
   }
@@ -42,8 +45,10 @@ export class GalleryView {
     for (const u of this.urls.values()) URL.revokeObjectURL(u);
     this.urls.clear();
     this.root.remove();
-    this.host.classList.remove('gallery-mode');
-    document.body.classList.remove('in-gallery');
+    if (!this.hooks.embedded) {
+      this.host.classList.remove('gallery-mode');
+      document.body.classList.remove('in-gallery');
+    }
   }
 
   focus() { this.list.focus({ preventScroll: true }); }
@@ -57,7 +62,7 @@ export class GalleryView {
     let thumb = cols.findIndex((col, c) => rows.some((row, r) => g.hasPreview(row.values[c], r, row, c)));
     // まだ行がなくても、BLOB の列があればサムネイルの枠を取っておく
     if (thumb < 0 && !rows.length) thumb = cols.findIndex(isBlobCol);
-    const usable = cols.map((col, c) => c).filter((c) => c !== thumb && !isBlobCol(cols[c]) && !cols[c].auto);
+    const usable = cols.map((col, c) => c).filter((c) => c !== thumb && !isBlobCol(cols[c]) && !cols[c].auto && cols[c].name !== this.hooks.hideColumn);
     // 題名はシートのラベル列（自動の選び方も含めてラベル列に任せる。外部キーなら参照先のラベルが出る）
     const title = cols.findIndex((col) => col.name === this.hooks.labelColumn);
     return { thumb, title, sub: usable.filter((c) => c !== title).slice(0, SUB) };
@@ -113,6 +118,12 @@ export class GalleryView {
     card.append(el('div.g-body',
       el('div.g-title', title >= 0 ? this.text(row, title) : ''),
       sub.map((c) => el('div.g-sub', el('span.g-key', g.cols[c].name), el('span.g-val', this.text(row, c))))));
+    // 外部キー（値のある最初の列）の参照先を開く「›」。カード自体がボタンなので、中は span で受ける
+    const ref = this.hooks.onRef ? g.cols.findIndex((col, c) => col.fk && row.values[c] != null) : -1;
+    if (ref >= 0) {
+      card.append(el('span.g-ref', { role: 'button', title: tr('参照先を開く（{0}）', [g.cols[ref].fk.table]),
+        on: { click: (e) => { e.stopPropagation(); this.hooks.onRef(r, ref); } } }, icon('ref')));
+    }
     return card;
   }
 

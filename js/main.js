@@ -3,7 +3,7 @@ import { t as tr, lang, LANGS, setLang, locale } from './i18n.js';
 import { db, q } from './db-client.js';
 import { el, toast, menu, popover, closePopover, ask, confirmDialog, choiceDialog, modal, pickFile, download, exportFile, fmtBytes, isTouch, modKey, isMac, icon, appIcon, phone } from './ui.js';
 import { listObjects, readTable, createTableSql, migrationSql, constantDefault, TYPES, affinity } from './schema.js';
-import { Grid, CELL_FORMATS } from './grid.js';
+import { Grid, CELL_FORMATS, NULL_LABEL } from './grid.js';
 import { FormView } from './form.js';
 import { GalleryView } from './gallery.js';
 import { sniff, asText, hexDump } from './blob.js';
@@ -19,7 +19,7 @@ import { APP_VERSION } from './version.js';
 import * as files from './files.js';
 import * as project from './project.js';
 import { readProtections, protectSql, unprotectSql, protectionChecker, canProtectRows, describe, KIND_ICON as PROT_ICON } from './protect.js';
-import { labelExpr, getLabelColumn, setLabelColumn, autoLabel } from './labels.js';
+import { labelExpr, getLabelColumn, setLabelColumn, autoLabel, labelColumnOf } from './labels.js';
 
 const MOD = isMac ? '⌘' : 'Ctrl+';
 
@@ -618,12 +618,14 @@ function updateUndoButtons() {
 async function doUndo() {
   try {
     const e = await undo.undo();
+    await refreshDetailAfterUndo();
     if (e) toast(tr('元に戻しました：{0}{1}', [e.label, await showUndone(e, 'undo')]));
   } catch (e) { toast(tr('元に戻せませんでした：') + friendlyError(e.message), 'error'); }
 }
 async function doRedo() {
   try {
     const e = await undo.redo();
+    await refreshDetailAfterUndo();
     if (e) toast(tr('やり直しました：{0}{1}', [e.label, await showUndone(e, 'redo')]));
   } catch (e) { toast(tr('やり直せませんでした：') + friendlyError(e.message), 'error'); }
 }
@@ -2606,6 +2608,16 @@ function openGallery() {
     beforeMove: detailCanLeave,
     onOpen: () => { state.detailOpen = true; openDetail(); },
     onExpand: expandList,
+    // カードの「›」：その行を開いて、外部キーの参照先を重ねる
+    onRef: async (r, c) => {
+      const g = state.grid, row = g.rowAt(r);
+      if (!row) return;
+      if (r !== g.cur.r && !(await detailCanLeave())) return;
+      g.moveTo(r, g.cur.c);
+      state.detailOpen = true;
+      await openDetail({ focus: false });
+      await openRef(0, g.cols[c].fk, row.values[c]);
+    },
   });
   document.body.classList.remove('has-sel'); // ギャラリーでは下はシートのタブ
   applyExpanded();
@@ -2619,27 +2631,363 @@ async function openDetail({ focus = true } = {}) {
   if (!g) return;
   if (g.editing) await g.commitEdit({ move: null });
   if (!state.detail) {
-    state.detail = new FormView($('detail'), g, {
-      fkPick: (r, c, anchor) => fkPicker(r, c, anchor),
-      blobMenu: (r, c, anchor) => blobMenu(r, c, anchor),
-      viewBlob: (r, c) => viewBlob(r, c),
+    // 詳細カードはページの重ね：0 枚目がシートの行、その先は外部キーからたどった参照先（state.refs）
+    const base = el('div.detail-page');
+    $('detail').replaceChildren(el('div#detail-tabs.detail-tabs'), el('div#detail-pages.detail-pages', base));
+    state.refs = [];
+    state.activePage = 0;
+    state.relCache = null; // 表の作りが変わっているかもしれないので、開くたびに調べ直す
+    state.detail = new FormView(base, g, {
+      ...formHooks(null),
       labelColumn: sheetLabel().col,
       sheetName: state.key?.slice(2) ?? '',
-      // 広げた表示（PC だけ）：詳細カードをシートの幅いっぱいに出す
-      expanded: () => !!state.expanded && !phone.matches,
-      onExpand: (on) => setExpanded(on),
       deleteRow: state.key?.[0] === 't' || state.source?.ops?.delete ? async () => { g.moveTo(g.cur.r, g.cur.c); await deleteSelectedRows(); } : null,
-      onError: (e) => toast(friendlyError(e.message), 'error'),
-      onUndo: doUndo,
-      onRedo: doRedo,
       onClose: () => toggleDetail(false),
+      // シートの行を移る前に、参照先のページの未保存も確かめる。移ったら参照先は閉じる
+      beforeMove: () => refsCanLeave(0),
+      onRowChange: () => dropRefs(0),
     });
   }
   $('detail').hidden = false;
+  renderDetailTabs();
   applyExpanded();
   await state.detail?.render();
   if (focus) state.detail?.focus();
   updateModeBtns();
+}
+
+/** 詳細カードのページ（シートの行・参照先・Related）に共通の hooks。page が null ならシートの行 */
+function formHooks(page) {
+  const ctx = () => (page ? { grid: page.grid, source: page.source, detail: page.form } : sheetCtx());
+  return {
+    fkPick: (r, c, anchor) => fkPicker(r, c, anchor, ctx()),
+    blobMenu: (r, c, anchor) => blobMenu(r, c, anchor, ctx()),
+    viewBlob: (r, c) => viewBlob(r, c, ctx()),
+    // 広げた表示（PC だけ）：詳細カードをシートの幅いっぱいに出す
+    expanded: () => !!state.expanded && !phone.matches,
+    onExpand: (on) => setExpanded(on),
+    onError: (e) => toast(friendlyError(e.message), 'error'),
+    onUndo: doUndo,
+    onRedo: doRedo,
+    // 外部キーの「›」：参照先の行の show を、このページの次に重ねる
+    onRef: (fk, value) => openRef(pageIndex(page), fk, value),
+    // 広げた表示のタイトル：テーブル名 > たどってきた行 > …（押すとそのページへ戻る）
+    crumbs: () => detailCrumbs(pageIndex(page)),
+    // この行を外部キーで指している行（Related）のカード
+    renderRelated: (form, box) => renderRelated(form, box, pageIndex(page)),
+    // 書き込んだら、開いているページの Related を読み直す
+    onChanged: () => refreshPages(),
+  };
+}
+
+const pageIndex = (page) => (page ? state.refs.indexOf(page) + 1 : 0);
+const detailPages = () => [{ form: state.detail }, ...state.refs];
+const pageLabel = (page) => (page.label ? page.label() : page.form.rowLabel());
+
+/** 表 table を、列 col = value で絞り込んだ表（見えないところに置く Grid）を作る。page に grid・source・gridHost を入れる */
+async function filteredGrid(page, table, col, value, onSelect) {
+  const model = await readTable(table);
+  const view = { sorts: [], filters: [{ col, op: 'eq', value: String(value) }] };
+  const source = new TableSource(state.dbName, model, view, await labelColumns(model));
+  const prots = readProtections(model);
+  source.protect = protectionChecker(model, prots);
+  if (prots.some((x) => x.kind === 'sheet')) source.editable = false;
+  page.source = source;
+  page.gridHost = el('div.ref-grid', { hidden: true });
+  page.grid = new Grid(page.gridHost, source, { onSelect, onError: (e) => toast(friendlyError(e.message), 'error'), onUndo: doUndo, onRedo: doRedo });
+  await page.grid.reload({ keepSelection: false });
+  page.labelColumn = await labelColumnOf(db, state.dbName, table);
+  return page;
+}
+
+/** ページを重ねる（from より後ろのページは閉じる）。build(page) でページの中身を作る */
+async function pushPage(from, page, build) {
+  if (!state.detail) return false;
+  if (!(await refsCanLeave(from))) return false;
+  dropRefs(from);
+  try {
+    page.host = el('div.detail-page');
+    if (!(await build(page))) { page.host.remove(); page.gridHost?.remove(); return false; }
+    $('detail-pages').append(page.host, page.gridHost);
+    state.refs.push(page);
+    await page.form?.render();
+    page.gallery?.render();
+    showPage(state.refs.length);
+    (page.form || page.gallery)?.focus();
+    return true;
+  } catch (e) { toast(friendlyError(e.message), 'error'); page.host?.remove(); page.gridHost?.remove(); return false; }
+}
+
+/** 行のページ：絞り込んだ表の r 行目（r が newRowIndex なら新しい行）を詳細カードで見せる */
+function rowPageForm(page, r, extra = {}) {
+  const g = page.grid;
+  if (r === g.newRowIndex) g.openDraft();
+  g.cur = { r, c: 0 }; g.ext = { r, c: 0 };
+  page.form = new FormView(page.host, g, {
+    ...formHooks(page),
+    labelColumn: page.labelColumn,
+    sheetName: page.table,
+    steps: false,
+    deleteRow: page.source.editable ? () => deleteRefRow(page) : null,
+    onClose: () => closePage(pageIndex(page)),
+    ...extra,
+  });
+}
+
+/** 外部キーからたどった参照先の行を、ページ from の次に開く */
+async function openRef(from, fk, value) {
+  if (value == null) return;
+  const page = { table: fk.table };
+  await pushPage(from, page, async () => {
+    await filteredGrid(page, fk.table, fk.refCol, value, () => page.form?.render());
+    if (!page.grid.rowCount) { toast(tr('参照先の行が見つかりません（{0}.{1} = {2}）', [fk.table, fk.refCol, value])); return false; }
+    rowPageForm(page, 0);
+    return true;
+  });
+}
+
+/** Related の行（rel.table の rel.col = value の r 行目）の show を、ページ from の次に開く */
+async function openRelatedRow(from, rel, value, r) {
+  const page = { table: rel.table };
+  await pushPage(from, page, async () => {
+    await filteredGrid(page, rel.table, rel.col, value, () => page.form?.render());
+    if (r >= page.grid.rowCount) return false;
+    rowPageForm(page, r);
+    return true;
+  });
+}
+
+/** Related の「Add」：rel.table の新しい行を、外部キー rel.col = value を入れた状態で edit で開く。保存かやめるで元のページへ */
+async function openRelatedAdd(from, rel, value) {
+  const page = { table: rel.table };
+  await pushPage(from, page, async () => {
+    await filteredGrid(page, rel.table, rel.col, value, () => page.form?.render());
+    if (!page.grid.canInsert) { toast(tr('このビューには行を追加できません')); return false; }
+    const g = page.grid;
+    g.openDraft();
+    g.draftSet(g.cols.findIndex((c) => c.name === rel.col), formText(value));
+    const back = async () => { dropRefs(pageIndex(page) - 1); await refreshPages(); };
+    rowPageForm(page, g.newRowIndex, { onSavedNew: back, onCancelNew: back, onClose: back });
+    return true;
+  });
+}
+
+/** Related の「Expand」：rel.table の rel.col = value の行を全部、縦のリストで見せる */
+async function openRelatedList(from, rel, value) {
+  const page = { table: rel.table, label: () => relTitle(rel) };
+  await pushPage(from, page, async () => {
+    await filteredGrid(page, rel.table, rel.col, value, () => page.gallery?.render());
+    page.titleEl = el('span.form-title');
+    const close = el('button.btn.sm.form-close', { title: tr('閉じる'), 'aria-label': tr('閉じる'), on: { click: () => closePage(pageIndex(page)) } },
+      el('span.fc-pc', '✕'), el('span.fc-sp', icon('back')));
+    page.host.append(el('div.form-nav.is-show.rel-list-nav', close, page.titleEl, el('span.grow')));
+    const listHost = el('div.rel-list-host');
+    page.host.append(listHost);
+    page.gallery = new GalleryView(listHost, page.grid, {
+      embedded: true,
+      labelColumn: page.labelColumn,
+      hideColumn: rel.col, // 自分を指している外部キーの列は出さない
+      onOpen: (r) => (r === page.grid.newRowIndex ? openRelatedAdd(pageIndex(page), rel, value) : openRelatedRow(pageIndex(page), rel, value, r)),
+    });
+    page.updateTitle = () => {
+      const i = pageIndex(page);
+      if (state.expanded && !phone.matches) {
+        page.titleEl.replaceChildren(...detailCrumbs(i).flatMap((x) => [
+          x.go ? el('button.form-crumb', { on: { click: x.go } }, x.text) : el('span', x.text), el('span.form-crumb-sep', ' > ')]), el('span', relTitle(rel)));
+      } else page.titleEl.textContent = relTitle(rel);
+    };
+    return true;
+  });
+}
+
+/** 参照先・Related の行を削除し、そのページを閉じる */
+async function deleteRefRow(page) {
+  const row = page.grid.rowAt(page.grid.cur.r);
+  if (!row) return;
+  try {
+    await page.source.deleteRows([row]);
+    toast(tr('{0} 行を削除しました（{1}Z で元に戻せます）', [1, MOD]));
+    dropRefs(pageIndex(page) - 1);
+    await state.grid?.reload();
+    await refreshPages();
+  } catch (e) { toast(friendlyError(e.message), 'error'); }
+}
+
+/** 書き込んだあと：参照先・Related の表を読み直し、開いているページの Related を描き直す */
+async function refreshPages() {
+  // シートの表も読み直す（Related の Add・削除はシートの表そのものの行のこともある）
+  await state.grid?.reload();
+  state.gallery?.render();
+  for (const page of state.refs || []) { await page.grid.reload(); page.gallery?.render(); }
+  for (const page of detailPages()) page.form?.refreshRelated();
+}
+
+/** 元に戻す・やり直すのあと：参照先・Related の表と、開いているページの Related を読み直す */
+async function refreshDetailAfterUndo() {
+  if (!state.detail) return;
+  for (const page of state.refs || []) { await page.grid.reload(); page.gallery?.render(); }
+  for (const page of detailPages()) page.form?.refreshRelated();
+}
+
+// ---------- Related：この行を外部キーで指している行 ----------
+/** 表 table を外部キー（1列）で指している関係の一覧：[{ table, col, refCol, dup }]（DB を開いている間はキャッシュ） */
+async function relationsTo(table) {
+  state.relCache ??= new Map();
+  if (state.relCache.has(table)) return state.relCache.get(table);
+  const rows = (await db.query(`SELECT m.name, f.id, f."from", f."to" FROM sqlite_master m, pragma_foreign_key_list(m.name) f
+    WHERE m.type = 'table' AND f."table" = ?1 COLLATE NOCASE ORDER BY m.name, f.id`, [table])).rows;
+  const byFk = new Map();
+  for (const [t, id, from, to] of rows) (byFk.get(`${t}\u0000${id}`) || byFk.set(`${t}\u0000${id}`, []).get(`${t}\u0000${id}`)).push({ t, from, to });
+  let pk = null;
+  const rels = [];
+  for (const parts of byFk.values()) {
+    if (parts.length !== 1) continue; // 複数列の外部キーは扱わない
+    const { t, from, to } = parts[0];
+    // 参照先の列を書いていなければ主キー
+    const refCol = to ?? (pk ??= (await readTable(table)).pk[0]);
+    if (refCol) rels.push({ table: t, col: from, refCol, one: await isUniqueCol(t, from) });
+  }
+  for (const r of rels) r.dup = rels.filter((x) => x.table === r.table).length > 1;
+  state.relCache.set(table, rels);
+  return rels;
+}
+
+/**
+ * 列 col が表 t の中で単独で一意か（has one の見分け）：1列だけの UNIQUE（制約・一意のインデックス）か、その列だけの主キー。
+ * 条件付き（WHERE 付き）の一意インデックスは一意と言い切れないので数えない
+ */
+async function isUniqueCol(t, col) {
+  try {
+    const pk = (await db.query('SELECT name FROM pragma_table_info(?) WHERE pk > 0', [t])).rows;
+    if (pk.length === 1 && pk[0][0] === col) return true;
+    const idx = (await db.query('SELECT name FROM pragma_index_list(?) WHERE "unique" = 1 AND partial = 0', [t])).rows;
+    for (const [name] of idx) {
+      const cols = (await db.query('SELECT name FROM pragma_index_info(?)', [name])).rows;
+      if (cols.length === 1 && cols[0][0] === col) return true;
+    }
+  } catch { /* 調べられなければ has many として扱う */ }
+  return false;
+}
+
+const relTitle = (rel) => (rel.dup ? tr('{0}（{1}）', [rel.table, rel.col]) : rel.table);
+/** カード・欄の見出し：同じ表から複数の関係があるときだけ、表の名前の横にどの列で指しているかを薄く添える */
+const relTitleEl = (rel) => (rel.dup ? [rel.table, el('span.rel-via', rel.col)] : [rel.table]);
+
+/** セルの文字（ギャラリーと同じ：外部キーは参照先の名前、BLOB は種類と大きさ、NULL は薄く） */
+function relCell(row, c) {
+  const v = row.values[c];
+  if (v == null) return el('span.g-null', NULL_LABEL);
+  if (v instanceof Uint8Array) return `${sniff(v).label} ${fmtBytes(v.length)}`;
+  const label = row.labels?.[c];
+  return label != null ? String(label) : String(v);
+}
+
+/** 詳細カード form（ページ i）の Related のカードを box に描く */
+async function renderRelated(form, box, i) {
+  box._cleanup?.();
+  const token = (box._token = (box._token || 0) + 1);
+  const g = form.grid, r = form.r, model = g.source.model;
+  // 読み直した直後は行がまだ読み込まれていないことがあるので、読んでから
+  const row = g.rowAt(r) ?? (await g.rowsBetween(r, r))?.[0];
+  if (box._token !== token) return;
+  if (!row || !model) { box.replaceChildren(); return; }
+  let rels;
+  try { rels = await relationsTo(model.name); } catch { rels = []; }
+  const hosts = [];
+  box._cleanup = () => { for (const h of hosts) h.remove(); hosts.length = 0; };
+  const ones = [], cards = [];
+  for (const rel of rels) {
+    const c = g.cols.findIndex((x) => x.name === rel.refCol);
+    const value = c >= 0 ? row.values[c] : null;
+    if (value == null) continue;
+    const page = {};
+    try { await filteredGrid(page, rel.table, rel.col, value); } catch { continue; }
+    if (box._token !== token) { page.gridHost.remove(); return; }
+    hosts.push(page.gridHost);
+    const rg = page.grid, n = rg.rowCount;
+    const rows = n ? (await rg.rowsBetween(0, Math.min(n, 10) - 1)).filter(Boolean) : [];
+    if (box._token !== token) return;
+    if (rel.one) {
+      // has one：外部キーの欄と同じ形（1件ならラベル＋「›」、0件なら「なし」＋「＋ 追加」）
+      const cell = el('div.form-value');
+      if (rows[0]) {
+        // 相手の行のラベル（ラベル列が無ければキー）
+        const lc = rg.cols.findIndex((x) => x.name === page.labelColumn);
+        cell.append(lc >= 0 ? relCell(rows[0], lc) : String(rows[0].key ?? ''),
+          el('button.form-ref', { title: tr('開く'), 'aria-label': tr('開く'), on: { click: () => openRelatedRow(i, rel, value, 0) } }, icon('ref')));
+      } else {
+        cell.append(el('span.muted', tr('なし')),
+          rg.canInsert ? el('button.btn.sm.link.form-add-one', { on: { click: () => openRelatedAdd(i, rel, value) } }, tr('＋ 追加')) : null);
+      }
+      ones.push(el('div.form-field.rel-one', el('div.form-label', el('span.form-name', ...relTitleEl(rel))), cell));
+      continue;
+    }
+    // 自分を指している外部キーの列は、どの行も今の行なので出さない
+    const shown = rg.cols.map((col, cc) => cc).filter((cc) => rg.cols[cc].name !== rel.col);
+    const table = el('table.rel-table',
+      el('thead', el('tr', shown.map((cc) => el('th', rg.cols[cc].name)))),
+      el('tbody', rows.map((r, k) => el('tr', { on: { click: () => openRelatedRow(i, rel, value, k) } }, shown.map((cc) => el('td', relCell(r, cc)))))));
+    cards.push(el('section.rel-card',
+      el('div.rel-head', el('span.rel-title', ...relTitleEl(rel)), el('span.rel-count', String(n))),
+      n ? el('div.rel-scroll', table) : el('div.rel-empty.muted', tr('まだありません')),
+      el('div.rel-actions',
+        // AppSheet にならい、PC は Expand、スマホは View
+        n > 0 ? el('button.btn.sm.link.rel-expand', { on: { click: () => openRelatedList(i, rel, value) } }, el('span.re-pc', tr('Expand')), el('span.re-sp', tr('View'))) : null,
+        rg.canInsert ? el('button.btn.sm.link', { on: { click: () => openRelatedAdd(i, rel, value) } }, tr('Add')) : null)));
+  }
+  if (box._token !== token) return;
+  // 自分の列と分けて「関連」の段にまとめる：has one の欄が先、has many のカードが後
+  box.replaceChildren(...(ones.length || cards.length ? [el('div.rel-section', tr('関連'))] : []),
+    ones.length ? el('div.rel-ones', ones) : '', ...cards);
+}
+
+/** ページ i より後ろの参照先ページに保存していない変更があれば、保存するか聞く */
+async function refsCanLeave(i) {
+  for (const page of state.refs.slice(i).reverse()) if (page.form && !(await page.form.confirmLeave())) { showPage(pageIndex(page)); return false; }
+  return true;
+}
+
+/** ページ i より後ろの参照先ページを閉じる（確認は済ませてから呼ぶ） */
+function dropRefs(i) {
+  for (const page of state.refs.splice(i)) { page.form?.destroy(); page.gallery?.destroy(); page.host?.remove(); page.gridHost?.remove(); }
+  if ((state.activePage ?? 0) > i) showPage(i);
+  else renderDetailTabs();
+}
+
+/** ページ i を閉じる（0 なら詳細カードを閉じる）。後ろのページも閉じる */
+async function closePage(i) {
+  if (i === 0) return toggleDetail(false);
+  if (!(await refsCanLeave(i - 1))) return;
+  dropRefs(i - 1);
+}
+
+/** ページ i を見せる */
+function showPage(i) {
+  state.activePage = i;
+  detailPages().forEach((page, j) => { const host = j === 0 ? state.detail.host : page.host; host.hidden = j !== i; });
+  renderDetailTabs();
+  const page = detailPages()[i];
+  page?.form?.updateTitle();
+  page?.updateTitle?.();
+}
+
+/** PC の並べた表示：参照先を開いているとき、詳細カードの上にページのタブを並べる */
+function renderDetailTabs() {
+  const tabs = $('detail-tabs');
+  if (!tabs) return;
+  const show = state.refs?.length > 0 && !phone.matches && !state.expanded;
+  $('detail').classList.toggle('has-tabs', !!show);
+  if (!show) { tabs.replaceChildren(); return; }
+  tabs.replaceChildren(...detailPages().map((page, i) => el('div.detail-tab', { class: i === state.activePage ? 'on' : '', on: { click: () => showPage(i) } },
+    el('span.detail-tab-label', pageLabel(page) || '—'),
+    el('button.detail-tab-close', { title: tr('閉じる'), 'aria-label': tr('閉じる'), on: { click: (e) => { e.stopPropagation(); closePage(i); } } }, '✕'))));
+}
+
+/** 広げた表示のパンくず：テーブル名、それからページ i より前のページ（押すとそのページへ戻る） */
+function detailCrumbs(i) {
+  const pages = detailPages();
+  return [{ text: state.key?.slice(2) ?? '' },
+    ...pages.slice(0, i).map((page, j) => ({ text: pageLabel(page), go: async () => { if (await refsCanLeave(j)) { dropRefs(j); showPage(j); } } }))];
 }
 
 /**
@@ -2649,7 +2997,11 @@ async function openDetail({ focus = true } = {}) {
 function setExpanded(on) {
   state.expanded = on;
   applyExpanded();
-  if (state.detail) { state.detail.built = null; state.detail.render().then(() => state.detail?.focus()); }
+  if (state.detail) {
+    for (const page of detailPages()) { if (page.form) { page.form.built = null; page.form.render(); } page.updateTitle?.(); }
+    renderDetailTabs();
+    detailPages()[state.activePage ?? 0]?.form?.focus();
+  }
   if (!on) state.gallery?.reveal();
 }
 
@@ -2669,6 +3021,7 @@ async function expandList() {
 /** シートを離れるとき：ギャラリーと詳細カードを片付ける（詳細パネルを開いているかは覚えておく） */
 function closeViews() {
   document.body.classList.remove('view-expanded');
+  if (state.refs) dropRefs(0);
   state.gallery?.destroy(); state.gallery = null;
   state.detail?.destroy(); state.detail = null;
   $('grid-host')?.classList.remove('gallery-mode');
@@ -2676,7 +3029,9 @@ function closeViews() {
 
 /** 詳細カードを離れてよいか（保存していない変更があれば、保存するか聞く） */
 async function detailCanLeave() {
-  return !state.detail || state.detail.confirmLeave();
+  if (!state.detail) return true;
+  if (!(await refsCanLeave(0))) return false;
+  return state.detail.confirmLeave();
 }
 
 async function toggleDetail(force) {
@@ -2686,6 +3041,7 @@ async function toggleDetail(force) {
   await state.detail?.commitFocused();
   if (!(await detailCanLeave())) return;
   state.detailOpen = false;
+  dropRefs(0);
   state.detail?.destroy(); state.detail = null;
   $('detail').hidden = true;
   (state.gallery || state.grid).focus();
@@ -2699,6 +3055,7 @@ async function setMode(mode) {
   if (mode === 'gallery' && !state.gallery) { openGallery(); if (state.detailOpen) await openDetail({ focus: false }); }
   if (mode === 'table' && state.gallery) {
     // 詳細カードはギャラリーの一部なので、表に戻すと閉じる
+    if (state.refs) dropRefs(0);
     if (state.detail) { state.detail.destroy(); state.detail = null; $('detail').hidden = true; }
     state.detailOpen = false;
     state.gallery.destroy(); state.gallery = null;
@@ -3642,22 +3999,25 @@ async function jumpToRef(fk, value) {
   toast(tr('「{0}」の {1} = {2} を表示しています（チップの × で解除）', [fk.table, fk.refCol, value]));
 }
 
-function fkPicker(r, c, anchor) {
-  if (state.grid.editing) state.grid.cancelEdit();
-  const col = state.source.columns[c];
+/** 操作する表：シートの表か、詳細カードで外部キーからたどった参照先の表 */
+const sheetCtx = () => ({ grid: state.grid, source: state.source, detail: state.detail });
+
+function fkPicker(r, c, anchor, ctx = sheetCtx()) {
+  if (ctx.grid.editing) ctx.grid.cancelEdit();
+  const col = ctx.source.columns[c];
   const fk = col.fk;
-  const labelX = state.source.labelCols.get(col.name);
+  const labelX = ctx.source.labelCols.get(col.name);
   const input = el('input.input', { placeholder: tr('{0} を検索', [fk.table]), autofocus: true });
   const list = el('div.fk-list');
   let items = [], active = 0;
   const choose = async (v, label) => {
     closePopover();
-    const g = state.grid;
+    const g = ctx.grid;
     if (r === g.newRowIndex) { g.draftSet(c, formText(v)); g.render(); g.emitSelect(); }
     // 詳細カードでは保存するまで書かない
-    else if (state.detail) state.detail.stage(c, v == null ? null : String(v), label);
-    else await g.write([{ r, c, value: v == null ? null : String(v) }], { reopen: !state.detail });
-    state.detail ? state.detail.focus(c) : state.grid.focus();
+    else if (ctx.detail) ctx.detail.stage(c, v == null ? null : String(v), label);
+    else await g.write([{ r, c, value: v == null ? null : String(v) }], { reopen: !ctx.detail });
+    ctx.detail ? ctx.detail.focus(c) : g.focus();
   };
   const renderList = () => {
     list.replaceChildren(...items.map(([v, label], i) => el('button.fk-item', {
@@ -3682,7 +4042,7 @@ function fkPicker(r, c, anchor) {
     if (isEnter(e)) { e.preventDefault(); if (items[active]) choose(...items[active]); }
   });
   popover(anchor, el('div.fk-picker', el('div.ask-title', `→ ${fk.table}.${fk.refCol}`), input, list,
-    col.readonly ? null : el('button.btn.sm.link', { on: { click: () => choose(null) } }, tr('NULL にする'))), { onClose: () => (state.detail ? state.detail.focus(c) : state.grid?.focus()) });
+    col.readonly ? null : el('button.btn.sm.link', { on: { click: () => choose(null) } }, tr('NULL にする'))), { onClose: () => (ctx.detail ? ctx.detail.focus(c) : ctx.grid?.focus()) });
   search();
 }
 
@@ -3911,33 +4271,32 @@ async function deleteSelectedRows() {
 }
 
 /** BLOB のセルの操作（ファイルから読み込む・ダウンロード・NULL にする） */
-function blobActions(r, c) {
-  const g = state.grid;
+function blobActions(r, c, ctx = sheetCtx()) {
+  const g = ctx.grid;
   // 詳細カード（新しい行でないとき）では、読み込み・NULL は保存するまでカードの中だけで持つ
-  const d = state.detail && !state.detail.isNew && state.detail.r === r ? state.detail : null;
+  const d = ctx.detail && !ctx.detail.isNew && ctx.detail.r === r ? ctx.detail : null;
   const v = d ? d.shownValue(c) : g.rowAt(r)?.values[c];
   return {
     v,
-    load: d ? async () => { const f = await pickFile(''); if (f && state.detail === d) d.stage(c, new Uint8Array(await f.arrayBuffer())); } : () => loadFileInto(r, c),
-    download: () => { const k = sniff(v); download(v, `${state.source.columns[c].name}.${k.ext}`, k.mime); },
+    load: d ? async () => { const f = await pickFile(''); if (f) d.stage(c, new Uint8Array(await f.arrayBuffer())); } : () => loadFileInto(r, c, g),
+    download: () => { const k = sniff(v); download(v, `${ctx.source.columns[c].name}.${k.ext}`, k.mime); },
     clear: d ? () => d.stage(c, null) : () => g.write([{ r, c, value: null }]),
   };
 }
 
 /** ファイルを選んで、そのセルに BLOB として入れる（新しい行なら下書きに入れるだけ） */
-async function loadFileInto(r, c) {
+async function loadFileInto(r, c, g = state.grid) {
   const f = await pickFile('');
   if (!f) return;
-  const g = state.grid;
   await g.pasteBlob(new Uint8Array(await f.arrayBuffer()), [c], { r0: r, r1: r });
 }
 
-function blobMenu(r, c, anchor) {
-  const g = state.grid;
-  const a = blobActions(r, c);
+function blobMenu(r, c, anchor, ctx = sheetCtx()) {
+  const g = ctx.grid;
+  const a = blobActions(r, c, ctx);
   const cellEl = anchor || g.body.querySelector(`.gr[data-r="${r}"] .gc[data-c="${c}"]`) || g.sink;
   menu(cellEl, [
-    { label: tr('表示'), icon: '🔍', disabled: !(a.v instanceof Uint8Array), action: () => viewBlob(r, c) },
+    { label: tr('表示'), icon: '🔍', disabled: !(a.v instanceof Uint8Array), action: () => viewBlob(r, c, ctx) },
     { label: tr('ファイルから読み込む…'), icon: '⤒', action: a.load },
     { label: tr('ダウンロード'), icon: '⤓', disabled: !(a.v instanceof Uint8Array), action: a.download },
     { label: tr('NULL にする'), icon: '⌫', action: a.clear },
@@ -3945,9 +4304,9 @@ function blobMenu(r, c, anchor) {
 }
 
 /** BLOB の中身を大きく見る（画像・動画・音声・PDF・テキスト・JSONB・16 進ダンプ） */
-function viewBlob(r, c) {
-  const g = state.grid;
-  const a = blobActions(r, c);
+function viewBlob(r, c, ctx = sheetCtx()) {
+  const g = ctx.grid;
+  const a = blobActions(r, c, ctx);
   const v = a.v;
   if (!(v instanceof Uint8Array)) return;
   const k = sniff(v);
@@ -3996,7 +4355,7 @@ function viewBlob(r, c) {
   let dlg;
   const done = (fn) => () => { dlg.close(); fn(); };
   dlg = modal([
-    el('div.blob-view-head', el('h2', state.source.columns[c].name), meta),
+    el('div.blob-view-head', el('h2', ctx.source.columns[c].name), meta),
     body,
     el('div.modal-actions',
       editable ? el('button.btn', { on: { click: done(a.load) } }, tr('⤒ 読み込む…')) : null,
