@@ -114,6 +114,16 @@ export class Grid {
     return formText(this.rowAt(r)?.values[c]);
   }
 
+  /** 新しい行の入力を取り消して、最後の行へ戻る（行がなければ「＋ 行を追加」の上に留まる） */
+  cancelDraft() {
+    if (!this.draft) return;
+    const had = this.hasDraft;
+    this.draft = null;
+    this.cur = { r: Math.max(0, this.rowCount - 1), c: this.cur.c }; this.ext = { ...this.cur };
+    this.ensureVisible(); this.render(); this.emitSelect();
+    if (had) this.hooks.onInfo?.(tr('新しい行の入力を取り消しました'));
+  }
+
   discardDraft() {
     if (!this.draft) return;
     this.draft = null;
@@ -147,6 +157,7 @@ export class Grid {
         this.cur = { r: this.newRowIndex, c: firstErr ?? Math.min(this.cur.c, this.cols.length - 1) };
         this.ext = { ...this.cur };
         this.ensureVisible(); this.render(); this.emitSelect(); this.focus();
+        this.hooks.onDraftError?.(err);
         return false;
       } finally { this.flushing = null; }
     })();
@@ -1904,15 +1915,7 @@ export class Grid {
       case 'F2': e.preventDefault(); return this.beginEdit('edit');
       case 'Delete': case 'Backspace': e.preventDefault(); return this.clearSelection();
       case 'Escape':
-        if (r === this.newRowIndex && this.draft) {
-          const had = this.hasDraft;
-          this.draft = null;
-          // 下書きを閉じて、最後の行へ戻る（行がなければ「＋ 行を追加」の上に留まる）
-          this.cur = { r: Math.max(0, this.rowCount - 1), c }; this.ext = { ...this.cur };
-          this.ensureVisible(); this.render(); this.emitSelect();
-          if (had) this.hooks.onInfo?.(tr('新しい行の入力を取り消しました'));
-          return;
-        }
+        if (r === this.newRowIndex && this.draft) return this.cancelDraft();
         this.ext = { ...this.cur }; this.render(); return;
     }
     if (mod && !e.altKey) {
