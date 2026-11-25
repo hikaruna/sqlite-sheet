@@ -3992,8 +3992,10 @@ async function joinQuery(col) {
   const m = state.model;
   const ref = await readTable(col.fk.table);
   const a = 'a', b = 'b';
-  const sel = [`${a}.*`, ...ref.columns.filter((c) => c.name !== col.fk.refCol).map((c) => `${b}.${q(c.name)} AS ${q(`${ref.name}.${c.name}`)}`)];
-  const sql = `SELECT ${sel.join(',\n       ')}\nFROM ${q(m.name)} AS ${a}\nLEFT JOIN ${q(ref.name)} AS ${b} ON ${b}.${q(col.fk.refCol)} = ${a}.${q(col.name)}`;
+  const { cols = [col.name], refCols = [col.fk.refCol] } = col.fk; // 複合外部キーは組の列すべてで結合する
+  const sel = [`${a}.*`, ...ref.columns.filter((c) => !refCols.includes(c.name)).map((c) => `${b}.${q(c.name)} AS ${q(`${ref.name}.${c.name}`)}`)];
+  const on = cols.map((name, i) => `${b}.${q(refCols[i])} = ${a}.${q(name)}`).join(' AND ');
+  const sql = `SELECT ${sel.join(',\n       ')}\nFROM ${q(m.name)} AS ${a}\nLEFT JOIN ${q(ref.name)} AS ${b} ON ${on}`;
   await newQuery(sql, `${m.name}×${ref.name}`);
 }
 
@@ -4011,33 +4013,38 @@ function fkPicker(r, c, anchor, ctx = sheetCtx()) {
   if (ctx.grid.editing) ctx.grid.cancelEdit();
   const col = ctx.source.columns[c];
   const fk = col.fk;
-  const labelX = ctx.source.labelCols.get(col.name);
+  // 複合外部キーは組になる列すべてに、参照先の同じ行の値をまとめて入れる
+  const pairs = (fk.cols ?? [col.name]).map((name, i) => [ctx.source.columns.findIndex((x) => x.name === name), (fk.refCols ?? [fk.refCol])[i]])
+    .filter(([ci]) => ci === c || (ci >= 0 && !ctx.source.columns[ci].readonly));
+  const refSel = pairs.map(([, rc]) => `__l0.${q(rc)}`);
+  const labelX = pairs.length === 1 ? ctx.source.labelCols.get(col.name) : null;
   const input = el('input.input', { placeholder: tr('{0} を検索', [fk.table]), autofocus: true });
   const list = el('div.fk-list');
   let items = [], active = 0;
-  const choose = async (v, label) => {
+  const choose = async (vals, label) => {
     closePopover();
     const g = ctx.grid;
-    if (r === g.newRowIndex) { g.draftSet(c, formText(v)); g.render(); g.emitSelect(); }
+    const changes = pairs.map(([ci], i) => ({ r, c: ci, value: vals[i] == null ? null : String(vals[i]) }));
+    if (r === g.newRowIndex) { pairs.forEach(([ci], i) => g.draftSet(ci, formText(vals[i]))); g.render(); g.emitSelect(); }
     // 詳細カードでは保存するまで書かない
-    else if (ctx.detail) ctx.detail.stage(c, v == null ? null : String(v), label);
-    else await g.write([{ r, c, value: v == null ? null : String(v) }], { reopen: !ctx.detail });
+    else if (ctx.detail) for (const ch of changes) await ctx.detail.stage(ch.c, ch.value, ch.c === c ? label : undefined);
+    else await g.write(changes, { reopen: !ctx.detail });
     ctx.detail ? ctx.detail.focus(c) : g.focus();
   };
   const renderList = () => {
-    list.replaceChildren(...items.map(([v, label], i) => el('button.fk-item', {
+    list.replaceChildren(...items.map(([vals, label], i) => el('button.fk-item', {
       class: i === active ? 'on' : '',
-      on: { mousedown: (e) => { e.preventDefault(); choose(v, label); } },
-    }, el('span.fk-v', String(v)), label != null ? el('span.fk-l', String(label)) : null)),
+      on: { mousedown: (e) => { e.preventDefault(); choose(vals, label); } },
+    }, el('span.fk-v', vals.map(String).join(' · ')), label != null ? el('span.fk-l', String(label)) : null)),
     !items.length ? el('div.muted.pad', tr('該当なし')) : '');
   };
   const search = async () => {
     const s = input.value.trim();
-    const lsel = labelX ? `, ${labelX}` : ', NULL';
-    const where = s ? ` WHERE CAST(__l0.${q(fk.refCol)} AS TEXT) LIKE ?1${labelX ? ` OR (${labelX}) LIKE ?1` : ''}` : '';
+    const conds = [...refSel.map((x) => `CAST(${x} AS TEXT) LIKE ?1`), ...(labelX ? [`(${labelX}) LIKE ?1`] : [])];
+    const where = s ? ` WHERE ${conds.join(' OR ')}` : '';
     try {
-      const res = await db.query(`SELECT __l0.${q(fk.refCol)}${lsel} FROM ${q(fk.table)} AS __l0${where} ORDER BY 1 LIMIT 100`, s ? [`%${s}%`] : undefined);
-      items = res.rows; active = 0; renderList();
+      const res = await db.query(`SELECT ${refSel.join(', ')}, ${labelX ?? 'NULL'} FROM ${q(fk.table)} AS __l0${where} ORDER BY ${refSel.map((_, i) => i + 1).join(', ')} LIMIT 100`, s ? [`%${s}%`] : undefined);
+      items = res.rows.map((row) => [row.slice(0, -1), row.at(-1)]); active = 0; renderList();
     } catch (e) { list.replaceChildren(el('div.field-error', friendlyError(e.message))); }
   };
   input.addEventListener('input', search);
@@ -4046,8 +4053,9 @@ function fkPicker(r, c, anchor, ctx = sheetCtx()) {
     if (e.key === 'ArrowUp') { e.preventDefault(); active = Math.max(0, active - 1); renderList(); list.children[active]?.scrollIntoView({ block: 'nearest' }); }
     if (isEnter(e)) { e.preventDefault(); if (items[active]) choose(...items[active]); }
   });
-  popover(anchor, el('div.fk-picker', el('div.ask-title', `→ ${fk.table}.${fk.refCol}`), input, list,
-    col.readonly ? null : el('button.btn.sm.link', { on: { click: () => choose(null) } }, tr('NULL にする'))), { onClose: () => (ctx.detail ? ctx.detail.focus(c) : ctx.grid?.focus()) });
+  const title = pairs.length === 1 ? `→ ${fk.table}.${fk.refCol}` : `→ ${fk.table}(${pairs.map(([, rc]) => rc).join(', ')})`;
+  popover(anchor, el('div.fk-picker', el('div.ask-title', title), input, list,
+    col.readonly ? null : el('button.btn.sm.link', { on: { click: () => choose(pairs.map(() => null)) } }, tr('NULL にする'))), { onClose: () => (ctx.detail ? ctx.detail.focus(c) : ctx.grid?.focus()) });
   search();
 }
 
