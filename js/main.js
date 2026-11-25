@@ -475,9 +475,6 @@ function buildChrome() {
           blur: (e) => commitDbName(e.target.value),
         },
       }),
-      // 今のシート（パンくず）。押すとシートのメニュー（タブの右クリックと同じ）
-      el('span#crumb-sep.crumb-sep', { hidden: true }, '›'),
-      el('button#sheet-crumb.sheet-crumb', { hidden: true, title: tr('シートの操作'), on: { click: (e) => state.key && tabMenu(state.key, e.currentTarget) } }),
       // ファイルを直接編集しているときだけ出す。未保存ならクリックで保存
       el('button#save-state.save-state', { hidden: true, on: { click: () => saveFile() } }),
       // メニューバー：機能の正式な入口（ツールバーはその近道）。狭い画面では ☰ 1つにまとめる
@@ -1806,7 +1803,8 @@ function dbActions(name, { anchor, home = false } = {}) {
     home ? { label: tr('開く'), icon: '↗', action: () => openDb(name) } : null,
     { label: tr('.sqlite に書き出す…'), icon: '⤓', action: () => exportCurrent(name) },
     { label: tr('.sqlitesheet に書き出す…'), icon: '📦', action: async () => { if (home) await openDb(name); if (state.dbName === name) exportProject(); } },
-    { label: tr('名前を変更…'), icon: '✎', action: () => (home ? renameDbAsk(name, anchor) : (() => { $('db-name').focus(); $('db-name').select(); })()) },
+    // シート画面の PC では DB 名の欄で直接変える。スマホは欄を出していないので尋ねる
+    { label: tr('名前を変更…'), icon: '✎', action: () => (home ? renameDbAsk(name, anchor) : phone.matches ? renameOpenDbAsk(anchor) : (() => { $('db-name').focus(); $('db-name').select(); })()) },
     { label: tr('複製…'), icon: '⧉', action: () => copyDb(name, anchor) },
     // 共有はシートやクエリシートを選ぶので、ホームからは開いてから
     { label: tr('共有…'), icon: '🔗', action: async () => { if (home) await openDb(name); if (state.dbName === name) shareDialog(); } },
@@ -2010,6 +2008,16 @@ async function renameDbAsk(from, anchor) {
   } catch (e) { toast(friendlyError(e.message), 'error'); }
 }
 
+/** 開いている DB の名前を尋ねて変える（スマホのシート画面。DB 名の欄を出していないため） */
+async function renameOpenDbAsk(anchor) {
+  const from = state.dbName;
+  const to = await ask(anchor, {
+    title: tr('新しい名前'), value: from, okLabel: tr('変更'),
+    validate: (v) => (v === from ? null : validDbName(v) || (state.dbs.includes(v) ? tr('「{0}」は既にあります', [v]) : null)),
+  });
+  if (to && to !== from) await commitDbName(to);
+}
+
 // 複製。シート画面からなら複製を開き、ホームからなら一覧に加えるだけ
 async function copyDb(from = state.dbName, anchor = $('file-btn')) {
   const opened = from === state.dbName;
@@ -2147,10 +2155,6 @@ function renderTabs() {
   }));
   tabs.querySelector('.tab.on')?.scrollIntoView({ inline: 'nearest', block: 'nearest' });
   updateTabNav();
-  // 上部のパンくず：DB 名 › 今のシート
-  const crumb = $('sheet-crumb'), has = !!state.key;
-  crumb.hidden = $('crumb-sep').hidden = !has;
-  if (has) crumb.replaceChildren(el('span.tab-icon', KIND_ICON[state.key[0]]), el('span.crumb-name', state.key.slice(2)));
 }
 
 /**

@@ -30,7 +30,6 @@ export default {
   "メニュー": "Menu",
   "データベースを検索": "Search databases",
   "クリックして名前を変更": "Click to rename",
-  "シートの操作": "Sheet actions",
   "ファイル": "File",
   "編集": "Edit",
   "表示形式": "Format",

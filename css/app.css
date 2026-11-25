@@ -153,14 +153,6 @@ select.input { padding-right: 4px; }
 .save-state { display: inline-flex; align-items: center; gap: 4px; }
 .caret { color: var(--text-3); font-size: 10px; }
 .db-icon { color: var(--accent); font-size: 12px; }
-/* パンくず：DB 名 › シート */
-.crumb-sep { flex: none; color: var(--text-3); font-size: 15px; margin: 0 -4px; }
-.sheet-crumb {
-  flex: 0 1 auto; min-width: 0; display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 8px;
-  border: 1px solid transparent; border-radius: 6px; background: none; color: var(--text); font-size: 14px; font-weight: 550;
-}
-.sheet-crumb:hover { background: var(--surface-2); }
-.crumb-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .menubar { display: flex; align-items: center; gap: 0; margin-left: 4px; }
 .menubar-btn { height: 28px; padding: 0 8px; border: 0; border-radius: 6px; background: none; color: var(--text-2); font-size: 13px; white-space: nowrap; }
 .menubar-btn:hover { background: var(--surface-2); color: var(--text); }
@@ -814,16 +806,19 @@ body.dropping::after {
   .toolbar { overflow-x: auto; scrollbar-width: none; }
   .tb-label, .cmd-btn, .tx-label, .menubar { display: none; }
   body:not(.at-home) .menubar-all { display: inline-grid; place-items: center; }
+  /* 戻る（‹）だけ左。ほかのボタンは右に寄せる */
+  body:not(.at-home) .home-btn { margin-right: auto; }
+  body:not(.at-home) .menubar-all { margin-left: 0; }
   .tx-box { padding-left: 2px; }
   /* 上部バーを画面幅に収める */
   .topbar { gap: 4px; padding: 0 6px; }
   .home-btn { width: 28px; }
-  .db-name { max-width: 28vw; }
+  /* DB 名は出さない（狭い上部バーを空ける。DB 名の変更は ☰ から） */
+  .db-name { display: none !important; }
   /* 手動保存の状態：変更がなければ ✓ だけ。未保存なら押しやすい大きさで「● 未保存」 */
   .save-state { padding: 0 6px; }
   .save-state:not(.dirty) .ss-text { display: none; }
   .save-state.dirty { height: 32px; }
-  .crumb-name { max-width: 28vw; }
   /* 縦並び。コンソールが低くても結果・実行履歴の欄が潰れないよう、入力欄は高さの 4 割まで */
   .console { min-height: 240px; }
   .console-body { grid-template-columns: 1fr; grid-template-rows: minmax(56px, 40%) minmax(0, 1fr); }
