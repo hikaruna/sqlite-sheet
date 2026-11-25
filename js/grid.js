@@ -79,6 +79,26 @@ export class Grid {
     delete this.draft.errors[c];
   }
 
+  /** 新しい行の下書きに、打った文字を入れる（空は未入力。フォームと共通） */
+  draftText(c, text) { this.draftSet(c, text === '' ? undefined : text); }
+
+  /**
+   * 既にある行のセルに打った文字を、書き込む値にする（フォームと共通）。書かなくてよければ undefined。
+   * start: 編集を始めたときの文字、isNull: 元が NULL、touched: 一度でも打った
+   * NULL のセルは空から始め、空のままなら NULL のまま、一度打ってから空にしたら空文字列。空なら NULL の列は空で NULL
+   */
+  textToValue(c, text, { start, isNull, touched }) {
+    const toNull = text === '' && this.cols[c]?.emptyIsNull;
+    const unchanged = text === start && !(isNull && touched);
+    if (toNull ? isNull : unchanged) return undefined;
+    return toNull ? null : form(text);
+  }
+
+  /** 編集中の欄に薄く出す NULL の印（表のセルとフォームで共通）。空なら NULL の列は常に、NULL のセルは打つまで */
+  nullHint(c, isNull, touched) {
+    return this.cols[c]?.emptyIsNull || (isNull && !touched) ? NULL_LABEL : '';
+  }
+
   /** 下書きの未入力のセルに薄く見せる文字（INSERT で何が入るか） */
   placeholderFor(c) {
     const col = this.cols[c];
@@ -1511,8 +1531,8 @@ export class Grid {
     const start = isNull ? '' : this.formAt(r, c);
     if (initial !== undefined) { /* 入力済みの文字をそのまま使う */ } else this.sink.value = start;
     this.editing = { mode, r, c, start, isNull, touched: this.sink.value !== '' };
-    this.sink.placeholder = r === this.newRowIndex && v === undefined ? this.placeholderFor(c)
-      : r !== this.newRowIndex && (this.cols[c].emptyIsNull || (isNull && !this.editing.touched)) ? 'NULL' : '';
+    this.sink.placeholder = r === this.newRowIndex ? (v === undefined ? this.placeholderFor(c) : '')
+      : this.nullHint(c, isNull, this.editing.touched);
     this.placeSink();
     if (mode === 'edit') { const n = this.sink.value.length; this.sink.setSelectionRange(n, n); }
     this.hooks.onEditState?.(true, this.sink.value);
@@ -1527,7 +1547,7 @@ export class Grid {
     if (this.sink.value !== '' && !this.editing.touched) {
       this.editing.touched = true;
       // 空で確定すると空文字列になるので「NULL」の表示を消す（空なら NULL になる列は出したまま）
-      if (this.editing.isNull && !this.cols[this.editing.c]?.emptyIsNull) this.sink.placeholder = '';
+      if (this.editing.r !== this.newRowIndex) this.sink.placeholder = this.nullHint(this.editing.c, this.editing.isNull, true);
     }
     this.placeSink();
     this.hooks.onEditState?.(true, this.sink.value);
@@ -1546,7 +1566,7 @@ export class Grid {
     const { r, c } = this.cur;
     if (!this.canEdit(r, c)) return false;
     if (text === this.formAt(r, c)) return true;
-    if (r === this.newRowIndex) { this.draftSet(c, text === '' ? undefined : text); this.render(); this.emitSelect(); return true; }
+    if (r === this.newRowIndex) { this.draftText(c, text); this.render(); this.emitSelect(); return true; }
     return this.write([{ r, c, value: form(text) }]);
   }
 
@@ -1564,7 +1584,7 @@ export class Grid {
     if (r === this.newRowIndex) {
       // 新しい行は下書きにためるだけ。Enter/Tab は右へ進み、最後の列で保存して次の新しい行へ
       // 下書きはフォームの文字列のまま持つ。空は未入力
-      if (!unchanged) this.draftSet(c, text === '' ? undefined : text);
+      if (!unchanged) this.draftText(c, text);
       if (move === 'down' || move === 'right') {
         if (c >= this.cols.length - 1) {
           this.moveTo(r, 0);
@@ -1580,10 +1600,8 @@ export class Grid {
     // 先に移動してから書き込む（書き込み待ちの間の入力を取りこぼさない）。失敗したら write がセルに戻す
     // 新しい行で Enter → 確定後も次の新しい行へ。Tab など横移動 → 追加された行に留まって続けて入力
     this.afterInsert = move === 'down' ? 'newrow' : 'stay';
-    // STRICT の数値の列を空で確定したら NULL（元から NULL なら変更なし）
-    const toNull = text === '' && this.cols[c]?.emptyIsNull;
-    const skip = toNull ? isNull : unchanged;
-    const pending = !skip ? this.write([{ r, c, value: toNull ? null : form(text) }]) : null;
+    const value = this.textToValue(c, text, { start, isNull, touched });
+    const pending = value !== undefined ? this.write([{ r, c, value }]) : null;
     // 最後の行の最後の列で Tab：入力の要らない表なら次の行を作る（Excel のテーブルと同じ）
     if (move === 'right' && r === this.rowCount - 1 && c === this.cols.length - 1 && this.canInsertEmpty) {
       if (pending) await pending;
@@ -1596,8 +1614,9 @@ export class Grid {
     if (pending) await pending;
   }
 
-  /** 書き込み。changes: [{r, c, value(文字列 or null)}] 新しい行へのものは INSERT */
-  async write(changes) {
+  /** 書き込み。changes: [{r, c, value(文字列 or null)}] 新しい行へのものは INSERT。
+   *  reopen: 1セルの入力が失敗したとき、セルで編集し直せるようにするか（フォームは自分の欄で直すので false） */
+  async write(changes, { reopen = true } = {}) {
     const updates = [], inserts = new Map();
     for (const ch of changes) {
       if (this.cols[ch.c]?.readonly) continue;
@@ -1648,7 +1667,7 @@ export class Grid {
     } catch (err) {
       // 1セルの入力なら、失敗した値を残して再編集できるようにする
       const ch = changes.length === 1 ? changes[0] : null;
-      const reopened = ch?.value?.form !== undefined;
+      const reopened = reopen && ch?.value?.form !== undefined;
       if (ch) {
         this.cur = { r: ch.r, c: ch.c }; this.ext = { ...this.cur };
         this.render(); this.emitSelect();
@@ -1665,7 +1684,7 @@ export class Grid {
         setTimeout(() => this.sink.classList.remove('invalid'), 1500);
       }
       this.hooks.onError?.(err);
-      if (ch) this.focus();
+      if (ch && reopen) this.focus();
       return false;
     }
   }

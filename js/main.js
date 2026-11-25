@@ -4,6 +4,8 @@ import { db, q } from './db-client.js';
 import { el, toast, menu, popover, closePopover, ask, confirmDialog, choiceDialog, modal, pickFile, download, exportFile, fmtBytes, isTouch, modKey, isMac, icon, appIcon, phone } from './ui.js';
 import { listObjects, readTable, createTableSql, migrationSql, constantDefault, TYPES, affinity } from './schema.js';
 import { Grid, CELL_FORMATS } from './grid.js';
+import { FormView } from './form.js';
+import { GalleryView } from './gallery.js';
 import { sniff, asText, hexDump } from './blob.js';
 import { parseTsv } from './clipboard.js';
 import { TableSource, QuerySource, ViewSource, viewWriteOps, FILTER_OPS, friendlyError, convertInput, formText, formToDefault } from './sources.js';
@@ -503,6 +505,9 @@ function buildChrome() {
       // 保護：テーブルなら常に出す（保護がなくても、ここから新しく保護できる）
       el('button#prot-btn.tb-btn', { title: tr('シートと範囲の保護'), on: { click: (e) => protPanel(e.currentTarget) } }, icon('lock'), el('span.tb-label', tr('保護')), el('span#prot-n.tb-count', { hidden: true })),
       el('span.vsep'),
+      // 表とフォーム（1行ずつのカード）の切り替え
+      el('button#mode-btn.tb-btn', { title: tr('ギャラリーで見る'), disabled: true, on: { click: () => setMode(state.gallery ? 'table' : 'gallery') } }, icon('gallery'), el('span.tb-label', tr('ギャラリー'))),
+      el('span.vsep'),
       // セルごとの書式（折り返し・画像表示など。スプレッドシートのツールバーと同じく、押すと選べる）
       ...formatButtons(),
       el('span.grow'),
@@ -528,6 +533,7 @@ function buildChrome() {
         el('div#sheet-head.sheet-head'),
         el('div#trust-bar.trust-bar', { hidden: true }),
         el('div#grid-host.grid-host')),
+      el('aside#detail.detail-panel', { hidden: true }),
       el('aside#panel.panel', { hidden: true })),
     el('section#console.console', { hidden: true }),
     // 並びはスプレッドシートにならって ＋・≡・タブ・‹ ›。スマホでは ≡・タブ・＋（‹ › は出さない。CSS の order で入れ替える）
@@ -651,6 +657,8 @@ function toggleConsole(force) {
 // ようこそ画面
 // ======================================================================
 async function showWelcome() {
+  closeViews();
+  $('detail').hidden = true;
   document.body.classList.add('at-home'); // ホームでは上部バーをホーム用（アプリ名・検索）にし、下のバーを隠す
   sqlConsole?.toggle(false);
   if (state.manual) await db.close().catch(() => {}); // 未保存の確認は呼ぶ側で済ませている
@@ -969,6 +977,7 @@ function unsaved() { return state.manual?.kind === 'url' && !state.manual.target
 
 /** 今の DB から離れてよいか。未保存の新しい行は保存し、ファイルの未保存の変更は保存するか尋ねる */
 async function leaveCurrent() {
+  if (!(await detailCanLeave())) return false;
   if (state.grid && !(await state.grid.flushDraft())) return false;
   if (!(await settleTx())) return false;
   if (!state.manual || !(state.dirty || unsaved())) return true;
@@ -1862,7 +1871,13 @@ const FORMAT_UI = [
 
 /** 「表示形式」メニュー：書式ごとに見出しと2択を並べる */
 function formatItems() {
-  return FORMAT_UI.flatMap((f) => [{ header: tr(f.title) }, ...formatToggleItems(f)]);
+  return [
+    // 表とフォームの切り替え（スマホはツールバーがないので、ここが入口）
+    { header: tr('シートの見え方') },
+    { label: tr('表'), icon: state.gallery ? '' : '✓', disabled: !state.grid, action: () => setMode('table') },
+    { label: tr('ギャラリー'), icon: state.gallery ? '✓' : '', disabled: !state.grid, action: () => setMode('gallery') },
+    ...FORMAT_UI.flatMap((f) => [{ header: tr(f.title) }, ...formatToggleItems(f)]),
+  ];
 }
 
 // ---------- ラベル列 ----------
@@ -2480,6 +2495,9 @@ async function labelColumns(model) {
 
 async function showSheet(key, { keepView = true } = {}) {
   closePopover();
+  // 詳細カードに保存していない変更があれば、保存するか聞く（戻るなら留まる）
+  if (!(await detailCanLeave())) { renderTabs(); return; }
+  closeViews();
   // 別のシートへ移るなら未保存の新しい行を保存（失敗したら留まる）。同じシートの再表示なら下書きを引き継ぐ
   let carryDraft = null;
   if (state.grid?.hasDraft) {
@@ -2568,8 +2586,136 @@ async function showSheet(key, { keepView = true } = {}) {
   } else if (!phone.matches) state.grid.focus();
   if (state.urlView) state.urlView.sig = selSig(state.grid);
   state.rangeReady = true;
+  if (view.mode === 'gallery') openGallery();
+  if (state.gallery && state.detailOpen) await openDetail({ focus: false });
+  else $('detail').hidden = true;
+  updateModeBtns();
   setUrl();
   updatePanel();
+}
+
+// ---------- フォーム（1行を1枚のカードで見る） ----------
+function openGallery() {
+  // PC のはじめ：並べた表示で、1行目を詳細カード（show）で開く
+  if (!phone.matches) {
+    state.expanded = false;
+    if (state.grid.rowCount) { state.grid.moveTo(0, state.grid.cur.c); state.detailOpen = true; }
+  }
+  state.gallery = new GalleryView($('grid-host'), state.grid, {
+    labelColumn: sheetLabel().col,
+    beforeMove: detailCanLeave,
+    onOpen: () => { state.detailOpen = true; openDetail(); },
+    onExpand: expandList,
+  });
+  document.body.classList.remove('has-sel'); // ギャラリーでは下はシートのタブ
+  applyExpanded();
+  state.gallery.render().then(() => state.gallery?.reveal());
+  if (!phone.matches) state.gallery.focus();
+}
+
+/** 詳細カード（右側のパネル）を開く。ギャラリーでカードを開いたときに、選んでいる行を見せる */
+async function openDetail({ focus = true } = {}) {
+  const g = state.grid;
+  if (!g) return;
+  if (g.editing) await g.commitEdit({ move: null });
+  if (!state.detail) {
+    state.detail = new FormView($('detail'), g, {
+      fkPick: (r, c, anchor) => fkPicker(r, c, anchor),
+      blobMenu: (r, c, anchor) => blobMenu(r, c, anchor),
+      viewBlob: (r, c) => viewBlob(r, c),
+      labelColumn: sheetLabel().col,
+      sheetName: state.key?.slice(2) ?? '',
+      // 広げた表示（PC だけ）：詳細カードをシートの幅いっぱいに出す
+      expanded: () => !!state.expanded && !phone.matches,
+      onExpand: (on) => setExpanded(on),
+      deleteRow: state.key?.[0] === 't' || state.source?.ops?.delete ? async () => { g.moveTo(g.cur.r, g.cur.c); await deleteSelectedRows(); } : null,
+      onError: (e) => toast(friendlyError(e.message), 'error'),
+      onUndo: doUndo,
+      onRedo: doRedo,
+      onClose: () => toggleDetail(false),
+    });
+  }
+  $('detail').hidden = false;
+  applyExpanded();
+  await state.detail?.render();
+  if (focus) state.detail?.focus();
+  updateModeBtns();
+}
+
+/**
+ * 最大化（PC だけ）：リストか詳細カードのどちらか一方を幅いっぱいに出す。
+ * 詳細カードを開いていれば詳細カード、閉じていればリストが最大。並べた表示に戻るのは詳細カードの ⤡ だけ
+ */
+function setExpanded(on) {
+  state.expanded = on;
+  applyExpanded();
+  if (state.detail) { state.detail.built = null; state.detail.render().then(() => state.detail?.focus()); }
+  if (!on) state.gallery?.reveal();
+}
+
+function applyExpanded() {
+  document.body.classList.toggle('view-expanded', !!state.expanded && !!state.gallery);
+}
+
+/** リストの ⤢：リストを最大にする（詳細カードは閉じる） */
+async function expandList() {
+  if (state.detail && !(await detailCanLeave())) return;
+  state.expanded = true;
+  if (state.detail) await toggleDetail(false);
+  applyExpanded();
+  state.gallery?.focus();
+}
+
+/** シートを離れるとき：ギャラリーと詳細カードを片付ける（詳細パネルを開いているかは覚えておく） */
+function closeViews() {
+  document.body.classList.remove('view-expanded');
+  state.gallery?.destroy(); state.gallery = null;
+  state.detail?.destroy(); state.detail = null;
+  $('grid-host')?.classList.remove('gallery-mode');
+}
+
+/** 詳細カードを離れてよいか（保存していない変更があれば、保存するか聞く） */
+async function detailCanLeave() {
+  return !state.detail || state.detail.confirmLeave();
+}
+
+async function toggleDetail(force) {
+  if (!state.grid) return;
+  const on = force ?? !state.detail;
+  if (on) { state.detailOpen = true; await openDetail(); return; }
+  await state.detail?.commitFocused();
+  if (!(await detailCanLeave())) return;
+  state.detailOpen = false;
+  state.detail?.destroy(); state.detail = null;
+  $('detail').hidden = true;
+  (state.gallery || state.grid).focus();
+  updateModeBtns();
+}
+
+async function setMode(mode) {
+  if (!state.key || !state.grid) return;
+  if (mode === 'table' && !(await detailCanLeave())) return;
+  viewOf(state.key).mode = mode;
+  if (mode === 'gallery' && !state.gallery) { openGallery(); if (state.detailOpen) await openDetail({ focus: false }); }
+  if (mode === 'table' && state.gallery) {
+    // 詳細カードはギャラリーの一部なので、表に戻すと閉じる
+    if (state.detail) { state.detail.destroy(); state.detail = null; $('detail').hidden = true; }
+    state.detailOpen = false;
+    state.gallery.destroy(); state.gallery = null;
+    applyExpanded();
+    state.grid.ensureVisible(); state.grid.render(); state.grid.focus();
+    // 表に戻ったら「選んでいる」状態を合わせ直す。スマホは開いた直後と同じく何も選ばない
+    if (phone.matches) await state.grid.deselect(); else state.grid.emitSelect();
+  }
+  updateModeBtns();
+}
+
+function updateModeBtns() {
+  const m = $('mode-btn');
+  if (!m) return;
+  m.disabled = !state.grid;
+  m.replaceChildren(icon(state.gallery ? 'table' : 'gallery'), el('span.tb-label', state.gallery ? tr('表') : tr('ギャラリー')));
+  m.title = state.gallery ? tr('表で見る') : tr('ギャラリーで見る');
 }
 
 async function reloadSheet() {
@@ -2864,8 +3010,11 @@ function gridHooks(kind) {
   return {
     externalImages: () => !store.isUntrusted(state.dbName),
     onSelect: (s) => {
-      document.body.classList.toggle('has-sel', !!s);
+      // 「選んでいる」状態（スマホでは下をツールバーにする）は表のときだけ。ギャラリーではシートのタブのまま
+      document.body.classList.toggle('has-sel', !!s && !state.gallery);
       updateFormatButtons();
+      state.gallery?.render().then(() => state.gallery?.reveal());
+      state.detail?.render();
       dropUrlView();
       // 数式バーで次のセルを打っている最中（前のセルの保存が後から終わったとき）は、打った文字を上書きしない
       if (state.grid?.editing && document.activeElement === $('fx-input')) return;
@@ -3501,17 +3650,19 @@ function fkPicker(r, c, anchor) {
   const input = el('input.input', { placeholder: tr('{0} を検索', [fk.table]), autofocus: true });
   const list = el('div.fk-list');
   let items = [], active = 0;
-  const choose = async (v) => {
+  const choose = async (v, label) => {
     closePopover();
     const g = state.grid;
     if (r === g.newRowIndex) { g.draftSet(c, formText(v)); g.render(); g.emitSelect(); }
-    else await g.write([{ r, c, value: v == null ? null : String(v) }]);
-    state.grid.focus();
+    // 詳細カードでは保存するまで書かない
+    else if (state.detail) state.detail.stage(c, v == null ? null : String(v), label);
+    else await g.write([{ r, c, value: v == null ? null : String(v) }], { reopen: !state.detail });
+    state.detail ? state.detail.focus(c) : state.grid.focus();
   };
   const renderList = () => {
     list.replaceChildren(...items.map(([v, label], i) => el('button.fk-item', {
       class: i === active ? 'on' : '',
-      on: { mousedown: (e) => { e.preventDefault(); choose(v); } },
+      on: { mousedown: (e) => { e.preventDefault(); choose(v, label); } },
     }, el('span.fk-v', String(v)), label != null ? el('span.fk-l', String(label)) : null)),
     !items.length ? el('div.muted.pad', tr('該当なし')) : '');
   };
@@ -3528,10 +3679,10 @@ function fkPicker(r, c, anchor) {
   input.addEventListener('keydown', (e) => {
     if (e.key === 'ArrowDown') { e.preventDefault(); active = Math.min(items.length - 1, active + 1); renderList(); list.children[active]?.scrollIntoView({ block: 'nearest' }); }
     if (e.key === 'ArrowUp') { e.preventDefault(); active = Math.max(0, active - 1); renderList(); list.children[active]?.scrollIntoView({ block: 'nearest' }); }
-    if (isEnter(e)) { e.preventDefault(); if (items[active]) choose(items[active][0]); }
+    if (isEnter(e)) { e.preventDefault(); if (items[active]) choose(...items[active]); }
   });
   popover(anchor, el('div.fk-picker', el('div.ask-title', `→ ${fk.table}.${fk.refCol}`), input, list,
-    col.readonly ? null : el('button.btn.sm.link', { on: { click: () => choose(null) } }, tr('NULL にする'))), { onClose: () => state.grid?.focus() });
+    col.readonly ? null : el('button.btn.sm.link', { on: { click: () => choose(null) } }, tr('NULL にする'))), { onClose: () => (state.detail ? state.detail.focus(c) : state.grid?.focus()) });
   search();
 }
 
@@ -3762,13 +3913,14 @@ async function deleteSelectedRows() {
 /** BLOB のセルの操作（ファイルから読み込む・ダウンロード・NULL にする） */
 function blobActions(r, c) {
   const g = state.grid;
-  const row = g.rowAt(r);
-  const v = row?.values[c];
+  // 詳細カード（新しい行でないとき）では、読み込み・NULL は保存するまでカードの中だけで持つ
+  const d = state.detail && !state.detail.isNew && state.detail.r === r ? state.detail : null;
+  const v = d ? d.shownValue(c) : g.rowAt(r)?.values[c];
   return {
     v,
-    load: () => loadFileInto(r, c),
+    load: d ? async () => { const f = await pickFile(''); if (f && state.detail === d) d.stage(c, new Uint8Array(await f.arrayBuffer())); } : () => loadFileInto(r, c),
     download: () => { const k = sniff(v); download(v, `${state.source.columns[c].name}.${k.ext}`, k.mime); },
-    clear: () => g.write([{ r, c, value: null }]),
+    clear: d ? () => d.stage(c, null) : () => g.write([{ r, c, value: null }]),
   };
 }
 

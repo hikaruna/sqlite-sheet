@@ -1054,3 +1054,102 @@ button.view-ops:hover { text-decoration: underline; }
 /* 外から来たシートの設定を許可するまでの知らせ */
 .trust-bar { flex: none; display: flex; align-items: center; gap: 10px; padding: 6px 12px; border-bottom: 1px solid var(--pending); background: var(--pending-soft); color: var(--text); font-size: 12px; }
 .trust-bar > span { flex: 1; min-width: 0; }
+
+/* ---------- ギャラリー（行をカードにして縦1列に並べる） ---------- */
+.grid-host.gallery-mode > .grid-scroll, .grid-host.gallery-mode > .fs-track { display: none; }
+.gallery { position: absolute; inset: 0; display: flex; flex-direction: column; background: var(--bg); }
+.g-head { flex: none; display: flex; align-items: center; gap: 8px; height: 44px; padding: 0 12px 0 16px; border-bottom: 1px solid var(--line); background: var(--surface); }
+.g-count { font-size: 12px; font-variant-numeric: tabular-nums; }
+.g-list { flex: 1; min-height: 0; overflow: auto; outline: none; }
+.g-fab { display: none; position: absolute; right: 16px; bottom: 16px; width: 56px; height: 56px; border: 0; border-radius: 50%; background: var(--accent); color: #fff; font-size: 28px; line-height: 1; box-shadow: 0 3px 10px rgba(20, 28, 38, .25); cursor: pointer; }
+body.in-gallery .fxbar, body.in-gallery .sym-row { display: none !important; }
+@media (max-width: 760px) {
+  .g-head { display: none; }
+  .g-fab { display: block; }
+  .g-list:has(+ .g-fab) .gallery-inner { margin-bottom: 88px; } /* 最後のカードが丸いボタンに隠れないように */
+}
+.gallery-inner { position: relative; }
+.g-card { position: absolute; left: 0; right: 0; display: flex; align-items: center; gap: 12px; padding: 0 16px; overflow: hidden; text-align: left; font: inherit; color: inherit;
+  background: var(--surface); border: 0; border-bottom: 1px solid var(--line); border-radius: 0; cursor: pointer; }
+.g-card:hover { background: var(--surface-2); }
+.g-card.on { background: var(--sel); }
+.g-thumb { flex: none; width: 64px; height: 64px; display: flex; align-items: center; justify-content: center; overflow: hidden; background: var(--surface-2); border: 1px solid var(--line); border-radius: 6px; }
+.g-thumb img { width: 100%; height: 100%; object-fit: cover; }
+.g-thumb .muted { font-size: 10px; padding: 4px; text-align: center; overflow-wrap: anywhere; }
+.g-body { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.g-title { font-weight: 600; line-height: 22px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.g-sub { display: flex; gap: 8px; font-size: 12px; line-height: 20px; white-space: nowrap; overflow: hidden; color: var(--text-2); }
+.g-key { flex: none; max-width: 40%; color: var(--text-3); overflow: hidden; text-overflow: ellipsis; }
+.g-val { overflow: hidden; text-overflow: ellipsis; }
+.g-null { color: var(--text-3); font-style: italic; }
+
+/* ---------- 詳細カード（右側のパネル。選んだ行を1枚のカードで見る・直す） ---------- */
+.detail-panel { flex: none; width: 50%; /* 並べた表示はリストと半分ずつ */ display: flex; flex-direction: column; min-height: 0; border-left: 1px solid var(--line); background: var(--surface); }
+.form-view { flex: 1; min-height: 0; overflow: auto; outline: none; }
+.form-nav { position: sticky; top: 0; z-index: 1; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; padding: 8px 12px; border-bottom: 1px solid var(--line); background: var(--surface); }
+.form-close { padding: 0 8px; }
+.form-pos { min-width: 64px; text-align: center; font-variant-numeric: tabular-nums; color: var(--text-2); }
+.form-fields { display: flex; flex-direction: column; gap: 4px; padding: 8px 14px 24px; }
+.form-field { display: contents; }
+.form-label { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 6px; padding-top: 10px; overflow-wrap: anywhere; }
+.form-name { font-weight: 600; }
+.form-badges { display: inline-flex; gap: 3px; }
+.form-input-row { display: flex; gap: 6px; align-items: flex-start; min-width: 0; }
+.form-input { flex: 1; min-width: 0; width: 100%; }
+textarea.form-input { font-family: inherit; }
+.form-input.is-null::placeholder { font-style: italic; }
+.form-input:disabled { background: var(--surface-2); color: var(--text-2); }
+.form-note { font-size: 12px; color: var(--text-3); }
+.form-note:empty { display: none; }
+.form-note.fk-note { color: var(--fk); }
+.form-field.invalid .form-input { border-color: var(--danger); }
+.form-field.pending .form-input, .form-field.pending .form-blob { border-color: var(--pending); background: var(--pending-soft); }
+.form-field.pending .form-name::after { content: ' ●'; color: var(--pending); }
+/* show：読むだけ（列名は小さく灰色、値は大きめ） */
+.form-show .form-fields { gap: 2px; padding-top: 12px; }
+.form-show .form-label { padding-top: 10px; font-size: 12px; color: var(--text-3); }
+.form-show .form-name { font-weight: 500; }
+.form-value { font-size: 15px; line-height: 22px; min-height: 22px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.form-value.is-null { color: var(--text-3); font-style: italic; font-size: 13px; }
+.form-close .fc-sp, .form-del .fd-sp { display: none; }
+.form-close { order: 99; }
+.form-sep { width: 1px; height: 20px; background: var(--line); margin: 0 2px; }
+.form-title { min-width: 0; flex: 0 1 auto; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.form-title:empty { display: none; }
+.form-nav.is-expanded .form-title { font-size: 15px; }
+/* 広げた表示（PC だけ）：詳細カードをシートの幅いっぱいに */
+@media (min-width: 761px) {
+  body.view-expanded .workspace:has(> .detail-panel:not([hidden])) > .sheet { display: none; }
+  body.view-expanded .detail-panel { flex: 1; width: auto; border-left: 0; }
+  body.view-expanded .form-fields { max-width: 760px; margin: 0 auto; width: 100%; box-sizing: border-box; }
+  body.view-expanded .g-expand { display: none; }
+}
+.form-fab { display: none; position: absolute; right: 16px; bottom: calc(16px + env(safe-area-inset-bottom)); width: 56px; height: 56px; border: 0; border-radius: 50%; background: var(--accent); color: #fff; font-size: 24px; box-shadow: 0 3px 10px rgba(20, 28, 38, .25); cursor: pointer; z-index: 2; }
+.detail-panel { position: relative; }
+@media (max-width: 760px) {
+  .form-close .fc-pc { display: none; }
+  .form-close .fc-sp { display: inline; }
+  /* show の上部バーは AppSheet にならい、← とゴミ箱のアイコンだけ（タイトルなし、枠なし） */
+  .form-nav.is-show { padding: 6px 8px; }
+  .form-nav.is-show .form-title { display: none; }
+  .form-nav.is-show .form-close, .form-nav.is-show .form-del { width: 40px; height: 40px; padding: 0; border: 0; background: none; display: inline-grid; place-items: center; color: var(--text); }
+  .form-nav.is-show .form-close .fc-sp, .form-nav.is-show .form-del .fd-sp { display: inline-grid; }
+  .form-nav.is-show .form-del .fd-pc { display: none; }
+  .form-nav.is-show .ico { width: 22px; height: 22px; }
+  .form-close { order: 0; }
+  .form-nav.is-show .form-sep { display: none; }
+  .form-expand, .g-expand { display: none; }
+  .form-nav.is-show .form-step, .form-nav.is-show .form-pos, .form-nav.is-show .form-edit { display: none; }
+  .form-fab { display: block; }
+  .form-show .form-fields { padding-bottom: 88px; } /* 最後の欄が丸いボタンに隠れないように */
+}
+textarea.form-input { resize: none; overflow: hidden; line-height: 20px; min-height: 32px; }
+.form-field.invalid .form-note { color: var(--danger); }
+.form-blob { align-self: flex-start; display: flex; flex-direction: column; align-items: flex-start; gap: 4px; padding: 6px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface-2); cursor: pointer; color: inherit; font: inherit; }
+.form-blob img { max-width: 100%; max-height: 260px; min-width: 24px; min-height: 24px; object-fit: contain; border-radius: 4px; }
+.form-blob:disabled { cursor: default; }
+.form-empty { padding: 40px; text-align: center; }
+@media (max-width: 760px) {
+  /* スマホ：詳細カードは全画面に重ねる */
+  .detail-panel { position: fixed; inset: 0; width: 100%; z-index: 50; border-left: 0; }
+}
