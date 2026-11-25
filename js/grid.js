@@ -154,6 +154,7 @@ export class Grid {
         // 式を計算できなかった列が分かれば、その列に印を付ける
         this.draft.errors = err.col >= 0 ? { [err.col]: err.message } : this.draftErrors(err.message);
         const firstErr = Object.keys(this.draft.errors).map(Number)[0];
+        this.none = false; // 選択を解除した後でも、どの行が保存できなかったか見せる
         this.cur = { r: this.newRowIndex, c: firstErr ?? Math.min(this.cur.c, this.cols.length - 1) };
         this.ext = { ...this.cur };
         this.ensureVisible(); this.render(); this.emitSelect(); this.focus();
@@ -1010,6 +1011,7 @@ export class Grid {
         if (this.source.protect?.(row.values, c).length) cell.classList.add('prot');
       }
       if (col.fk && this.source.editable && r === this.cur.r && c === this.cur.c && this.hooks.onFkPick) {
+        cell.classList.add('has-drop');
         cell.append(el('button.fk-drop', {
           title: tr('参照先から選ぶ（Alt+↓）'),
           on: { mousedown: (e) => { e.preventDefault(); e.stopPropagation(); this.hooks.onFkPick(r, c, e.currentTarget); } },
@@ -1242,6 +1244,8 @@ export class Grid {
   /** 選択を解除する（スマホの上部バーの ✓）。編集中なら確定してから */
   async deselect() {
     if (this.editing) await this.commitEdit({ move: null });
+    // 新しい行の下書きは保存してから。保存できなければ選んだまま残し、✕ で取り消せるようにする
+    if (this.draft && !(await this.flushDraft())) return;
     this.none = true;
     this.colSelect = this.rowSelect = false;
     this.sink.blur();
@@ -1496,12 +1500,13 @@ export class Grid {
   async addRow() {
     if (!this.canInsert) return;
     if (this.editing) await this.commitEdit({ move: null });
-    if (!this.canInsertEmpty) {
+    const toDraft = () => {
       this.openDraft();
+      this.none = false;
       this.cur = { r: this.newRowIndex, c: 0 }; this.ext = { ...this.cur };
       this.ensureVisible(); this.render(); this.emitSelect();
-      return;
-    }
+    };
+    if (!this.canInsertEmpty) return toDraft();
     try {
       await this.source.insert([new Array(this.cols.length).fill(undefined)]);
       await this.reload();
@@ -1510,7 +1515,11 @@ export class Grid {
       if (c < 0) c = 0;
       // 並べ替えがなければ追加した行は末尾（rowid 順）。並べ替え中は末尾に来るとは限らない
       this.moveTo(this.rowCount - 1, c);
-    } catch (err) { this.hooks.onError?.(err); }
+    } catch (err) {
+      // 既定値だけでは制約（外部キー・CHECK など）を満たせない。下書きの行を開いて値を入れてもらう
+      this.hooks.onError?.(err);
+      toDraft();
+    }
   }
 
   currentValue() {

@@ -182,7 +182,12 @@ export class TableSource {
     this.t = q(model.name);
     this.hasRowid = !model.withoutRowid;
     this.fkByCol = new Map();
-    for (const f of model.fks) if (f.cols.length === 1) this.fkByCol.set(f.cols[0], { table: f.table, refCol: f.refCols[0] });
+    // 複合外部キーでは、各列が自分の参照先の列（refCol）と、組になる列全体（cols・refCols）を持つ
+    for (const f of model.fks) {
+      f.cols.forEach((col, i) => {
+        if (!this.fkByCol.has(col)) this.fkByCol.set(col, { table: f.table, refCol: f.refCols[i], cols: f.cols, refCols: f.refCols });
+      });
+    }
     this.labelCols = labelCols; // 列名 → 参照先の行のラベルの SQL 式（参照先の別名は __l0）
     const uniq = new Set(model.uniques.filter((u) => u.length === 1).map((u) => u[0]));
     this.columns = model.columns.map((c) => {
@@ -224,7 +229,9 @@ export class TableSource {
     const cols = this.model.columns.map((c) => `${this.t}.${q(c.name)}`);
     const labels = this.columns.map((c, i) => {
       const lx = c.fk && this.labelCols.get(c.name);
-      return lx ? `(SELECT ${lx} FROM ${q(c.fk.table)} AS __l0 WHERE __l0.${q(c.fk.refCol)} = ${this.t}.${q(c.name)} LIMIT 1) AS __l${i}` : null;
+      if (!lx) return null;
+      const on = c.fk.cols.map((name, j) => `__l0.${q(c.fk.refCols[j])} = ${this.t}.${q(name)}`).join(' AND ');
+      return `(SELECT ${lx} FROM ${q(c.fk.table)} AS __l0 WHERE ${on} LIMIT 1) AS __l${i}`;
     });
     this.labelIdx = labels.map((l) => !!l);
     const key = this.hasRowid ? [`${this.t}._rowid_`] : [];
