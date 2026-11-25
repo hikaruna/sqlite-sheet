@@ -3387,6 +3387,8 @@ function gridHooks(kind) {
     onError: (e) => toast(friendlyError(e.message), 'error'),
     // 1セルの入力を確定できなかった。スマホは数式バーで直す（引き受けたら true。PC はこれまで通りグリッドに任せる）
     onEditError: showEditError,
+    // 新しい行を保存できなかった。スマホは ✓ を ✕ に変えて、下書きを取り消せるようにする
+    onDraftError: () => { if (phone.matches) document.body.classList.add('edit-err'); },
     onInfo: (m) => toast(m),
     onUndo: doUndo,
     onRedo: doRedo,
@@ -3743,8 +3745,11 @@ async function commitPhoneEdit() {
 
 // ✕：確定できなかった入力をやめて元の値に戻し、入力も終える
 function cancelPhoneEdit() {
+  const g = state.grid;
   clearEditError();
-  if (state.grid?.editing) state.grid.cancelEdit();
+  if (g?.editing) g.cancelEdit();
+  // 保存できなかった新しい行は、下書きごと捨てる（スマホには Esc がないので、ここが唯一の取り消し）
+  if (g && g.cur.r === g.newRowIndex) g.cancelDraft();
   const fx = $('fx-input');
   if (document.activeElement === fx) fx.blur();
   updateFx();
