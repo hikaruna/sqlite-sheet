@@ -92,7 +92,17 @@ if (window.visualViewport) {
     root.setProperty('--vvtop', Math.max(0, vv.pageTop) + 'px');
     root.setProperty('--kb', Math.max(0, innerHeight - vv.height - vv.offsetTop) + 'px');
   };
-  vv.addEventListener('resize', sync); vv.addEventListener('scroll', sync); addEventListener('scroll', sync); sync();
+  // 画面が縮んだら、入力中の欄をスクロールして見せる。iPhone は画面全体を縮めると自分ではスクロールしてくれない
+  // （キーボードが出たまま別の欄へ移ったときも同じ）
+  let lastH = vv.height;
+  const reveal = (a = document.activeElement) => {
+    if (a?.matches?.('input, textarea, select, [contenteditable]') && !a.classList.contains('grid-sink')) {
+      requestAnimationFrame(() => a.scrollIntoView({ block: 'nearest' }));
+    }
+  };
+  vv.addEventListener('resize', () => { sync(); if (vv.height < lastH) reveal(); lastH = vv.height; });
+  document.addEventListener('focusin', (e) => { if (document.documentElement.classList.contains('kb-open')) reveal(e.target); });
+  vv.addEventListener('scroll', sync); addEventListener('scroll', sync); sync();
   // アプリへ戻った直後は見える範囲の値が落ち着くまで少しかかるので、少し待ってからも取り直す
   const resync = () => { sync(); requestAnimationFrame(sync); setTimeout(sync, 300); };
   addEventListener('pageshow', resync);
