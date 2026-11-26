@@ -8,7 +8,7 @@ import { FormView } from './form.js';
 import { GalleryView } from './gallery.js';
 import { sniff, asText, hexDump } from './blob.js';
 import { parseTsv } from './clipboard.js';
-import { TableSource, QuerySource, ViewSource, viewWriteOps, FILTER_OPS, friendlyError, convertInput, formText, formToDefault } from './sources.js';
+import { TableSource, QuerySource, ViewSource, GroupSource, viewWriteOps, FILTER_OPS, friendlyError, convertInput, formText, formToDefault } from './sources.js';
 import { txMarks } from './txmarks.js';
 import { DesignPanel } from './design-panel.js';
 import { SqlConsole } from './console.js';
@@ -1892,17 +1892,121 @@ function sheetCols() {
   return (state.source?.columns || []).map((c) => ({ name: c.name, type: c.type, pk: pk.includes(c.name) }));
 }
 
-/** 今のシートのラベル列 { set: 選んだ列（自動なら null）, col: 実際に使う列 } */
-function sheetLabel() {
-  const cols = sheetCols();
-  const set = getLabelColumn(state.dbName, labelKey());
+/** シート key のラベル列 { set: 選んだ列（自動なら null）, col: 実際に使う列 }。cols は [{ name, type, pk }] */
+function labelOf(key, cols) {
+  const set = getLabelColumn(state.dbName, key[0] === 't' ? key.slice(2) : key);
   const ok = set && cols.some((c) => c.name === set) ? set : null;
   return { set: ok, col: ok ?? autoLabel(cols) };
 }
+const sheetLabel = () => labelOf(state.key, sheetCols());
 
 async function chooseLabel(col) {
   setLabelColumn(state.dbName, labelKey(), col);
   await showSheet(state.key);
+}
+
+// ---------- グループ：フォームで、キーの列の値が同じ行を1枚にまとめる ----------
+const groupStore = () => `group:${state.dbName}/${labelKey()}`;
+
+/** 今のシートのグループのキーの列（端末側 group:<DB>/<シート>）。無い列は外す */
+function sheetGroup() {
+  let keys;
+  try { keys = JSON.parse(localStorage.getItem(groupStore())); } catch { keys = null; }
+  const cols = state.source?.columns || [];
+  return Array.isArray(keys) ? keys.filter((k) => cols.some((c) => c.name === k)) : [];
+}
+
+async function setGroup(keys) {
+  try { if (keys.length) localStorage.setItem(groupStore(), JSON.stringify(keys)); else localStorage.removeItem(groupStore()); } catch { /* 無視 */ }
+  await showSheet(state.key);
+}
+
+/** 列見出しのメニューの項目：この列をグループのキーに足す・外す（BLOB の列は出さない） */
+function groupItem(col) {
+  if (/BLOB/i.test(col.type || '')) return null;
+  const keys = sheetGroup();
+  return keys.includes(col.name)
+    ? { label: tr('グループのキーから外す'), icon: '▤', action: () => setGroup(keys.filter((k) => k !== col.name)) }
+    : { label: keys.length ? tr('グループのキーに足す') : tr('この列でグループにまとめる（フォーム）'), icon: '▤', action: () => setGroup([...keys, col.name]) };
+}
+
+/** フォームでまとめるなら、グループを1行とする表（見えない Grid）を state.groupGrid に作る。ギャラリーと詳細カードはこちらを見る */
+async function openGroupGrid() {
+  closeGroupGrid();
+  const keys = sheetGroup();
+  if (!keys.length) return;
+  // キーの値を変えられるのは、テーブル（シートごと保護していない）と UPDATE のトリガーがあるビュー
+  const kind = state.key[0];
+  const target = { key: state.key, name: state.key.slice(2), editable: kind === 't' ? state.source.editable : kind === 'v' && !!state.source.ops?.update };
+  try {
+    const source = await new GroupSource(`${state.dbName}/${state.key}#group`, sheetSql(state.key), keys, viewOf(state.key), state.source.columns, state.source.labelCols, target).init();
+    source.onNotice = (m) => toast(m, 'info', 6000);
+    const host = el('div.ref-grid', { hidden: true });
+    $('grid-host').append(host);
+    state.groupGrid = new Grid(host, source, {
+      onSelect: () => { state.gallery?.render().then(() => state.gallery?.reveal()); state.detail?.render(); },
+      onError: (e) => toast(friendlyError(e.message), 'error'),
+    });
+    await state.groupGrid.reload({ keepSelection: false });
+  } catch (e) { closeGroupGrid(); toast(friendlyError(e.message), 'error'); }
+}
+
+function closeGroupGrid() { state.groupGrid?.host.remove(); state.groupGrid = null; }
+
+/** 書き込んだあと：グループの一覧と、開いているグループのカードを読み直す（グループが増えたり消えたりする） */
+async function reloadGroups() {
+  if (!state.groupGrid) return;
+  await state.groupGrid.reload();
+  state.gallery?.render();
+  if (state.detail) { state.detail.built = null; await state.detail.render(); }
+}
+
+/** フォーム（ギャラリーと詳細カード）が見る表：まとめていればグループの表 */
+const formGrid = () => state.groupGrid || state.grid;
+
+/** フォームの題名にする列：まとめていれば、キーのうちラベル列。無ければキーから自動で選び、それも無ければ最初のキー */
+function formLabel() {
+  const keys = state.groupGrid?.source.keys, col = sheetLabel().col;
+  if (!keys) return col;
+  return keys.includes(col) ? col : autoLabel(sheetCols().filter((c) => keys.includes(c.name))) ?? keys[0];
+}
+
+/** グループの追加：シートの新しい行を、詳細カードの上に重ねて開く。保存して新しいグループができたら、それを選ぶ */
+async function addGroup() {
+  const groups = async () => { const g = state.groupGrid; return g?.rowCount ? (await g.rowsBetween(0, g.rowCount - 1)).map((row) => row && groupSig(row)) : []; };
+  const before = new Set(await groups());
+  state.detailOpen = true;
+  await openDetail({ focus: false });
+  // 新しい行のフォームは、親（キーの列）と最初の子（それ以外の列）に分けて見せる
+  const keys = state.groupGrid.source.keys, rest = state.source.columns.map((c) => c.name).filter((n) => !keys.includes(n));
+  const sections = [{ title: tr('親'), cols: keys }, { title: tr('最初の子'), cols: rest }];
+  await openRelatedAdd(0, { key: state.key, conds: [], title: state.key.slice(2), hide: [], sections }, async () => {
+    const r = (await groups()).findIndex((x) => x && !before.has(x));
+    if (r >= 0) state.groupGrid?.moveTo(r, 0);
+  });
+}
+
+/** グループの行を見分ける文字列（キーの値。型も含める） */
+const groupSig = (row) => row.values.map((v) => (v == null ? 'null' : typeof v + ':' + String(v))).join('\u0000');
+
+/** グループの詳細カード：キーの値が同じシートの行を、Related と同じカードで box に描く */
+async function renderGroupRows(form, box) {
+  box._cleanup?.();
+  const token = (box._token = (box._token || 0) + 1);
+  const g = form.grid, row = g.rowAt(form.r) ?? (await g.rowsBetween(form.r, form.r))?.[0];
+  if (box._token !== token) return;
+  if (!row) { box.replaceChildren(); return; }
+  const view = viewOf(state.key), keys = g.source.keys;
+  const sub = { key: state.key, conds: keys.map((k, c) => [k, row.values[c]]), title: state.key.slice(2), hide: keys, sorts: view.sorts, filters: view.filters, nullIsEmpty: true };
+  const page = {};
+  box._cleanup = () => page.gridHost?.remove();
+  try { await filteredGrid(page, sub); } catch (e) {
+    if (box._token === token) box.replaceChildren(el('div.rel-empty.muted', friendlyError(e.message)));
+    return;
+  }
+  if (box._token !== token) { page.gridHost.remove(); return; }
+  const card = await subCard(0, sub, page.grid);
+  if (box._token === token) box.replaceChildren(card);
 }
 
 /** 表示形式メニューの「ラベル列」：選ぶと同じ場所に列の一覧を出す */
@@ -2496,6 +2600,34 @@ async function labelColumns(model) {
   return map;
 }
 
+/** シート key の SELECT（テーブル・ビューは全列、クエリはその SQL） */
+const sheetSql = (key) => (key[0] === 'q' ? state.queries.find((x) => x.name === key.slice(2))?.sql || 'SELECT 1' : `SELECT * FROM ${q(key.slice(2))}`);
+
+/**
+ * シート key の行を view（並べ替え・絞り込み）で読む Source。{ source, model（テーブルだけ）, prots }。
+ * テーブルは保護を当て、無い列の並べ替え・絞り込み（URL などから来たもの）を view から捨てる
+ */
+async function sheetSource(key, view) {
+  const kind = key[0], name = key.slice(2);
+  if (kind === 't') {
+    const model = await readTable(name);
+    const has = (c) => model.columns.some((x) => x.name === c);
+    view.sorts = view.sorts.filter((x) => has(x.col)); view.filters = view.filters.filter((x) => has(x.col));
+    const source = new TableSource(state.dbName, model, view, await labelColumns(model));
+    const prots = readProtections(model);
+    source.protect = protectionChecker(model, prots);
+    if (prots.some((p) => p.kind === 'sheet')) source.editable = false;
+    return { source, model, prots };
+  }
+  const ops = kind === 'v' ? await viewWriteOps(name) : null;
+  let source;
+  if (ops && (ops.update || ops.insert || ops.delete)) {
+    source = await new ViewSource(`${state.dbName}/${key}`, name, view, ops).init();
+    source.onNotice = (m) => toast(m, 'info', 6000);
+  } else source = await new QuerySource(`${state.dbName}/${key}`, sheetSql(key), view).init();
+  return { source, model: null, prots: [] };
+}
+
 async function showSheet(key, { keepView = true } = {}) {
   closePopover();
   // 詳細カードに保存していない変更があれば、保存するか聞く（戻るなら留まる）
@@ -2543,27 +2675,7 @@ async function showSheet(key, { keepView = true } = {}) {
   const kind = key[0], name = key.slice(2);
   const view = viewOf(key);
   try {
-    if (kind === 't') {
-      state.model = await readTable(name);
-      // URL などから来た、無い列の並べ替え・絞り込みは捨てる
-      const has = (c) => state.model.columns.some((x) => x.name === c);
-      view.sorts = view.sorts.filter((x) => has(x.col)); view.filters = view.filters.filter((x) => has(x.col));
-      state.source = new TableSource(state.dbName, state.model, view, await labelColumns(state.model));
-      state.prots = readProtections(state.model);
-      state.source.protect = protectionChecker(state.model, state.prots);
-      if (state.prots.some((p) => p.kind === 'sheet')) state.source.editable = false;
-    } else {
-      state.prots = [];
-      state.model = null;
-      const ops = kind === 'v' ? await viewWriteOps(name) : null;
-      if (ops && (ops.update || ops.insert || ops.delete)) {
-        state.source = await new ViewSource(`${state.dbName}/${key}`, name, view, ops).init();
-        state.source.onNotice = (m) => toast(m, 'info', 6000);
-      } else {
-        const sql = kind === 'v' ? `SELECT * FROM ${q(name)}` : state.queries.find((x) => x.name === name)?.sql || 'SELECT 1';
-        state.source = await new QuerySource(`${state.dbName}/${key}`, sql, view).init();
-      }
-    }
+    ({ source: state.source, model: state.model, prots: state.prots } = await sheetSource(key, view));
   } catch (e) {
     state.source = null; state.grid = null;
     updateStatus();
@@ -2590,7 +2702,11 @@ async function showSheet(key, { keepView = true } = {}) {
   } else if (!phone.matches) state.grid.focus();
   if (state.urlView) state.urlView.sig = selSig(state.grid);
   state.rangeReady = true;
-  if (view.mode === 'gallery') openGallery();
+  if (view.mode === 'gallery') {
+    await openGroupGrid();
+    if (state.grid !== grid) return;
+    openGallery();
+  }
   if (state.gallery && state.detailOpen) await openDetail({ focus: false });
   else $('detail').hidden = true;
   updateModeBtns();
@@ -2601,18 +2717,21 @@ async function showSheet(key, { keepView = true } = {}) {
 // ---------- フォーム（1行を1枚のカードで見る） ----------
 function openGallery() {
   // PC のはじめ：並べた表示で、1行目を詳細カード（show）で開く
+  const fg = formGrid();
   if (!phone.matches) {
     state.expanded = false;
-    if (state.grid.rowCount) { state.grid.moveTo(0, state.grid.cur.c); state.detailOpen = true; }
+    if (fg.rowCount) { fg.moveTo(0, fg.cur.c); state.detailOpen = true; }
   }
-  state.gallery = new GalleryView($('grid-host'), state.grid, {
-    labelColumn: sheetLabel().col,
+  state.gallery = new GalleryView($('grid-host'), fg, {
+    labelColumn: formLabel(),
     beforeMove: detailCanLeave,
     onOpen: () => { state.detailOpen = true; openDetail(); },
+    // まとめているときの「＋」：シートの新しい行を開く（保存すると、その行のグループができる）
+    onAdd: state.groupGrid && state.grid.canInsert ? addGroup : null,
     onExpand: expandList,
     // カードの「›」：その行を開いて、外部キーの参照先を重ねる
     onRef: async (r, c) => {
-      const g = state.grid, row = g.rowAt(r);
+      const g = formGrid(), row = g.rowAt(r);
       if (!row) return;
       if (r !== g.cur.r && !(await detailCanLeave())) return;
       g.moveTo(r, g.cur.c);
@@ -2629,7 +2748,7 @@ function openGallery() {
 
 /** 詳細カード（右側のパネル）を開く。ギャラリーでカードを開いたときに、選んでいる行を見せる */
 async function openDetail({ focus = true } = {}) {
-  const g = state.grid;
+  const g = formGrid();
   if (!g) return;
   if (g.editing) await g.commitEdit({ move: null });
   if (!state.detail) {
@@ -2639,11 +2758,15 @@ async function openDetail({ focus = true } = {}) {
     state.refs = [];
     state.activePage = 0;
     state.relCache = null; // 表の作りが変わっているかもしれないので、開くたびに調べ直す
+    const grouped = g === state.groupGrid;
     state.detail = new FormView(base, g, {
       ...formHooks(null),
-      labelColumn: sheetLabel().col,
+      // まとめていれば、列の後ろにグループの行を並べる
+      // 外部キーのキーの「選ぶ ▾」は、グループの表に書く
+      ...(grouped ? { renderRelated: renderGroupRows, fkPick: (r, c, anchor) => fkPicker(r, c, anchor, { grid: g, source: g.source, detail: state.detail }) } : {}),
+      labelColumn: formLabel(),
       sheetName: state.key?.slice(2) ?? '',
-      deleteRow: state.key?.[0] === 't' || state.source?.ops?.delete ? async () => { g.moveTo(g.cur.r, g.cur.c); await deleteSelectedRows(); } : null,
+      deleteRow: !grouped && (state.key?.[0] === 't' || state.source?.ops?.delete) ? async () => { g.moveTo(g.cur.r, g.cur.c); await deleteSelectedRows(); } : null,
       onClose: () => toggleDetail(false),
       // シートの行を移る前に、参照先のページの未保存も確かめる。移ったら参照先は閉じる
       beforeMove: () => refsCanLeave(0),
@@ -2686,19 +2809,26 @@ const pageIndex = (page) => (page ? state.refs.indexOf(page) + 1 : 0);
 const detailPages = () => [{ form: state.detail }, ...state.refs];
 const pageLabel = (page) => (page.label ? page.label() : page.form.rowLabel());
 
-/** 表 table を、列 col = value で絞り込んだ表（見えないところに置く Grid）を作る。page に grid・source・gridHost を入れる */
-async function filteredGrid(page, table, col, value, onSelect) {
-  const model = await readTable(table);
-  const view = { sorts: [], filters: [{ col, op: 'eq', value: String(value) }] };
-  const source = new TableSource(state.dbName, model, view, await labelColumns(model));
-  const prots = readProtections(model);
-  source.protect = protectionChecker(model, prots);
-  if (prots.some((x) => x.kind === 'sheet')) source.editable = false;
+/**
+ * 行の集まり（sub）：シート key の行のうち、conds の列がどれもその値のもの。
+ * { key, conds: [[列名, 値]], title, hide: 出さない列（どの行も同じ値の列）, sorts?, filters?: シートの並べ替え・絞り込み,
+ *   nullIsEmpty?: 1行だけで出す列が全部 NULL なら行なしとする（LEFT JOIN で子のない親）, sections?: 新しい行のフォームの見出しと列 }
+ */
+const tableSub = (table, conds, extra) => ({ key: 't:' + table, conds, title: table, hide: conds.map(([c]) => c), ...extra });
+const relSub = (rel, value) => tableSub(rel.table, [[rel.col, value]], { title: relTitle(rel), titleEl: relTitleEl(rel) });
+
+/** sub の行を読む表（見えないところに置く Grid）を作る。page に grid・source・gridHost・labelColumn を入れる */
+async function filteredGrid(page, sub, onSelect) {
+  // 値はシートの値のまま比べる（文字にすると、ビューの列では "007" が 7 になる）。NULL は IS NULL で
+  const conds = sub.conds.map(([col, value]) => (value == null ? { col, op: 'null' } : { col, op: 'eq', value }));
+  const view = { sorts: [...(sub.sorts || [])], filters: [...(sub.filters || []), ...conds] };
+  const { source } = await sheetSource(sub.key, view);
   page.source = source;
   page.gridHost = el('div.ref-grid', { hidden: true });
   page.grid = new Grid(page.gridHost, source, { onSelect, onError: (e) => toast(friendlyError(e.message), 'error'), onUndo: doUndo, onRedo: doRedo });
   await page.grid.reload({ keepSelection: false });
-  page.labelColumn = await labelColumnOf(db, state.dbName, table);
+  const name = sub.key.slice(2);
+  page.labelColumn = sub.key[0] === 't' ? await labelColumnOf(db, state.dbName, name) : labelOf(sub.key, source.columns).col;
   return page;
 }
 
@@ -2730,7 +2860,8 @@ function rowPageForm(page, r, extra = {}) {
     labelColumn: page.labelColumn,
     sheetName: page.table,
     steps: false,
-    deleteRow: page.source.editable ? () => deleteRefRow(page) : null,
+    // ビューは INSTEAD OF DELETE があるときだけ
+    deleteRow: (page.source.ops ? page.source.ops.delete : page.source.editable) ? () => deleteRefRow(page) : null,
     onClose: () => closePage(pageIndex(page)),
     ...extra,
   });
@@ -2741,44 +2872,44 @@ async function openRef(from, fk, value) {
   if (value == null) return;
   const page = { table: fk.table };
   await pushPage(from, page, async () => {
-    await filteredGrid(page, fk.table, fk.refCol, value, () => page.form?.render());
+    await filteredGrid(page, tableSub(fk.table, [[fk.refCol, value]]), () => page.form?.render());
     if (!page.grid.rowCount) { toast(tr('参照先の行が見つかりません（{0}.{1} = {2}）', [fk.table, fk.refCol, value])); return false; }
     rowPageForm(page, 0);
     return true;
   });
 }
 
-/** Related の行（rel.table の rel.col = value の r 行目）の show を、ページ from の次に開く */
-async function openRelatedRow(from, rel, value, r) {
-  const page = { table: rel.table };
+/** 行の集まり sub（Related・グループの行）の r 行目の show を、ページ from の次に開く */
+async function openRelatedRow(from, sub, r) {
+  const page = { table: sub.key.slice(2) };
   await pushPage(from, page, async () => {
-    await filteredGrid(page, rel.table, rel.col, value, () => page.form?.render());
+    await filteredGrid(page, sub, () => page.form?.render());
     if (r >= page.grid.rowCount) return false;
     rowPageForm(page, r);
     return true;
   });
 }
 
-/** Related の「Add」：rel.table の新しい行を、外部キー rel.col = value を入れた状態で edit で開く。保存かやめるで元のページへ */
-async function openRelatedAdd(from, rel, value) {
-  const page = { table: rel.table };
+/** Related・グループの「Add」：sub の条件の値を入れた新しい行を edit で開く。保存かやめるで元のページへ。保存したら afterSave() */
+async function openRelatedAdd(from, sub, afterSave) {
+  const page = { table: sub.key.slice(2) };
   await pushPage(from, page, async () => {
-    await filteredGrid(page, rel.table, rel.col, value, () => page.form?.render());
+    await filteredGrid(page, sub, () => page.form?.render());
     if (!page.grid.canInsert) { toast(tr('このビューには行を追加できません')); return false; }
     const g = page.grid;
     g.openDraft();
-    g.draftSet(g.cols.findIndex((c) => c.name === rel.col), formText(value));
+    for (const [col, value] of sub.conds) g.draftSet(g.cols.findIndex((c) => c.name === col), formText(value));
     const back = async () => { dropRefs(pageIndex(page) - 1); await refreshPages(); };
-    rowPageForm(page, g.newRowIndex, { onSavedNew: back, onCancelNew: back, onClose: back });
+    rowPageForm(page, g.newRowIndex, { sections: sub.sections, onSavedNew: async () => { await back(); await afterSave?.(); }, onCancelNew: back, onClose: back });
     return true;
   });
 }
 
-/** Related の「Expand」：rel.table の rel.col = value の行を全部、縦のリストで見せる */
-async function openRelatedList(from, rel, value) {
-  const page = { table: rel.table, label: () => relTitle(rel) };
+/** Related・グループの「Expand」：sub の行を全部、縦のリストで見せる */
+async function openRelatedList(from, sub) {
+  const page = { table: sub.key.slice(2), label: () => sub.title };
   await pushPage(from, page, async () => {
-    await filteredGrid(page, rel.table, rel.col, value, () => page.gallery?.render());
+    await filteredGrid(page, sub, () => page.gallery?.render());
     page.titleEl = el('span.form-title');
     const close = el('button.btn.sm.form-close', { title: tr('閉じる'), 'aria-label': tr('閉じる'), on: { click: () => closePage(pageIndex(page)) } },
       el('span.fc-pc', '✕'), el('span.fc-sp', icon('back')));
@@ -2788,15 +2919,15 @@ async function openRelatedList(from, rel, value) {
     page.gallery = new GalleryView(listHost, page.grid, {
       embedded: true,
       labelColumn: page.labelColumn,
-      hideColumn: rel.col, // 自分を指している外部キーの列は出さない
-      onOpen: (r) => (r === page.grid.newRowIndex ? openRelatedAdd(pageIndex(page), rel, value) : openRelatedRow(pageIndex(page), rel, value, r)),
+      hideColumns: sub.hide, // どの行も同じ値の列（自分を指している外部キー・グループのキー）は出さない
+      onOpen: (r) => (r === page.grid.newRowIndex ? openRelatedAdd(pageIndex(page), sub) : openRelatedRow(pageIndex(page), sub, r)),
     });
     page.updateTitle = () => {
       const i = pageIndex(page);
       if (state.expanded && !phone.matches) {
         page.titleEl.replaceChildren(...detailCrumbs(i).flatMap((x) => [
-          x.go ? el('button.form-crumb', { on: { click: x.go } }, x.text) : el('span', x.text), el('span.form-crumb-sep', ' > ')]), el('span', relTitle(rel)));
-      } else page.titleEl.textContent = relTitle(rel);
+          x.go ? el('button.form-crumb', { on: { click: x.go } }, x.text) : el('span', x.text), el('span.form-crumb-sep', ' > ')]), el('span', sub.title));
+      } else page.titleEl.textContent = sub.title;
     };
     return true;
   });
@@ -2820,6 +2951,7 @@ async function refreshPages() {
   // シートの表も読み直す（Related の Add・削除はシートの表そのものの行のこともある）
   await state.grid?.reload();
   state.gallery?.render();
+  await reloadGroups();
   for (const page of state.refs || []) { await page.grid.reload(); page.gallery?.render(); }
   for (const page of detailPages()) page.form?.refreshRelated();
 }
@@ -2827,6 +2959,7 @@ async function refreshPages() {
 /** 元に戻す・やり直すのあと：参照先・Related の表と、開いているページの Related を読み直す */
 async function refreshDetailAfterUndo() {
   if (!state.detail) return;
+  await reloadGroups();
   for (const page of state.refs || []) { await page.grid.reload(); page.gallery?.render(); }
   for (const page of detailPages()) page.form?.refreshRelated();
 }
@@ -2884,6 +3017,26 @@ function relCell(row, c) {
   return label != null ? String(label) : String(v);
 }
 
+/** 行の集まり sub のカード：見出しと件数、先頭 10 行の表（押すとその行を開く）、Expand・Add。rg は sub の行を読む Grid */
+async function subCard(i, sub, rg) {
+  let n = rg.rowCount;
+  let rows = n ? (await rg.rowsBetween(0, Math.min(n, 10) - 1)).filter(Boolean) : [];
+  // どの行も同じ値の列（自分を指している外部キー・グループのキー）は出さない
+  const shown = rg.cols.map((col, cc) => cc).filter((cc) => !sub.hide.includes(rg.cols[cc].name));
+  // LEFT JOIN で子のない親は、子の列が全部 NULL の1行になる。それは「まだありません」
+  if (sub.nullIsEmpty && n === 1 && rows[0] && shown.every((cc) => rows[0].values[cc] == null)) { n = 0; rows = []; }
+  const table = el('table.rel-table',
+    el('thead', el('tr', shown.map((cc) => el('th', rg.cols[cc].name)))),
+    el('tbody', rows.map((r, k) => el('tr', { on: { click: () => openRelatedRow(i, sub, k) } }, shown.map((cc) => el('td', relCell(r, cc)))))));
+  return el('section.rel-card',
+    el('div.rel-head', el('span.rel-title', ...(sub.titleEl || [sub.title])), el('span.rel-count', String(n))),
+    n ? el('div.rel-scroll', table) : el('div.rel-empty.muted', tr('まだありません')),
+    el('div.rel-actions',
+      // AppSheet にならい、PC は Expand、スマホは View
+      n > 0 ? el('button.btn.sm.link.rel-expand', { on: { click: () => openRelatedList(i, sub) } }, el('span.re-pc', tr('Expand')), el('span.re-sp', tr('View'))) : null,
+      rg.canInsert ? el('button.btn.sm.link', { on: { click: () => openRelatedAdd(i, sub) } }, tr('Add')) : null));
+}
+
 /** 詳細カード form（ページ i）の Related のカードを box に描く */
 async function renderRelated(form, box, i) {
   box._cleanup?.();
@@ -2902,40 +3055,30 @@ async function renderRelated(form, box, i) {
     const c = g.cols.findIndex((x) => x.name === rel.refCol);
     const value = c >= 0 ? row.values[c] : null;
     if (value == null) continue;
-    const page = {};
-    try { await filteredGrid(page, rel.table, rel.col, value); } catch { continue; }
+    const page = {}, sub = relSub(rel, value);
+    try { await filteredGrid(page, sub); } catch { continue; }
     if (box._token !== token) { page.gridHost.remove(); return; }
     hosts.push(page.gridHost);
-    const rg = page.grid, n = rg.rowCount;
-    const rows = n ? (await rg.rowsBetween(0, Math.min(n, 10) - 1)).filter(Boolean) : [];
-    if (box._token !== token) return;
     if (rel.one) {
+      const rg = page.grid, rows = rg.rowCount ? (await rg.rowsBetween(0, 0)).filter(Boolean) : [];
+      if (box._token !== token) return;
       // has one：外部キーの欄と同じ形（1件ならラベル＋「›」、0件なら「なし」＋「＋ 追加」）
       const cell = el('div.form-value');
       if (rows[0]) {
         // 相手の行のラベル（ラベル列が無ければキー）
         const lc = rg.cols.findIndex((x) => x.name === page.labelColumn);
         cell.append(lc >= 0 ? relCell(rows[0], lc) : String(rows[0].key ?? ''),
-          el('button.form-ref', { title: tr('開く'), 'aria-label': tr('開く'), on: { click: () => openRelatedRow(i, rel, value, 0) } }, icon('ref')));
+          el('button.form-ref', { title: tr('開く'), 'aria-label': tr('開く'), on: { click: () => openRelatedRow(i, sub, 0) } }, icon('ref')));
       } else {
         cell.append(el('span.muted', tr('なし')),
-          rg.canInsert ? el('button.btn.sm.link.form-add-one', { on: { click: () => openRelatedAdd(i, rel, value) } }, tr('＋ 追加')) : null);
+          rg.canInsert ? el('button.btn.sm.link.form-add-one', { on: { click: () => openRelatedAdd(i, sub) } }, tr('＋ 追加')) : null);
       }
       ones.push(el('div.form-field.rel-one', el('div.form-label', el('span.form-name', ...relTitleEl(rel))), cell));
       continue;
     }
-    // 自分を指している外部キーの列は、どの行も今の行なので出さない
-    const shown = rg.cols.map((col, cc) => cc).filter((cc) => rg.cols[cc].name !== rel.col);
-    const table = el('table.rel-table',
-      el('thead', el('tr', shown.map((cc) => el('th', rg.cols[cc].name)))),
-      el('tbody', rows.map((r, k) => el('tr', { on: { click: () => openRelatedRow(i, rel, value, k) } }, shown.map((cc) => el('td', relCell(r, cc)))))));
-    cards.push(el('section.rel-card',
-      el('div.rel-head', el('span.rel-title', ...relTitleEl(rel)), el('span.rel-count', String(n))),
-      n ? el('div.rel-scroll', table) : el('div.rel-empty.muted', tr('まだありません')),
-      el('div.rel-actions',
-        // AppSheet にならい、PC は Expand、スマホは View
-        n > 0 ? el('button.btn.sm.link.rel-expand', { on: { click: () => openRelatedList(i, rel, value) } }, el('span.re-pc', tr('Expand')), el('span.re-sp', tr('View'))) : null,
-        rg.canInsert ? el('button.btn.sm.link', { on: { click: () => openRelatedAdd(i, rel, value) } }, tr('Add')) : null)));
+    const card = await subCard(i, sub, page.grid);
+    if (box._token !== token) return;
+    cards.push(card);
   }
   if (box._token !== token) return;
   // 自分の列と分けて「関連」の段にまとめる：has one の欄が先、has many のカードが後
@@ -3026,6 +3169,7 @@ function closeViews() {
   if (state.refs) dropRefs(0);
   state.gallery?.destroy(); state.gallery = null;
   state.detail?.destroy(); state.detail = null;
+  closeGroupGrid();
   $('grid-host')?.classList.remove('gallery-mode');
 }
 
@@ -3054,13 +3198,14 @@ async function setMode(mode) {
   if (!state.key || !state.grid) return;
   if (mode === 'table' && !(await detailCanLeave())) return;
   viewOf(state.key).mode = mode;
-  if (mode === 'gallery' && !state.gallery) { openGallery(); if (state.detailOpen) await openDetail({ focus: false }); }
+  if (mode === 'gallery' && !state.gallery) { await openGroupGrid(); openGallery(); if (state.detailOpen) await openDetail({ focus: false }); }
   if (mode === 'table' && state.gallery) {
     // 詳細カードはギャラリーの一部なので、表に戻すと閉じる
     if (state.refs) dropRefs(0);
     if (state.detail) { state.detail.destroy(); state.detail = null; $('detail').hidden = true; }
     state.detailOpen = false;
     state.gallery.destroy(); state.gallery = null;
+    closeGroupGrid();
     applyExpanded();
     state.grid.ensureVisible(); state.grid.render(); state.grid.focus();
     // 表に戻ったら「選んでいる」状態を合わせ直す。スマホは開いた直後と同じく何も選ばない
@@ -3093,7 +3238,7 @@ function renderSheetHead(kind, name, error) {
   const head = $('sheet-head');
   const parts = [];
   if (kind === 'q' || kind === 'v') parts.push(queryEditor(kind, name, error));
-  const view = viewOf(state.key);
+  const view = viewOf(state.key), group = sheetGroup();
   const chips = el('div.chips',
     view.sorts.length ? el('span.sort-chips', { title: tr('並べ替え（左ほど優先）') },
       view.sorts.flatMap((s, i) => [
@@ -3111,11 +3256,13 @@ function renderSheetHead(kind, name, error) {
       on: { click: (e) => { if (!e.target.closest('.chip-x')) filterPopover(e.currentTarget, f.col, i); } },
     }, `${f.col} ${FILTER_OPS.find((o) => o.id === f.op)?.label.replace(/^\S+ /, '') ?? f.op}${FILTER_OPS.find((o) => o.id === f.op)?.noValue ? '' : tr(' 「') + f.value + tr('」')}`,
     el('button.chip-x', { title: tr('絞り込みを解除'), on: { click: () => { view.filters.splice(i, 1); reloadSheet(); } } }, '×'))),
+    group.length ? el('span.chip.group', { title: tr('フォームで、この列の値が同じ行を1枚にまとめます') }, `▤ ${group.join(tr('・'))}`,
+      el('button.chip-x', { title: tr('グループを解除'), on: { click: () => setGroup([]) } }, '×')) : null,
     el('span.grow'),
     kind === 't' && state.source ? el('code.sheet-sql', { title: tr('このシートが実行している SQL') }, state.source.displaySql()) : null,
   );
-  // 並べ替え・絞り込みがあるときだけ出す
-  if (view.sorts.length || view.filters.length) parts.push(chips);
+  // 並べ替え・絞り込み・グループがあるときだけ出す
+  if (view.sorts.length || view.filters.length || group.length) parts.push(chips);
   head.replaceChildren(...parts);
   updateProtBtn(kind);
 }
@@ -3840,6 +3987,7 @@ function headerMenu(c, anchor) {
     sheetLabel().set === col.name
       ? { label: tr('ラベル列を自動に戻す'), icon: icon('label'), action: () => chooseLabel(null) }
       : { label: tr('ラベル列にする'), icon: icon('label'), action: () => chooseLabel(col.name) },
+    groupItem(col),
     '-', sizeItem('col', [c], anchor),
     ...cellSection('col'),
   ];

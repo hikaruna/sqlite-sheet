@@ -11,7 +11,7 @@ const SUB = 2;       // 題名の下に出す列の数
 const SAMPLE = 50;   // サムネイルの列を決めるために見る行の数
 
 export class GalleryView {
-  /** hooks: { beforeMove(): 別の行へ移ってよいか（詳細カードの未保存の確認）, onOpen(r): カードを開く（新しい行は newRowIndex）, labelColumn: 題名にする列の名前（シートのラベル列。無ければ題名なし） } */
+  /** hooks: { beforeMove(): 別の行へ移ってよいか（詳細カードの未保存の確認）, onOpen(r): カードを開く（新しい行は newRowIndex）, labelColumn: 題名にする列の名前（シートのラベル列。無ければ題名なし）, onAdd(): 「＋」で行の代わりにすること（グループの追加） } */
   constructor(host, grid, hooks = {}) {
     this.host = host;
     this.grid = grid;
@@ -20,15 +20,16 @@ export class GalleryView {
     this.layout = null;
     this.inner = el('div.gallery-inner');
     this.list = el('div.g-list', { tabIndex: 0, on: { scroll: () => this.render(), keydown: (e) => this.onKey(e) } }, this.inner);
-    const add = () => this.open(grid.newRowIndex);
+    const add = hooks.onAdd || (() => this.open(grid.newRowIndex));
+    const canAdd = !!hooks.onAdd || grid.canInsert;
     this.countEl = el('span.g-count.muted');
     this.root = el('div.gallery',
       el('div.g-head', this.countEl, el('span.grow'),
-        grid.canInsert ? el('button.btn.sm.primary.g-add', { on: { click: add } }, tr('＋ 追加')) : null,
+        canAdd ? el('button.btn.sm.primary.g-add', { on: { click: add } }, tr('＋ 追加')) : null,
         // PC：リストを最大にする（並べた表示のときだけ出す）
         hooks.onExpand ? el('button.btn.sm.g-expand', { title: tr('リストを最大にする'), 'aria-label': tr('リストを最大にする'), on: { click: () => hooks.onExpand() } }, '⤢') : null),
       this.list,
-      grid.canInsert ? el('button.g-fab', { title: tr('行を追加'), 'aria-label': tr('行を追加'), on: { click: add } }, '＋') : null);
+      canAdd ? el('button.g-fab', { title: tr('行を追加'), 'aria-label': tr('行を追加'), on: { click: add } }, '＋') : null);
     host.append(this.root);
     // 詳細カードの中に埋め込むリスト（Related の Expand）は、シートの見た目を変えない
     if (!hooks.embedded) {
@@ -62,7 +63,7 @@ export class GalleryView {
     let thumb = cols.findIndex((col, c) => rows.some((row, r) => g.hasPreview(row.values[c], r, row, c)));
     // まだ行がなくても、BLOB の列があればサムネイルの枠を取っておく
     if (thumb < 0 && !rows.length) thumb = cols.findIndex(isBlobCol);
-    const usable = cols.map((col, c) => c).filter((c) => c !== thumb && !isBlobCol(cols[c]) && !cols[c].auto && cols[c].name !== this.hooks.hideColumn);
+    const usable = cols.map((col, c) => c).filter((c) => c !== thumb && !isBlobCol(cols[c]) && !cols[c].auto && !this.hooks.hideColumns?.includes(cols[c].name));
     // 題名はシートのラベル列（自動の選び方も含めてラベル列に任せる。外部キーなら参照先のラベルが出る）
     const title = cols.findIndex((col) => col.name === this.hooks.labelColumn);
     return { thumb, title, sub: usable.filter((c) => c !== title).slice(0, SUB) };

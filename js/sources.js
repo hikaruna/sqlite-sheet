@@ -550,6 +550,103 @@ export class QuerySource {
   }
 }
 
+/**
+ * グループ：シートの行をキーの列の値でまとめ、1グループを1行にした表。列はキーの列だけ。
+ * sql はシートの SELECT、cols はシートの列（型で絞り込みの値をシートと同じに比べ、外部キーのキーには参照先のラベルを出す）、
+ * labelCols はシートの外部キーのラベルの SQL 式（列名 → 式。参照先の別名は __l0）。
+ * 絞り込みはまとめる前の行に、並べ替えはキーの列のものだけをまとめた後に当てる。
+ * target { key: シートの内部キー, name: テーブル・ビューの名前, editable } が書けるなら、キーの値を変えられる。
+ * 変えると、そのグループの行（絞り込みで見えている分）をまとめて UPDATE する。行の追加・削除はしない
+ */
+export class GroupSource extends QuerySource {
+  constructor(widthKey, sql, keys, view, cols, labelCols, target) {
+    super(widthKey, sql, view);
+    this.keys = keys;
+    this.types = new Map(cols.map((c) => [c.name, c.type]));
+    this.sheetCols = cols;
+    this.sheetLabels = labelCols;
+    this.target = target;
+    this.editable = !!target?.editable;
+    this.ops = { update: this.editable, insert: false, delete: false };
+    this.t = target ? q(target.name) : null;
+  }
+
+  async init() {
+    await super.init();
+    this.columns = this.keys.map((k) => this.columns.find((c) => c.name === k)).filter(Boolean);
+    if (this.columns.length !== this.keys.length) throw new Error(tr('グループのキーの列がシートにありません'));
+    // 外部キーは、組になる列がどれもキーのときだけ（参照先の行がグループで1つに決まる）
+    this.labelCols = new Map();
+    for (const c of this.columns) {
+      const sc = this.sheetCols.find((x) => x.name === c.name);
+      c.type = sc?.type || '';
+      const fk = sc?.fk && (sc.fk.cols ?? [c.name]).every((n) => this.keys.includes(n)) ? sc.fk : null;
+      c.fk = fk;
+      if (fk && this.sheetLabels?.get(c.name)) this.labelCols.set(c.name, this.sheetLabels.get(c.name));
+    }
+    return this;
+  }
+
+  toSqlPart(v, col, newRow) { return TableSource.prototype.toSqlPart.call(this, v, col, newRow); }
+
+  /** グループごとに1つの UPDATE。行の場所は変わるので null（読み直してもらう） */
+  async write(changes) {
+    const byRow = new Map();
+    for (const ch of changes) {
+      if (!byRow.has(ch.row)) byRow.set(ch.row, { rowObj: ch.rowObj, sets: [] });
+      byRow.get(ch.row).sets.push({ col: this.columns[ch.col], part: this.toSqlPart(ch.value, this.columns[ch.col], false) });
+    }
+    const groups = [...byRow.values()];
+    const stmts = groups.map(({ rowObj, sets }) => {
+      const w = this.groupWhere(rowObj);
+      return { sql: `UPDATE ${this.t} SET ${sets.map((x) => `${q(x.col.name)} = ${x.part.sql}`).join(', ')}${w.sql}`, bind: [...sets.flatMap((x) => x.part.bind ?? []), ...w.bind] };
+    });
+    // ビューはトリガーしだいなので、そのグループの行が残っていれば「反映されなかった」と知らせる
+    const isView = this.target.key[0] === 'v';
+    const left = () => Promise.all(groups.map(({ rowObj }) => { const w = this.groupWhere(rowObj); return db.readQuery(`SELECT count(*) FROM ${this.t}${w.sql}`, w.bind).then((x) => Number(x.rows[0][0])); }));
+    const before = isView ? await left() : [];
+    const r = await db.batchTracked(stmts);
+    pushChanges(tr('「{0}」の{1}', [this.target.name, tr('グループの変更')]), this.target.key, r);
+    if (isView && (await left()).some((n, i) => n >= before[i])) this.onNotice?.(tr('変更がビューに反映されませんでした（トリガーがこの列を扱っていない可能性があります）'));
+    return null;
+  }
+
+  /** そのグループの行（絞り込みで見えている分）の WHERE */
+  groupWhere(rowObj) {
+    const w = this.where();
+    return { sql: `${w.sql ? w.sql + ' AND ' : ' WHERE '}${this.keys.map((k) => `${q(k)} IS ?`).join(' AND ')}`, bind: [...w.bind, ...rowObj.values.slice(0, this.keys.length)] };
+  }
+
+  update(changes) { return this.write(changes); }
+
+  where() { return whereClause(this.view.filters.map((f) => filterValue(f, this.types.get(f.col) || 'ANY')), q); }
+
+  orderBy() {
+    const col = (c) => `__g.${q(c)}`;
+    return ' ORDER BY ' + [...sortTerms(this.view.sorts.filter((s) => this.keys.includes(s.col)), col), ...this.keys.map(col)].join(', ');
+  }
+
+  /** グループの一覧の SELECT（並べ替えなし） */
+  grouped() {
+    const w = this.where(), keys = this.keys.map(q).join(', ');
+    return { sql: `SELECT ${keys} FROM (${this.sql}\n)${w.sql} GROUP BY ${keys}`, bind: w.bind };
+  }
+
+  async count() {
+    const g = this.grouped();
+    return Number((await db.readQuery(`SELECT count(*) FROM (${g.sql})`, g.bind)).rows[0][0]);
+  }
+
+  async fetch(offset, limit) {
+    const g = this.grouped(), n = this.keys.length;
+    // 外部キーのキーの、参照先の行のラベル（TableSource と同じ形で row.labels に）
+    const lab = this.columns.map((c, i) => [c, i]).filter(([c]) => this.labelCols.has(c.name));
+    const sel = lab.map(([c]) => `(SELECT ${this.labelCols.get(c.name)} FROM ${q(c.fk.table)} AS __l0 WHERE ${(c.fk.cols ?? [c.name]).map((name, j) => `__l0.${q((c.fk.refCols ?? [c.fk.refCol])[j])} = __g.${q(name)}`).join(' AND ')} LIMIT 1)`);
+    const r = await db.readQuery(`SELECT __g.*${sel.map((x) => ', ' + x).join('')} FROM (${g.sql}) AS __g${this.orderBy()} LIMIT ? OFFSET ?`, [...g.bind, limit, offset]);
+    return r.rows.map((raw) => ({ values: raw.slice(0, n), labels: Object.fromEntries(lab.map(([, i], j) => [i, raw[n + j]])) }));
+  }
+}
+
 // ------------------------------------------------------------------------
 
 /** ビューの INSTEAD OF トリガーの種類。{update, insert, delete, triggers:[{name, op}]} */

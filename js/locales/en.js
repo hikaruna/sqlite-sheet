@@ -859,4 +859,13 @@ export default {
   "ギャラリー": "Gallery",
   "表で見る": "View as table",
   "閉じる（Esc）": "Close (Esc)",
+  "グループのキーの列がシートにありません": "The group key columns are not in this sheet",
+  "グループのキーから外す": "Remove from group keys",
+  "グループのキーに足す": "Add to group keys",
+  "この列でグループにまとめる（フォーム）": "Group by this column (form)",
+  "フォームで、この列の値が同じ行を1枚にまとめます": "In the form, rows with the same values in these columns are shown on one card",
+  "グループを解除": "Remove grouping",
+  "グループの変更": "group change",
+  "親": "Parent",
+  "最初の子": "First child",
 };

@@ -153,7 +153,8 @@
           "sql": { "type": "string", "description": "クエリシートの SQL。`type` が `query` のときだけ書き、そのときは必須" },
           "widths": { "type": "object", "additionalProperties": { "type": "number", "exclusiveMinimum": 0 }, "description": "列の幅。`{ 列名: 幅(px) }`", "example": { "名前": 180 } },
           "heights": { "type": "array", "items": { "$ref": "#/components/schemas/RowHeight" }, "description": "行の高さ" },
-          "format": { "$ref": "#/components/schemas/CellFormats" }
+          "format": { "$ref": "#/components/schemas/CellFormats" },
+          "groupBy": { "type": "array", "items": { "type": "string" }, "description": "フォームでのグループのキーの列（列名）。キーの列の値が同じ行を1枚のカードにまとめ、キーの列は1回だけ、ほかの列は行の一覧で見せる。表では行をまとめない。シートに無い列は無視する", "example": ["注文ID", "顧客"] }
         },
         "example": { "type": "query", "name": "高い順", "sql": "SELECT * FROM 商品 ORDER BY 価格 DESC", "widths": { "価格": 90 } }
       },

@@ -1,0 +1,52 @@
+{
+  "format": "sqlite-sheet",
+  "version": 1,
+  "db": "orders.sqlite",
+  "sheets": [
+    {
+      "type": "view",
+      "name": "明細一覧",
+      "groupBy": [
+        "注文ID",
+        "顧客",
+        "日付"
+      ]
+    },
+    {
+      "type": "view",
+      "name": "注文一覧",
+      "groupBy": [
+        "顧客",
+        "地域"
+      ]
+    },
+    {
+      "type": "view",
+      "name": "顧客の注文",
+      "groupBy": [
+        "顧客ID",
+        "顧客",
+        "地域"
+      ]
+    },
+    {
+      "type": "table",
+      "name": "顧客"
+    },
+    {
+      "type": "table",
+      "name": "注文"
+    },
+    {
+      "type": "table",
+      "name": "注文明細",
+      "groupBy": [
+        "注文ID"
+      ]
+    },
+    {
+      "type": "table",
+      "name": "商品"
+    }
+  ]
+}
