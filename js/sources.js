@@ -649,13 +649,21 @@ export class ViewSource extends QuerySource {
         checks: parts.filter((p) => p.check).map((p) => p.check),
       };
     });
-    const before = await this.countAll();
+    // 入れた値（式でないもの）の行が増えたかで確かめる。LEFT JOIN では、子のない親の NULL の行が置き換わって行数が変わらない
+    const probes = rows.map((vals) => {
+      const conds = [], bind = [];
+      vals.forEach((v, c) => {
+        if (v === undefined) return;
+        const p = this.toSqlPart(v, this.columns[c], true);
+        if (p.sql === '?') { conds.push(`${q(this.columns[c].name)} IS ?`); bind.push(p.bind[0]); }
+      });
+      return { sql: conds.length ? ' WHERE ' + conds.join(' AND ') : '', bind };
+    });
+    const seen = () => Promise.all(probes.map((w) => db.readQuery(`SELECT count(*) FROM ${this.t}${w.sql}`, w.bind).then((x) => Number(x.rows[0][0]))));
+    const before = await seen();
     await this.run(stmts, (n) => (n > 1 ? tr('{0} 行の追加', [n]) : tr('行の追加')), rows.length);
-    if (await this.countAll() - before < rows.length) this.onNotice?.(tr('追加した行は、このビューの条件に合わないため表示されていません'));
+    if ((await seen()).some((n, i) => n <= before[i])) this.onNotice?.(tr('追加した行は、このビューの条件に合わないため表示されていません'));
   }
-
-  /** ビュー全体（絞り込みなし）の行数 */
-  async countAll() { return Number((await db.readQuery(`SELECT count(*) FROM ${this.t}`)).rows[0][0]); }
 
   /** その行と全列が同じ値の行の数 */
   async countLike(rowObj) {

@@ -2556,9 +2556,10 @@ async function showSheet(key, { keepView = true } = {}) {
       state.prots = [];
       state.model = null;
       const ops = kind === 'v' ? await viewWriteOps(name) : null;
-      if (ops && (ops.update || ops.insert || ops.delete)) state.source = await new ViewSource(`${state.dbName}/${key}`, name, view, ops).init();
-      if (state.source?.ops) state.source.onNotice = (m) => toast(m, 'info', 6000);
-      else {
+      if (ops && (ops.update || ops.insert || ops.delete)) {
+        state.source = await new ViewSource(`${state.dbName}/${key}`, name, view, ops).init();
+        state.source.onNotice = (m) => toast(m, 'info', 6000);
+      } else {
         const sql = kind === 'v' ? `SELECT * FROM ${q(name)}` : state.queries.find((x) => x.name === name)?.sql || 'SELECT 1';
         state.source = await new QuerySource(`${state.dbName}/${key}`, sql, view).init();
       }
