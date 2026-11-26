@@ -1936,8 +1936,12 @@ async function openGroupGrid() {
   const keys = sheetGroup();
   if (!keys.length) return;
   const types = new Map(state.source.columns.map((c) => [c.name, c.type]));
+  // キーの値を変えられるのは、テーブル（シートごと保護していない）と UPDATE のトリガーがあるビュー
+  const kind = state.key[0];
+  const target = { key: state.key, name: state.key.slice(2), editable: kind === 't' ? state.source.editable : kind === 'v' && !!state.source.ops?.update };
   try {
-    const source = await new GroupSource(`${state.dbName}/${state.key}#group`, sheetSql(state.key), keys, viewOf(state.key), types).init();
+    const source = await new GroupSource(`${state.dbName}/${state.key}#group`, sheetSql(state.key), keys, viewOf(state.key), types, target).init();
+    source.onNotice = (m) => toast(m, 'info', 6000);
     const host = el('div.ref-grid', { hidden: true });
     $('grid-host').append(host);
     state.groupGrid = new Grid(host, source, {
@@ -1967,6 +1971,21 @@ function formLabel() {
   if (!keys) return col;
   return keys.includes(col) ? col : autoLabel(sheetCols().filter((c) => keys.includes(c.name))) ?? keys[0];
 }
+
+/** グループの追加：シートの新しい行を、詳細カードの上に重ねて開く。保存して新しいグループができたら、それを選ぶ */
+async function addGroup() {
+  const groups = async () => { const g = state.groupGrid; return g?.rowCount ? (await g.rowsBetween(0, g.rowCount - 1)).map((row) => row && groupSig(row)) : []; };
+  const before = new Set(await groups());
+  state.detailOpen = true;
+  await openDetail({ focus: false });
+  await openRelatedAdd(0, { key: state.key, conds: [], title: state.key.slice(2), hide: [] }, async () => {
+    const r = (await groups()).findIndex((x) => x && !before.has(x));
+    if (r >= 0) state.groupGrid?.moveTo(r, 0);
+  });
+}
+
+/** グループの行を見分ける文字列（キーの値。型も含める） */
+const groupSig = (row) => row.values.map((v) => (v == null ? 'null' : typeof v + ':' + String(v))).join('\u0000');
 
 /** グループの詳細カード：キーの値が同じシートの行を、Related と同じカードで box に描く */
 async function renderGroupRows(form, box) {
@@ -2705,6 +2724,8 @@ function openGallery() {
     labelColumn: formLabel(),
     beforeMove: detailCanLeave,
     onOpen: () => { state.detailOpen = true; openDetail(); },
+    // まとめているときの「＋」：シートの新しい行を開く（保存すると、その行のグループができる）
+    onAdd: state.groupGrid && state.grid.canInsert ? addGroup : null,
     onExpand: expandList,
     // カードの「›」：その行を開いて、外部キーの参照先を重ねる
     onRef: async (r, c) => {
@@ -2865,8 +2886,8 @@ async function openRelatedRow(from, sub, r) {
   });
 }
 
-/** Related・グループの「Add」：sub の条件の値を入れた新しい行を edit で開く。保存かやめるで元のページへ */
-async function openRelatedAdd(from, sub) {
+/** Related・グループの「Add」：sub の条件の値を入れた新しい行を edit で開く。保存かやめるで元のページへ。保存したら afterSave() */
+async function openRelatedAdd(from, sub, afterSave) {
   const page = { table: sub.key.slice(2) };
   await pushPage(from, page, async () => {
     await filteredGrid(page, sub, () => page.form?.render());
@@ -2875,7 +2896,7 @@ async function openRelatedAdd(from, sub) {
     g.openDraft();
     for (const [col, value] of sub.conds) g.draftSet(g.cols.findIndex((c) => c.name === col), formText(value));
     const back = async () => { dropRefs(pageIndex(page) - 1); await refreshPages(); };
-    rowPageForm(page, g.newRowIndex, { onSavedNew: back, onCancelNew: back, onClose: back });
+    rowPageForm(page, g.newRowIndex, { onSavedNew: async () => { await back(); await afterSave?.(); }, onCancelNew: back, onClose: back });
     return true;
   });
 }

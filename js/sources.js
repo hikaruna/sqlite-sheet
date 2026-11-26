@@ -551,23 +551,62 @@ export class QuerySource {
 }
 
 /**
- * グループ：シートの行をキーの列の値でまとめ、1グループを1行にした表（読むだけ）。列はキーの列だけ。
+ * グループ：シートの行をキーの列の値でまとめ、1グループを1行にした表。列はキーの列だけ。
  * sql はシートの SELECT、types は列名 → 型（絞り込みの値をシートと同じ型で比べるため）。
- * 絞り込みはまとめる前の行に、並べ替えはキーの列のものだけをまとめた後に当てる
+ * 絞り込みはまとめる前の行に、並べ替えはキーの列のものだけをまとめた後に当てる。
+ * target { key: シートの内部キー, name: テーブル・ビューの名前, editable } が書けるなら、キーの値を変えられる。
+ * 変えると、そのグループの行（絞り込みで見えている分）をまとめて UPDATE する。行の追加・削除はしない
  */
 export class GroupSource extends QuerySource {
-  constructor(widthKey, sql, keys, view, types) {
+  constructor(widthKey, sql, keys, view, types, target) {
     super(widthKey, sql, view);
     this.keys = keys;
     this.types = types;
+    this.target = target;
+    this.editable = !!target?.editable;
+    this.ops = { update: this.editable, insert: false, delete: false };
+    this.t = target ? q(target.name) : null;
   }
 
   async init() {
     await super.init();
     this.columns = this.keys.map((k) => this.columns.find((c) => c.name === k)).filter(Boolean);
     if (this.columns.length !== this.keys.length) throw new Error(tr('グループのキーの列がシートにありません'));
+    for (const c of this.columns) c.type = this.types.get(c.name) || '';
     return this;
   }
+
+  toSqlPart(v, col, newRow) { return TableSource.prototype.toSqlPart.call(this, v, col, newRow); }
+
+  /** グループごとに1つの UPDATE。行の場所は変わるので null（読み直してもらう） */
+  async write(changes) {
+    const byRow = new Map();
+    for (const ch of changes) {
+      if (!byRow.has(ch.row)) byRow.set(ch.row, { rowObj: ch.rowObj, sets: [] });
+      byRow.get(ch.row).sets.push({ col: this.columns[ch.col], part: this.toSqlPart(ch.value, this.columns[ch.col], false) });
+    }
+    const groups = [...byRow.values()];
+    const stmts = groups.map(({ rowObj, sets }) => {
+      const w = this.groupWhere(rowObj);
+      return { sql: `UPDATE ${this.t} SET ${sets.map((x) => `${q(x.col.name)} = ${x.part.sql}`).join(', ')}${w.sql}`, bind: [...sets.flatMap((x) => x.part.bind ?? []), ...w.bind] };
+    });
+    // ビューはトリガーしだいなので、そのグループの行が残っていれば「反映されなかった」と知らせる
+    const isView = this.target.key[0] === 'v';
+    const left = () => Promise.all(groups.map(({ rowObj }) => { const w = this.groupWhere(rowObj); return db.readQuery(`SELECT count(*) FROM ${this.t}${w.sql}`, w.bind).then((x) => Number(x.rows[0][0])); }));
+    const before = isView ? await left() : [];
+    const r = await db.batchTracked(stmts);
+    pushChanges(tr('「{0}」の{1}', [this.target.name, tr('グループの変更')]), this.target.key, r);
+    if (isView && (await left()).some((n, i) => n >= before[i])) this.onNotice?.(tr('変更がビューに反映されませんでした（トリガーがこの列を扱っていない可能性があります）'));
+    return null;
+  }
+
+  /** そのグループの行（絞り込みで見えている分）の WHERE */
+  groupWhere(rowObj) {
+    const w = this.where();
+    return { sql: `${w.sql ? w.sql + ' AND ' : ' WHERE '}${this.keys.map((k) => `${q(k)} IS ?`).join(' AND ')}`, bind: [...w.bind, ...rowObj.values.slice(0, this.keys.length)] };
+  }
+
+  update(changes) { return this.write(changes); }
 
   where() { return whereClause(this.view.filters.map((f) => filterValue(f, this.types.get(f.col) || 'ANY')), q); }
 
