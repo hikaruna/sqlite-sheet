@@ -73,10 +73,13 @@ export class Grid {
     this.draft ??= { values: new Array(this.cols.length).fill(undefined), errors: {} };
   }
 
-  draftSet(c, value) {
+  /** label：参照先から選んだ行のラベル（打った値には付けない） */
+  draftSet(c, value, label = null) {
     this.openDraft();
     this.draft.values[c] = value;
     delete this.draft.errors[c];
+    const labels = (this.draft.labels ??= {});
+    if (label == null) delete labels[c]; else labels[c] = label;
   }
 
   /** 新しい行の下書きに、打った文字を入れる（空は未入力。フォームと共通） */
@@ -1000,7 +1003,7 @@ export class Grid {
         // 未入力は INSERT で入るものを薄く、それ以外はフォームの文字列をそのまま
         if (v === undefined) { cell.classList.add('ph'); cell.textContent = this.placeholderFor(c); }
         else if (v instanceof Uint8Array) this.fillCell(cell, v, col, { values: draft.values }, r, c);
-        else cell.textContent = v.replaceAll('\n', ' ⏎ ');
+        else { cell.textContent = v.replaceAll('\n', ' ⏎ '); this.showLabel(cell, draft.labels?.[c]); }
         if (draft.errors[c]) { cell.classList.add('err'); cell.title = draft.errors[c]; }
       } else if (!row) {
         cell.classList.add('loading');
@@ -1072,15 +1075,15 @@ export class Grid {
     // 折り返すセルは改行をそのまま出す。折り返さないセルは1行なので、改行があることだけ ⏎ で見せる
     if (this.isFormat('wrap', r, row, c)) { cell.classList.add('wrap'); cell.textContent = t; }
     else cell.textContent = t.replaceAll('\n', ' ⏎ ');
-    if (col.fk) {
-      cell.classList.add('fk');
-      const label = row.labels?.[c];
-      if (label != null) {
-        cell.classList.add('has-label');
-        cell.replaceChildren(el('span.fk-val', cell.textContent), el('span.fk-label', String(label)));
-      }
-    }
+    if (col.fk) { cell.classList.add('fk'); this.showLabel(cell, row.labels?.[c]); }
     void r;
+  }
+
+  /** 外部キーのセルの値の横に、参照先の行のラベルを添える */
+  showLabel(cell, label) {
+    if (label == null) return;
+    cell.classList.add('has-label');
+    cell.replaceChildren(el('span.fk-val', cell.textContent), el('span.fk-label', String(label)));
   }
 
   /** 画像の BLOB の Object URL。描画中に使ったものだけを残し、ほかは render() の終わりで解放する */
