@@ -17,6 +17,7 @@ export class FormView {
   /**
    * hooks: {
    *   fkPick(r, c, anchor): 参照先から選ぶ
+   *   sections: [{ title, cols: [列名] }]：欄を見出しで分けて並べる（無ければ列の順に並べるだけ）
    *   blobMenu(r, c, anchor): BLOB の操作（表示・読み込み・保存・NULL）
    *   deleteRow(): 今の行を削除
    *   onError(err): 知らせる
@@ -142,7 +143,11 @@ export class FormView {
     // show では、この行を外部キーで指している行（Related）を列の後ろに並べる
     this.relatedBox?._cleanup?.();
     this.relatedBox = show && this.hooks.renderRelated ? el('div.form-related') : null;
-    const body = el('div.form-body', el('div.form-fields', this.fields.map((f) => f.box)), this.relatedBox);
+    // 見出しで分けるとき（まとめたフォームの「＋ 追加」：親と最初の子）
+    const boxes = this.hooks.sections
+      ? this.hooks.sections.flatMap((sec) => [el('div.rel-section', sec.title), ...g.cols.map((col, c) => (sec.cols.includes(col.name) ? this.fields[c].box : null)).filter(Boolean)])
+      : this.fields.map((f) => f.box);
+    const body = el('div.form-body', el('div.form-fields', boxes), this.relatedBox);
     this.root.replaceChildren(el('div.form-card', { class: show ? 'form-show' : '' }, nav, body), ...(fab ? [fab] : []));
     this.refreshRelated();
     this.refresh();

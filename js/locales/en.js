@@ -866,4 +866,6 @@ export default {
   "フォームで、この列の値が同じ行を1枚にまとめます": "In the form, rows with the same values in these columns are shown on one card",
   "グループを解除": "Remove grouping",
   "グループの変更": "group change",
+  "親": "Parent",
+  "最初の子": "First child",
 };

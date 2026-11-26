@@ -1935,12 +1935,11 @@ async function openGroupGrid() {
   closeGroupGrid();
   const keys = sheetGroup();
   if (!keys.length) return;
-  const types = new Map(state.source.columns.map((c) => [c.name, c.type]));
   // キーの値を変えられるのは、テーブル（シートごと保護していない）と UPDATE のトリガーがあるビュー
   const kind = state.key[0];
   const target = { key: state.key, name: state.key.slice(2), editable: kind === 't' ? state.source.editable : kind === 'v' && !!state.source.ops?.update };
   try {
-    const source = await new GroupSource(`${state.dbName}/${state.key}#group`, sheetSql(state.key), keys, viewOf(state.key), types, target).init();
+    const source = await new GroupSource(`${state.dbName}/${state.key}#group`, sheetSql(state.key), keys, viewOf(state.key), state.source.columns, state.source.labelCols, target).init();
     source.onNotice = (m) => toast(m, 'info', 6000);
     const host = el('div.ref-grid', { hidden: true });
     $('grid-host').append(host);
@@ -1978,7 +1977,10 @@ async function addGroup() {
   const before = new Set(await groups());
   state.detailOpen = true;
   await openDetail({ focus: false });
-  await openRelatedAdd(0, { key: state.key, conds: [], title: state.key.slice(2), hide: [] }, async () => {
+  // 新しい行のフォームは、親（キーの列）と最初の子（それ以外の列）に分けて見せる
+  const keys = state.groupGrid.source.keys, rest = state.source.columns.map((c) => c.name).filter((n) => !keys.includes(n));
+  const sections = [{ title: tr('親'), cols: keys }, { title: tr('最初の子'), cols: rest }];
+  await openRelatedAdd(0, { key: state.key, conds: [], title: state.key.slice(2), hide: [], sections }, async () => {
     const r = (await groups()).findIndex((x) => x && !before.has(x));
     if (r >= 0) state.groupGrid?.moveTo(r, 0);
   });
@@ -1995,7 +1997,7 @@ async function renderGroupRows(form, box) {
   if (box._token !== token) return;
   if (!row) { box.replaceChildren(); return; }
   const view = viewOf(state.key), keys = g.source.keys;
-  const sub = { key: state.key, conds: keys.map((k, c) => [k, row.values[c]]), title: state.key.slice(2), hide: keys, sorts: view.sorts, filters: view.filters };
+  const sub = { key: state.key, conds: keys.map((k, c) => [k, row.values[c]]), title: state.key.slice(2), hide: keys, sorts: view.sorts, filters: view.filters, nullIsEmpty: true };
   const page = {};
   box._cleanup = () => page.gridHost?.remove();
   try { await filteredGrid(page, sub); } catch (e) {
@@ -2760,7 +2762,8 @@ async function openDetail({ focus = true } = {}) {
     state.detail = new FormView(base, g, {
       ...formHooks(null),
       // まとめていれば、列の後ろにグループの行を並べる
-      ...(grouped ? { renderRelated: renderGroupRows } : {}),
+      // 外部キーのキーの「選ぶ ▾」は、グループの表に書く
+      ...(grouped ? { renderRelated: renderGroupRows, fkPick: (r, c, anchor) => fkPicker(r, c, anchor, { grid: g, source: g.source, detail: state.detail }) } : {}),
       labelColumn: formLabel(),
       sheetName: state.key?.slice(2) ?? '',
       deleteRow: !grouped && (state.key?.[0] === 't' || state.source?.ops?.delete) ? async () => { g.moveTo(g.cur.r, g.cur.c); await deleteSelectedRows(); } : null,
@@ -2808,7 +2811,8 @@ const pageLabel = (page) => (page.label ? page.label() : page.form.rowLabel());
 
 /**
  * 行の集まり（sub）：シート key の行のうち、conds の列がどれもその値のもの。
- * { key, conds: [[列名, 値]], title, hide: 出さない列（どの行も同じ値の列）, sorts?, filters?: シートの並べ替え・絞り込み }
+ * { key, conds: [[列名, 値]], title, hide: 出さない列（どの行も同じ値の列）, sorts?, filters?: シートの並べ替え・絞り込み,
+ *   nullIsEmpty?: 1行だけで出す列が全部 NULL なら行なしとする（LEFT JOIN で子のない親）, sections?: 新しい行のフォームの見出しと列 }
  */
 const tableSub = (table, conds, extra) => ({ key: 't:' + table, conds, title: table, hide: conds.map(([c]) => c), ...extra });
 const relSub = (rel, value) => tableSub(rel.table, [[rel.col, value]], { title: relTitle(rel), titleEl: relTitleEl(rel) });
@@ -2896,7 +2900,7 @@ async function openRelatedAdd(from, sub, afterSave) {
     g.openDraft();
     for (const [col, value] of sub.conds) g.draftSet(g.cols.findIndex((c) => c.name === col), formText(value));
     const back = async () => { dropRefs(pageIndex(page) - 1); await refreshPages(); };
-    rowPageForm(page, g.newRowIndex, { onSavedNew: async () => { await back(); await afterSave?.(); }, onCancelNew: back, onClose: back });
+    rowPageForm(page, g.newRowIndex, { sections: sub.sections, onSavedNew: async () => { await back(); await afterSave?.(); }, onCancelNew: back, onClose: back });
     return true;
   });
 }
@@ -3015,10 +3019,12 @@ function relCell(row, c) {
 
 /** 行の集まり sub のカード：見出しと件数、先頭 10 行の表（押すとその行を開く）、Expand・Add。rg は sub の行を読む Grid */
 async function subCard(i, sub, rg) {
-  const n = rg.rowCount;
-  const rows = n ? (await rg.rowsBetween(0, Math.min(n, 10) - 1)).filter(Boolean) : [];
+  let n = rg.rowCount;
+  let rows = n ? (await rg.rowsBetween(0, Math.min(n, 10) - 1)).filter(Boolean) : [];
   // どの行も同じ値の列（自分を指している外部キー・グループのキー）は出さない
   const shown = rg.cols.map((col, cc) => cc).filter((cc) => !sub.hide.includes(rg.cols[cc].name));
+  // LEFT JOIN で子のない親は、子の列が全部 NULL の1行になる。それは「まだありません」
+  if (sub.nullIsEmpty && n === 1 && rows[0] && shown.every((cc) => rows[0].values[cc] == null)) { n = 0; rows = []; }
   const table = el('table.rel-table',
     el('thead', el('tr', shown.map((cc) => el('th', rg.cols[cc].name)))),
     el('tbody', rows.map((r, k) => el('tr', { on: { click: () => openRelatedRow(i, sub, k) } }, shown.map((cc) => el('td', relCell(r, cc)))))));
@@ -3250,7 +3256,7 @@ function renderSheetHead(kind, name, error) {
       on: { click: (e) => { if (!e.target.closest('.chip-x')) filterPopover(e.currentTarget, f.col, i); } },
     }, `${f.col} ${FILTER_OPS.find((o) => o.id === f.op)?.label.replace(/^\S+ /, '') ?? f.op}${FILTER_OPS.find((o) => o.id === f.op)?.noValue ? '' : tr(' 「') + f.value + tr('」')}`,
     el('button.chip-x', { title: tr('絞り込みを解除'), on: { click: () => { view.filters.splice(i, 1); reloadSheet(); } } }, '×'))),
-    group.length ? el('span.chip.group', { title: tr('フォームで、この列の値が同じ行を1枚にまとめます') }, `▤ ${group.join(' › ')}`,
+    group.length ? el('span.chip.group', { title: tr('フォームで、この列の値が同じ行を1枚にまとめます') }, `▤ ${group.join(tr('・'))}`,
       el('button.chip-x', { title: tr('グループを解除'), on: { click: () => setGroup([]) } }, '×')) : null,
     el('span.grow'),
     kind === 't' && state.source ? el('code.sheet-sql', { title: tr('このシートが実行している SQL') }, state.source.displaySql()) : null,

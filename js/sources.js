@@ -552,16 +552,19 @@ export class QuerySource {
 
 /**
  * グループ：シートの行をキーの列の値でまとめ、1グループを1行にした表。列はキーの列だけ。
- * sql はシートの SELECT、types は列名 → 型（絞り込みの値をシートと同じ型で比べるため）。
+ * sql はシートの SELECT、cols はシートの列（型で絞り込みの値をシートと同じに比べ、外部キーのキーには参照先のラベルを出す）、
+ * labelCols はシートの外部キーのラベルの SQL 式（列名 → 式。参照先の別名は __l0）。
  * 絞り込みはまとめる前の行に、並べ替えはキーの列のものだけをまとめた後に当てる。
  * target { key: シートの内部キー, name: テーブル・ビューの名前, editable } が書けるなら、キーの値を変えられる。
  * 変えると、そのグループの行（絞り込みで見えている分）をまとめて UPDATE する。行の追加・削除はしない
  */
 export class GroupSource extends QuerySource {
-  constructor(widthKey, sql, keys, view, types, target) {
+  constructor(widthKey, sql, keys, view, cols, labelCols, target) {
     super(widthKey, sql, view);
     this.keys = keys;
-    this.types = types;
+    this.types = new Map(cols.map((c) => [c.name, c.type]));
+    this.sheetCols = cols;
+    this.sheetLabels = labelCols;
     this.target = target;
     this.editable = !!target?.editable;
     this.ops = { update: this.editable, insert: false, delete: false };
@@ -572,7 +575,15 @@ export class GroupSource extends QuerySource {
     await super.init();
     this.columns = this.keys.map((k) => this.columns.find((c) => c.name === k)).filter(Boolean);
     if (this.columns.length !== this.keys.length) throw new Error(tr('グループのキーの列がシートにありません'));
-    for (const c of this.columns) c.type = this.types.get(c.name) || '';
+    // 外部キーは、組になる列がどれもキーのときだけ（参照先の行がグループで1つに決まる）
+    this.labelCols = new Map();
+    for (const c of this.columns) {
+      const sc = this.sheetCols.find((x) => x.name === c.name);
+      c.type = sc?.type || '';
+      const fk = sc?.fk && (sc.fk.cols ?? [c.name]).every((n) => this.keys.includes(n)) ? sc.fk : null;
+      c.fk = fk;
+      if (fk && this.sheetLabels?.get(c.name)) this.labelCols.set(c.name, this.sheetLabels.get(c.name));
+    }
     return this;
   }
 
@@ -611,8 +622,8 @@ export class GroupSource extends QuerySource {
   where() { return whereClause(this.view.filters.map((f) => filterValue(f, this.types.get(f.col) || 'ANY')), q); }
 
   orderBy() {
-    const keys = this.keys.map(q);
-    return ' ORDER BY ' + [...sortTerms(this.view.sorts.filter((s) => this.keys.includes(s.col)), q), ...keys].join(', ');
+    const col = (c) => `__g.${q(c)}`;
+    return ' ORDER BY ' + [...sortTerms(this.view.sorts.filter((s) => this.keys.includes(s.col)), col), ...this.keys.map(col)].join(', ');
   }
 
   /** グループの一覧の SELECT（並べ替えなし） */
@@ -627,9 +638,12 @@ export class GroupSource extends QuerySource {
   }
 
   async fetch(offset, limit) {
-    const g = this.grouped();
-    const r = await db.readQuery(`SELECT * FROM (${g.sql})${this.orderBy()} LIMIT ? OFFSET ?`, [...g.bind, limit, offset]);
-    return r.rows.map((values) => ({ values }));
+    const g = this.grouped(), n = this.keys.length;
+    // 外部キーのキーの、参照先の行のラベル（TableSource と同じ形で row.labels に）
+    const lab = this.columns.map((c, i) => [c, i]).filter(([c]) => this.labelCols.has(c.name));
+    const sel = lab.map(([c]) => `(SELECT ${this.labelCols.get(c.name)} FROM ${q(c.fk.table)} AS __l0 WHERE ${(c.fk.cols ?? [c.name]).map((name, j) => `__l0.${q((c.fk.refCols ?? [c.fk.refCol])[j])} = __g.${q(name)}`).join(' AND ')} LIMIT 1)`);
+    const r = await db.readQuery(`SELECT __g.*${sel.map((x) => ', ' + x).join('')} FROM (${g.sql}) AS __g${this.orderBy()} LIMIT ? OFFSET ?`, [...g.bind, limit, offset]);
+    return r.rows.map((raw) => ({ values: raw.slice(0, n), labels: Object.fromEntries(lab.map(([, i], j) => [i, raw[n + j]])) }));
   }
 }
 
@@ -732,13 +746,21 @@ export class ViewSource extends QuerySource {
         checks: parts.filter((p) => p.check).map((p) => p.check),
       };
     });
-    const before = await this.countAll();
+    // 入れた値（式でないもの）の行が増えたかで確かめる。LEFT JOIN では、子のない親の NULL の行が置き換わって行数が変わらない
+    const probes = rows.map((vals) => {
+      const conds = [], bind = [];
+      vals.forEach((v, c) => {
+        if (v === undefined) return;
+        const p = this.toSqlPart(v, this.columns[c], true);
+        if (p.sql === '?') { conds.push(`${q(this.columns[c].name)} IS ?`); bind.push(p.bind[0]); }
+      });
+      return { sql: conds.length ? ' WHERE ' + conds.join(' AND ') : '', bind };
+    });
+    const seen = () => Promise.all(probes.map((w) => db.readQuery(`SELECT count(*) FROM ${this.t}${w.sql}`, w.bind).then((x) => Number(x.rows[0][0]))));
+    const before = await seen();
     await this.run(stmts, (n) => (n > 1 ? tr('{0} 行の追加', [n]) : tr('行の追加')), rows.length);
-    if (await this.countAll() - before < rows.length) this.onNotice?.(tr('追加した行は、このビューの条件に合わないため表示されていません'));
+    if ((await seen()).some((n, i) => n <= before[i])) this.onNotice?.(tr('追加した行は、このビューの条件に合わないため表示されていません'));
   }
-
-  /** ビュー全体（絞り込みなし）の行数 */
-  async countAll() { return Number((await db.readQuery(`SELECT count(*) FROM ${this.t}`)).rows[0][0]); }
 
   /** その行と全列が同じ値の行の数 */
   async countLike(rowObj) {
