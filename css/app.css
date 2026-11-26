@@ -235,6 +235,12 @@ body.at-home .toolbar, body.at-home .fxbar { display: none; }
 .sheet-head { flex: 0 1 auto; min-height: 0; overflow: auto; }
 .grid-host { flex: 1; position: relative; min-height: 0; }
 
+/* ビューのバー：表示の切り替え・並べ替え・絞り込み・グループ・設計 */
+.viewbar { flex: none; display: flex; align-items: center; gap: 4px; height: 38px; padding: 0 8px; border-bottom: 1px solid var(--line); overflow-x: auto; scrollbar-width: none; }
+.vb-seg { display: inline-flex; gap: 2px; padding: 2px; border-radius: 8px; background: var(--surface-2); margin-right: 4px; }
+.vb-seg .tb-btn { height: 26px; }
+body.at-home .viewbar { display: none; }
+
 .chips {
   display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
   min-height: 38px; padding: 5px 10px; border-bottom: 1px solid var(--line);
@@ -810,6 +816,7 @@ body.dropping::after {
   .tool-btn { padding: 0 6px; }
   .toolbar { overflow-x: auto; scrollbar-width: none; }
   .tb-label, .cmd-btn, .tx-label, .menubar { display: none; }
+  .vb-icon-only .vb-label { display: none; } /* 設計だけ文字を残す（見つけやすく） */
   body:not(.at-home) .menubar-all { display: inline-grid; place-items: center; }
   /* 戻る（‹）だけ左。ほかのボタンは右に寄せる */
   body:not(.at-home) .home-btn { margin-right: auto; }

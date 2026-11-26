@@ -858,5 +858,11 @@ export default {
   "ギャラリーで見る": "View as gallery",
   "ギャラリー": "Gallery",
   "表で見る": "View as table",
+  "表示": "View",
+  "グループ": "Group",
+  "グループ（準備中）": "Group (coming soon)",
+  "並べ替えをすべて解除": "Clear all sorts",
+  "絞り込みを追加": "Add filter",
+  "絞り込みをすべて解除": "Clear all filters",
   "閉じる（Esc）": "Close (Esc)",
 };

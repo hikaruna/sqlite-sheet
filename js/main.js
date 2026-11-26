@@ -505,13 +505,9 @@ function buildChrome() {
       // 保護：テーブルなら常に出す（保護がなくても、ここから新しく保護できる）
       el('button#prot-btn.tb-btn', { title: tr('シートと範囲の保護'), on: { click: (e) => protPanel(e.currentTarget) } }, icon('lock'), el('span.tb-label', tr('保護')), el('span#prot-n.tb-count', { hidden: true })),
       el('span.vsep'),
-      // 表とフォーム（1行ずつのカード）の切り替え
-      el('button#mode-btn.tb-btn', { title: tr('ギャラリーで見る'), disabled: true, on: { click: () => setMode(state.gallery ? 'table' : 'gallery') } }, icon('gallery'), el('span.tb-label', tr('ギャラリー'))),
-      el('span.vsep'),
       // セルごとの書式（折り返し・画像表示など。スプレッドシートのツールバーと同じく、押すと選べる）
       ...formatButtons(),
       el('span.grow'),
-      el('button#panel-btn.tb-btn', { title: tr('テーブルの設計（列・キー・制約）'), on: { click: () => togglePanel() } }, icon('design'), el('span.tb-label', tr('設計'))),
       el('button#console-btn.tb-btn', { title: tr('SQL コンソール（{0}`）', [MOD]), on: { click: () => toggleConsole() } }, icon('terminal'), el('span.tb-label', 'SQL')),
       el('button.tb-btn.cmd-btn', { title: tr('コマンド（{0}K）', [MOD]), on: { click: () => palette() } }, el('kbd.tb-kbd', `${MOD}K`))),
     // 数式バー（値のエリア）：名前ボックス ＋ fx ＋ 入力欄
@@ -530,6 +526,7 @@ function buildChrome() {
       el('button.sym-key', { type: 'button', dataset: { keepInput: '' }, on: { click: () => insertSym(k) } }, k))),
     el('main.workspace',
       el('section#sheet.sheet',
+        viewBar(),
         el('div#sheet-head.sheet-head'),
         el('div#trust-bar.trust-bar', { hidden: true }),
         el('div#grid-host.grid-host')),
@@ -3069,12 +3066,68 @@ async function setMode(mode) {
   updateModeBtns();
 }
 
+// ---------- ビューのバー（シートの上：表示の切り替え・並べ替え・絞り込み・グループ・設計） ----------
+// 選択やモードに関係なく出すので、スマホのギャラリーからも表に戻れ、設計も開ける
+function viewBar() {
+  const btn = (id, ic, label, title, onClick) => el(`button#${id}.tb-btn.vb-icon-only`, { title, disabled: true, on: { click: (e) => onClick(e.currentTarget) } },
+    icon(ic), el('span.vb-label', label), el(`span#${id}-n.tb-count`, { hidden: true }));
+  return el('div#viewbar.viewbar',
+    el('span.vb-seg', { role: 'group', 'aria-label': tr('表示') },
+      el('button#vb-table.tb-btn.vb-icon-only', { title: tr('表で見る'), disabled: true, on: { click: () => setMode('table') } }, icon('table'), el('span.vb-label', tr('表'))),
+      el('button#vb-gallery.tb-btn.vb-icon-only', { title: tr('ギャラリーで見る'), disabled: true, on: { click: () => setMode('gallery') } }, icon('gallery'), el('span.vb-label', tr('ギャラリー')))),
+    btn('vb-sort', 'sort', tr('並べ替え'), tr('並べ替え'), viewSortMenu),
+    btn('vb-filter', 'filter', tr('絞り込み'), tr('絞り込み'), filterMenu),
+    btn('vb-group', 'group', tr('グループ'), tr('グループ（準備中）'), groupMenu),
+    el('span.grow'),
+    el('button#panel-btn.tb-btn', { title: tr('テーブルの設計（列・キー・制約）'), on: { click: () => togglePanel() } }, icon('design'), el('span.vb-label', tr('設計'))));
+}
+
 function updateModeBtns() {
-  const m = $('mode-btn');
-  if (!m) return;
-  m.disabled = !state.grid;
-  m.replaceChildren(icon(state.gallery ? 'table' : 'gallery'), el('span.tb-label', state.gallery ? tr('表') : tr('ギャラリー')));
-  m.title = state.gallery ? tr('表で見る') : tr('ギャラリーで見る');
+  const has = !!state.grid, cols = has && !!state.source?.columns.length;
+  $('vb-table').disabled = $('vb-gallery').disabled = !has;
+  $('vb-table').classList.toggle('on', has && !state.gallery);
+  $('vb-gallery').classList.toggle('on', has && !!state.gallery);
+  for (const id of ['vb-sort', 'vb-filter', 'vb-group']) $(id).disabled = !cols;
+  const v = state.key ? viewOf(state.key) : { sorts: [], filters: [] };
+  for (const [id, n] of [['vb-sort', v.sorts.length], ['vb-filter', v.filters.length]]) {
+    $(id).classList.toggle('on', cols && n > 0);
+    const c = $(`${id}-n`);
+    c.hidden = !cols || !n; c.textContent = n;
+  }
+}
+
+/** 並べ替え：列を選ぶ。並べ替え中の列は押すたびに昇順／降順を切り替える */
+function viewSortMenu(anchor) {
+  const v = viewOf(state.key);
+  menu(anchor, [
+    { header: tr('並べ替え') },
+    ...state.source.columns.map((c) => {
+      const i = v.sorts.findIndex((s) => s.col === c.name);
+      return { label: c.name, icon: i < 0 ? '' : v.sorts[i].dir === 'asc' ? '↑' : '↓', action: () => (i < 0 ? pushSort(c.name, 'asc') : toggleSortDir(i)) };
+    }),
+    ...(v.sorts.length ? ['-', { label: tr('並べ替えをすべて解除'), icon: '×', action: () => { v.sorts = []; reloadSheet(); } }] : []),
+  ]);
+}
+
+/** 絞り込み：まだ無ければすぐ条件の入力を開く。あれば今の条件の一覧と追加 */
+function filterMenu(anchor) {
+  const v = viewOf(state.key), first = state.source.columns[0].name;
+  if (!v.filters.length) { filterPopover(anchor, first); return; }
+  menu(anchor, [
+    { header: tr('絞り込み') },
+    ...v.filters.map((f, i) => ({ label: filterText(f), icon: '⏷', action: () => filterPopover(anchor, f.col, i) })),
+    '-',
+    { label: tr('絞り込みを追加'), icon: tr('＋'), action: () => filterPopover(anchor, first) },
+    { label: tr('絞り込みをすべて解除'), icon: '×', action: () => { v.filters = []; reloadSheet(); } },
+  ]);
+}
+
+/** グループ：見た目だけ。グループ化はまだできない */
+function groupMenu(anchor) {
+  menu(anchor, [
+    { header: tr('グループ（準備中）') },
+    ...state.source.columns.map((c) => ({ label: c.name, disabled: true })),
+  ]);
 }
 
 async function reloadSheet() {
@@ -3089,6 +3142,12 @@ async function reloadSheet() {
 }
 
 // ---------- シート上部（クエリ編集・絞り込みチップ） ----------
+/** 絞り込みの条件を短い文にする（チップとメニューで使う） */
+function filterText(f) {
+  const op = FILTER_OPS.find((o) => o.id === f.op);
+  return `${f.col} ${op?.label.replace(/^\S+ /, '') ?? f.op}${op?.noValue ? '' : tr(' 「') + f.value + tr('」')}`;
+}
+
 function renderSheetHead(kind, name, error) {
   const head = $('sheet-head');
   const parts = [];
@@ -3109,7 +3168,7 @@ function renderSheetHead(kind, name, error) {
     view.filters.map((f, i) => el('span.chip.filter', {
       title: tr('クリックで編集'),
       on: { click: (e) => { if (!e.target.closest('.chip-x')) filterPopover(e.currentTarget, f.col, i); } },
-    }, `${f.col} ${FILTER_OPS.find((o) => o.id === f.op)?.label.replace(/^\S+ /, '') ?? f.op}${FILTER_OPS.find((o) => o.id === f.op)?.noValue ? '' : tr(' 「') + f.value + tr('」')}`,
+    }, filterText(f),
     el('button.chip-x', { title: tr('絞り込みを解除'), on: { click: () => { view.filters.splice(i, 1); reloadSheet(); } } }, '×'))),
     el('span.grow'),
     kind === 't' && state.source ? el('code.sheet-sql', { title: tr('このシートが実行している SQL') }, state.source.displaySql()) : null,
@@ -3117,6 +3176,7 @@ function renderSheetHead(kind, name, error) {
   // 並べ替え・絞り込みがあるときだけ出す
   if (view.sorts.length || view.filters.length) parts.push(chips);
   head.replaceChildren(...parts);
+  updateModeBtns();
   updateProtBtn(kind);
 }
 
