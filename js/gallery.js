@@ -62,7 +62,7 @@ export class GalleryView {
     let thumb = cols.findIndex((col, c) => rows.some((row, r) => g.hasPreview(row.values[c], r, row, c)));
     // まだ行がなくても、BLOB の列があればサムネイルの枠を取っておく
     if (thumb < 0 && !rows.length) thumb = cols.findIndex(isBlobCol);
-    const usable = cols.map((col, c) => c).filter((c) => c !== thumb && !isBlobCol(cols[c]) && !cols[c].auto && cols[c].name !== this.hooks.hideColumn);
+    const usable = cols.map((col, c) => c).filter((c) => c !== thumb && !isBlobCol(cols[c]) && !cols[c].auto && !this.hooks.hideColumns?.includes(cols[c].name));
     // 題名はシートのラベル列（自動の選び方も含めてラベル列に任せる。外部キーなら参照先のラベルが出る）
     const title = cols.findIndex((col) => col.name === this.hooks.labelColumn);
     return { thumb, title, sub: usable.filter((c) => c !== title).slice(0, SUB) };

@@ -550,6 +550,50 @@ export class QuerySource {
   }
 }
 
+/**
+ * グループ：シートの行をキーの列の値でまとめ、1グループを1行にした表（読むだけ）。列はキーの列だけ。
+ * sql はシートの SELECT、types は列名 → 型（絞り込みの値をシートと同じ型で比べるため）。
+ * 絞り込みはまとめる前の行に、並べ替えはキーの列のものだけをまとめた後に当てる
+ */
+export class GroupSource extends QuerySource {
+  constructor(widthKey, sql, keys, view, types) {
+    super(widthKey, sql, view);
+    this.keys = keys;
+    this.types = types;
+  }
+
+  async init() {
+    await super.init();
+    this.columns = this.keys.map((k) => this.columns.find((c) => c.name === k)).filter(Boolean);
+    if (this.columns.length !== this.keys.length) throw new Error(tr('グループのキーの列がシートにありません'));
+    return this;
+  }
+
+  where() { return whereClause(this.view.filters.map((f) => filterValue(f, this.types.get(f.col) || 'ANY')), q); }
+
+  orderBy() {
+    const keys = this.keys.map(q);
+    return ' ORDER BY ' + [...sortTerms(this.view.sorts.filter((s) => this.keys.includes(s.col)), q), ...keys].join(', ');
+  }
+
+  /** グループの一覧の SELECT（並べ替えなし） */
+  grouped() {
+    const w = this.where(), keys = this.keys.map(q).join(', ');
+    return { sql: `SELECT ${keys} FROM (${this.sql}\n)${w.sql} GROUP BY ${keys}`, bind: w.bind };
+  }
+
+  async count() {
+    const g = this.grouped();
+    return Number((await db.readQuery(`SELECT count(*) FROM (${g.sql})`, g.bind)).rows[0][0]);
+  }
+
+  async fetch(offset, limit) {
+    const g = this.grouped();
+    const r = await db.readQuery(`SELECT * FROM (${g.sql})${this.orderBy()} LIMIT ? OFFSET ?`, [...g.bind, limit, offset]);
+    return r.rows.map((values) => ({ values }));
+  }
+}
+
 // ------------------------------------------------------------------------
 
 /** ビューの INSTEAD OF トリガーの種類。{update, insert, delete, triggers:[{name, op}]} */

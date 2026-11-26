@@ -13,7 +13,7 @@ import { CELL_FORMATS } from './grid.js';
 
 const exact = ['queries:', 'order:', 'hidden:', 'last-sheet:', 'meta:', 'untrusted:'];
 // シートごとの値（<接頭辞><DB>/<シート>）
-const perSheet = ['w:', 'h:', 'label:', ...Object.values(CELL_FORMATS).map((f) => f.store)];
+const perSheet = ['w:', 'h:', 'label:', 'group:', ...Object.values(CELL_FORMATS).map((f) => f.store)];
 const sheetPrefix = (k) => perSheet.find((p) => k.startsWith(p));
 
 /** その DB に属するキー（シートごとの値は「<接頭辞><DB>/」で一致させ、別 DB 名の前方一致を拾わない） */
