@@ -35,7 +35,7 @@ const state = {
   objects: [],      // {type:'table'|'view', name, sql}
   queries: [],      // {name, sql}
   key: null,        // 't:名前' | 'v:名前' | 'q:名前'
-  views: new Map(), // key → {sort, filters}
+  views: new Map(), // key → {sorts, filters, mode, group}
   model: null,
   source: null,
   grid: null,
@@ -2423,6 +2423,7 @@ async function renameSchema({ fromTable, toTable, cols }) {
     const ren = (c) => cols.find(([a]) => a === c)?.[1] ?? c;
     view.sorts.forEach((s) => { s.col = ren(s.col); });
     view.filters.forEach((f) => { f.col = ren(f.col); });
+    if (view.group) view.group = ren(view.group);
   }
   try {
     const wk = (t) => `w:${state.dbName}/${t}`;
@@ -2545,6 +2546,7 @@ async function showSheet(key, { keepView = true } = {}) {
       // URL などから来た、無い列の並べ替え・絞り込みは捨てる
       const has = (c) => state.model.columns.some((x) => x.name === c);
       view.sorts = view.sorts.filter((x) => has(x.col)); view.filters = view.filters.filter((x) => has(x.col));
+      if (view.group && !has(view.group)) delete view.group;
       state.source = new TableSource(state.dbName, state.model, view, await labelColumns(state.model));
       state.prots = readProtections(state.model);
       state.source.protect = protectionChecker(state.model, state.prots);
@@ -3077,7 +3079,7 @@ function viewBar() {
       el('button#vb-gallery.tb-btn.vb-icon-only', { title: tr('ギャラリーで見る'), disabled: true, on: { click: () => setMode('gallery') } }, icon('gallery'), el('span.vb-label', tr('ギャラリー')))),
     btn('vb-sort', 'sort', tr('並べ替え'), tr('並べ替え'), viewSortMenu),
     btn('vb-filter', 'filter', tr('絞り込み'), tr('絞り込み'), filterMenu),
-    btn('vb-group', 'group', tr('グループ'), tr('グループ（準備中）'), groupMenu),
+    btn('vb-group', 'group', tr('グループ'), tr('グループ'), groupMenu),
     el('span.grow'),
     el('button#panel-btn.tb-btn', { title: tr('テーブルの設計（列・キー・制約）'), on: { click: () => togglePanel() } }, icon('design'), el('span.vb-label', tr('設計'))));
 }
@@ -3089,6 +3091,7 @@ function updateModeBtns() {
   $('vb-gallery').classList.toggle('on', has && !!state.gallery);
   for (const id of ['vb-sort', 'vb-filter', 'vb-group']) $(id).disabled = !cols;
   const v = state.key ? viewOf(state.key) : { sorts: [], filters: [] };
+  $('vb-group').classList.toggle('on', cols && !!v.group);
   for (const [id, n] of [['vb-sort', v.sorts.length], ['vb-filter', v.filters.length]]) {
     $(id).classList.toggle('on', cols && n > 0);
     const c = $(`${id}-n`);
@@ -3122,11 +3125,14 @@ function filterMenu(anchor) {
   ]);
 }
 
-/** グループ：見た目だけ。グループ化はまだできない */
+/** グループ：1つの列を選ぶ（お試し）。表では行番号の右に、各グループの先頭の行だけ値と行数を出す */
 function groupMenu(anchor) {
+  const v = viewOf(state.key);
+  const setGroup = (col) => { if (col) v.group = col; else delete v.group; reloadSheet(); };
   menu(anchor, [
-    { header: tr('グループ（準備中）') },
-    ...state.source.columns.map((c) => ({ label: c.name, disabled: true })),
+    { header: tr('グループ') },
+    ...state.source.columns.filter((c) => !/BLOB/i.test(c.type || '')).map((c) => ({ label: c.name, icon: v.group === c.name ? '✓' : '', action: () => setGroup(c.name) })),
+    ...(v.group ? ['-', { label: tr('グループを解除'), icon: '×', action: () => setGroup(null) }] : []),
   ]);
 }
 
@@ -3958,6 +3964,7 @@ async function renameColumn(name, anchor) {
     const v = viewOf(state.key);
     v.sorts.forEach((s) => { if (s.col === name) s.col = to; });
     v.filters.forEach((f) => { if (f.col === name) f.col = to; });
+    if (v.group === name) v.group = to;
     await reloadSheet();
   } catch (e) { toast(friendlyError(e.message), 'error'); }
 }
@@ -3991,6 +3998,7 @@ async function dropColumns(names) {
     const v = viewOf(state.key);
     v.sorts = v.sorts.filter((s) => !gone(s.col));
     v.filters = v.filters.filter((f) => !gone(f.col));
+    if (v.group && gone(v.group)) delete v.group;
     await reloadSheet();
   } catch (e) { toast(friendlyError(e.message), 'error'); }
 }
@@ -4496,6 +4504,7 @@ function updatePanel(focusCol) {
       const valid = new Set(state.panel.model.columns.map((c) => c.name));
       v.sorts = v.sorts.filter((s) => valid.has(s.col));
       v.filters = v.filters.filter((f) => valid.has(f.col));
+      if (v.group && !valid.has(v.group)) delete v.group;
       await showSheet(key);
     },
   });
