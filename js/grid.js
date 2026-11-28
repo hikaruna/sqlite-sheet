@@ -68,6 +68,11 @@ export class Grid {
   get totalRows() { return this.rowCount + (this.canInsert ? 1 : 0); }
   get newRowIndex() { return this.canInsert ? this.rowCount : -1; }
   get hasDraft() { return !!this.draft && this.draft.values.some((v) => v !== undefined); }
+  /** グループにしている列の番号（していなければ null）。グループの欄は行番号の右に置く表示だけの欄で、列の番号は変えない */
+  get groupC() { const g = this.source.view?.group, c = g ? this.cols.findIndex((x) => x.name === g) : -1; return c < 0 ? null : c; }
+  get groupW() { return this.groupC == null ? 0 : Math.min(this.colW(this.groupC), 240); }
+  /** 左に固定する欄（行番号とグループ）の幅 */
+  get leadW() { return RHW + this.groupW; }
 
   openDraft() {
     this.draft ??= { values: new Array(this.cols.length).fill(undefined), errors: {} };
@@ -265,7 +270,9 @@ export class Grid {
   async reload({ keepSelection = true } = {}) {
     const token = (this.reloadToken = (this.reloadToken || 0) + 1);
     const count = await this.source.count();
+    const groups = await this.loadGroupCounts();
     if (token !== this.reloadToken) return; // 後から始まった再読み込みを優先
+    this.groupCounts = groups;
     // 保存してある行の高さが、今の並べ替え・絞り込みで何行目にあるか
     const heightMap = await this.heightMap(count);
     if (token !== this.reloadToken) return;
@@ -282,6 +289,22 @@ export class Grid {
   }
 
   focus() { this.sink.focus({ preventScroll: true }); }
+
+  /** グループの値ごとの行数 {groupKey: 行数}。グループにしていなければ null */
+  async loadGroupCounts() {
+    const c = this.groupC;
+    return c == null ? null : new Map((await this.source.groupCounts(this.cols[c].name)).map(([v, n]) => [groupKey(v), Number(n)]));
+  }
+
+  /** グループの欄の中身。各グループの先頭の行（start）にだけ「値（行数）」を出す。前の行が未読込なら決めない（読み込むと描き直す） */
+  groupHead(r, row) {
+    const c = this.groupC;
+    if (!row) return { start: false, text: '' };
+    const v = row.values[c], prev = r > 0 ? this.rowAt(r - 1) : null;
+    if (r > 0 && (!prev || groupKey(prev.values[c]) === groupKey(v))) return { start: false, text: '' };
+    const label = row.labels?.[c] ?? (v === null ? NULL_LABEL : String(v));
+    return { start: true, text: tr('{0}（{1}）', [label, this.groupCounts?.get(groupKey(v)) ?? '…']) };
+  }
 
   // ---------- 拡大（タッチ端末） ----------
   applyZoom() { this.header.style.zoom = this.inner.style.zoom = String(this.z); }
@@ -716,7 +739,7 @@ export class Grid {
   }
 
   colW(c) { const col = this.cols[c]; return this.widths[col.name] ?? col.width ?? (col.width = autoWidth(col)); }
-  colX(c) { let x = RHW; for (let i = 0; i < c; i++) x += this.colW(i); return x; }
+  colX(c) { let x = this.leadW; for (let i = 0; i < c; i++) x += this.colW(i); return x; }
   totalW() { return this.colX(this.cols.length) + (this.hooks.onAddColumn ? 48 : 0); }
 
   // ---------- 見出し ----------
@@ -726,6 +749,7 @@ export class Grid {
     h.style.width = this.totalW() + 'px';
     this.inner.style.width = this.totalW() + 'px';
     h.append(el('div.gh-corner', { style: { width: RHW + 'px' }, title: tr('すべて選択'), on: { mousedown: (e) => { e.preventDefault(); this.selectAll(); } } }));
+    if (this.groupC != null) h.append(el('div.gh-group', { style: { width: this.groupW + 'px', left: RHW + 'px' }, title: tr('グループ') }, this.cols[this.groupC].name));
     this.cols.forEach((col, c) => {
       const cell = el('div.gh-cell', {
         style: { width: this.colW(c) + 'px' },
@@ -980,8 +1004,9 @@ export class Grid {
     const rowSel = r >= r0 && r <= r1;
     const draft = isNew ? this.draft : null;
     const h = this.rowH(r);
+    const g = this.groupC == null ? null : this.groupHead(r, row);
     const rowEl = el('div.gr', {
-      class: [isNew ? 'new draft' : (row && this.source.isPendingRow?.(row) ? 'pending' : ''), h > RH ? 'tall' : ''].join(' ').trim(),
+      class: [isNew ? 'new draft' : (row && this.source.isPendingRow?.(row) ? 'pending' : ''), h > RH ? 'tall' : '', g?.start && r > 0 ? 'g-start' : ''].join(' ').trim(),
       // 行の高さを変えても文字が縦の真ん中に来るよう、行の line-height をセルが受け継ぐ
       style: { top: this.rowY(r) + 'px', width: this.totalW() + 'px', ...(h !== RH ? { height: h + 'px', lineHeight: (h - 1) + 'px' } : {}) },
       dataset: { r },
@@ -991,6 +1016,8 @@ export class Grid {
       style: { width: RHW + 'px' },
       title: isNew ? tr('新しい行（行を離れると保存・Esc で取り消し）') : '',
     }, isNew ? '✎' : String(r + 1), isNew ? null : this.rowResizer(r)));
+    // 押すと、その行のグループの列のセルを選ぶ（dataset.c が元の列の番号）
+    if (g) rowEl.append(el('div.gg', { style: { width: this.groupW + 'px', left: RHW + 'px' }, dataset: { c: this.groupC }, title: g.text }, g.text));
     for (let c = 0; c < this.cols.length; c++) {
       const cell = el('div.gc', { style: { width: widths[c] + 'px' }, dataset: { c } });
       const col = this.cols[c];
@@ -1114,7 +1141,7 @@ export class Grid {
       num = typeof conv === 'number' || typeof conv === 'bigint';
       const need = Math.max(cw, this.textWidth(this.sink.value) + 20);
       if (num) {
-        const maxW = Math.max(cw, x + cw - (this.scroll.scrollLeft / this.z + RHW));
+        const maxW = Math.max(cw, x + cw - (this.scroll.scrollLeft / this.z + this.leadW));
         w = Math.min(maxW, need); left = x + cw - w;
       } else {
         const maxW = Math.max(cw, (this.scroll.scrollLeft + this.scroll.clientWidth) / this.z - x - 4);
@@ -1155,7 +1182,7 @@ export class Grid {
     if (rowHead) {
       const sl = this.scroll.scrollLeft / this.z, vw = this.scroll.clientWidth / this.z, right = this.colX(this.cols.length);
       // 列が画面の右端まで届かなければ、データのある所だけの真ん中
-      const x0 = Math.min(sl + RHW, right), x1 = Math.min(sl + vw, right);
+      const x0 = Math.min(sl + this.leadW, right), x1 = Math.min(sl + vw, right);
       const left = ((x0 + x1) / 2) + 'px';
       const [t, b] = this.rowHandles;
       Object.assign(t.style, { left, top: this.rowY(r0) + 'px' });
@@ -1240,7 +1267,7 @@ export class Grid {
     if (top < s.scrollTop) s.scrollTop = top;
     else if (bottom > s.scrollTop + s.clientHeight) s.scrollTop = bottom - s.clientHeight;
     const x = this.colX(c) * z, w = this.colW(c) * z;
-    if (x - RHW * z < s.scrollLeft) s.scrollLeft = x - RHW * z;
+    if (x - this.leadW * z < s.scrollLeft) s.scrollLeft = x - this.leadW * z;
     else if (x + w > s.scrollLeft + s.clientWidth) s.scrollLeft = x + w - s.clientWidth;
   }
 
@@ -1265,7 +1292,7 @@ export class Grid {
   }
 
   cellFromEvent(e) {
-    const cellEl = e.target.closest('.gc, .gr-head');
+    const cellEl = e.target.closest('.gc, .gg, .gr-head');
     const rowEl = e.target.closest('.gr');
     if (!rowEl) return null;
     const r = +rowEl.dataset.r;
@@ -1668,6 +1695,8 @@ export class Grid {
         let grew = false;
         for (const p of touched) if (this.measurePage(p, this.pages.get(p))) grew = true;
         if (grew) { this.applyHeights(); this.placeSink(); }
+        // グループの列を書き換えたら行数を数え直す（行の並びは、ほかの並べ替えと同じく読み込み直すまで変えない）
+        if (updates.some((u) => u.col === this.groupC)) this.groupCounts = await this.loadGroupCounts().catch(() => null);
       }
       if (inserts.size) {
         const oldCount = this.rowCount;
@@ -1965,6 +1994,9 @@ function autoWidth(col) {
   for (const b of col.badges || []) w += (b.icon ? 14 : ctx.measureText(b.text).width) + 14;
   return Math.round(Math.min(360, Math.max(DEFAULT_W - 50, w)));
 }
+
+/** グループの値の見分け方（NULL・文字列・数を区別する） */
+function groupKey(v) { return v === null ? 'n' : typeof v === 'string' ? 's' + v : 'v' + String(v); }
 
 function isMacCtrl() { return /Mac/.test(navigator.platform); }
 

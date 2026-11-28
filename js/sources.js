@@ -158,6 +158,13 @@ function sortTerms(sorts, colExpr) {
   return (sorts || []).map((s) => `${colExpr(s.col)} ${s.dir === 'desc' ? 'DESC' : 'ASC'}`);
 }
 
+/** グループの列を先頭にした並べ替え基準。グループの列の向きは、並べ替えに含まれていればそれに従う */
+function viewSorts(view) {
+  const g = view.group, sorts = view.sorts || [];
+  if (!g) return sorts;
+  return [{ col: g, dir: sorts.find((s) => s.col === g)?.dir ?? 'asc' }, ...sorts.filter((s) => s.col !== g)];
+}
+
 /** 列の並べ替え状態 { dir, rank, total } か null */
 function sortInfo(sorts, name) {
   const i = (sorts || []).findIndex((s) => s.col === name);
@@ -216,7 +223,7 @@ export class TableSource {
         strict: !!model.strict,
         emptyIsNull: !!model.strict && (a === 'INTEGER' || a === 'REAL' || a === 'NUMERIC'),
         fk: this.fkByCol.get(c.name) || null,
-        sort: sortInfo(view.sorts, c.name),
+        sort: sortInfo(viewSorts(view), c.name),
         filtered: view.filters.some((f) => f.col === c.name),
         title: c.check ? `CHECK (${c.check})` : '',
       };
@@ -245,13 +252,13 @@ export class TableSource {
 
   orderBy() {
     const tie = this.hasRowid ? `${this.t}._rowid_` : this.model.pk.map((c) => `${this.t}.${q(c)}`).join(', ');
-    return ' ORDER BY ' + [...sortTerms(this.view.sorts, (c) => `${this.t}.${q(c)}`), tie].join(', ');
+    return ' ORDER BY ' + [...sortTerms(viewSorts(this.view), (c) => `${this.t}.${q(c)}`), tie].join(', ');
   }
 
   /** グリッドに見せている SELECT（表示用） */
   displaySql() {
     const w = this.where();
-    const terms = sortTerms(this.view.sorts, q);
+    const terms = sortTerms(viewSorts(this.view), q);
     return inline(`SELECT * FROM ${this.t}${w.sql}${terms.length ? ' ORDER BY ' + terms.join(', ') : ''}`, w.bind);
   }
 
@@ -259,6 +266,12 @@ export class TableSource {
     const w = this.where();
     const r = await db.query(`SELECT count(*) FROM ${this.t}${w.sql}`, w.bind);
     return Number(r.rows[0][0]);
+  }
+
+  /** グループの値ごとの行数（絞り込みのあと）。[[値, 行数]] */
+  async groupCounts(col) {
+    const w = this.where();
+    return (await db.query(`SELECT ${this.t}.${q(col)}, count(*) FROM ${this.t}${w.sql} GROUP BY 1`, w.bind)).rows;
   }
 
   toRow(raw) {
@@ -522,7 +535,7 @@ export class QuerySource {
     const r = await db.readQuery(`SELECT * FROM (${this.sql}\n) LIMIT 0`);
     this.columns = r.columns.map((name) => ({
       name, badges: [],
-      sort: sortInfo(this.view.sorts, name),
+      sort: sortInfo(viewSorts(this.view), name),
       filtered: this.view.filters.some((f) => f.col === name),
     }));
     // 先頭行から数値列を推定して右寄せ
@@ -535,12 +548,17 @@ export class QuerySource {
   }
 
   where() { return whereClause(this.view.filters.map((f) => filterValue(f, 'ANY')), (c) => q(c)); }
-  orderBy() { const t = sortTerms(this.view.sorts, q); return t.length ? ' ORDER BY ' + t.join(', ') : ''; }
+  orderBy() { const t = sortTerms(viewSorts(this.view), q); return t.length ? ' ORDER BY ' + t.join(', ') : ''; }
 
   async count() {
     const w = this.where();
     const r = await db.readQuery(`SELECT count(*) FROM (${this.sql}\n)${w.sql}`, w.bind);
     return Number(r.rows[0][0]);
+  }
+
+  async groupCounts(col) {
+    const w = this.where();
+    return (await db.readQuery(`SELECT ${q(col)}, count(*) FROM (${this.sql}\n)${w.sql} GROUP BY 1`, w.bind)).rows;
   }
 
   async fetch(offset, limit) {
